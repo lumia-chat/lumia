@@ -34,6 +34,7 @@ import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
 import { keepDrafts } from "../client/drafts";
+import type { MenuPoint } from "../client/menus";
 import { Compose, Timeline, createMarkRead, keptItems, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
@@ -57,6 +58,8 @@ export interface HomeProps {
   toggleAside: () => void;
   /** The profile card of an account, against what was pressed. */
   openPerson: (accountId: string, anchor: HTMLElement) => void;
+  /** An account's menu (#25), against the control it was asked for on: at the pointer, or under it for the keyboard. */
+  personMenu: (accountId: string, anchor: HTMLElement, at?: MenuPoint) => void;
   /** Opens the channel a message is in, at the message (from Mentions). */
   toMessage: (m: MessageSummary) => void;
 }
@@ -127,6 +130,8 @@ export function HomeSidebar(props: HomeProps) {
           unread: !active && (rs?.unread ?? 0) > 0,
           mentions: rs?.mentions || undefined,
           onClick: () => props.go("dm", c.channelId),
+          // A conversation with one other person: its row's menu is theirs. A group has no one person.
+          onMenu: others.length === 1 ? (row, at) => props.personMenu(others[0] ?? "", row, at) : undefined,
         };
       }),
     })),
@@ -534,6 +539,7 @@ function Conversation(props: HomeProps) {
                 tone={(m) => toneFor(m.blockKey)}
                 onOpenProfile={(m, anchor) => props.openPerson(m.authorId, anchor)}
                 openPerson={props.openPerson}
+                personMenu={props.personMenu}
                 knownName={knownName}
                 photoOf={photoOf}
                 readState={() => (readStates.data ? (readStates.data.byChannel.get(id) ?? undefined) : null)}
@@ -629,6 +635,7 @@ export function ConversationAside(props: HomeProps) {
           <SidePanelScroll>
           <MemberList
             onOpen={(m, row) => m.id && props.openPerson(m.id, row)}
+            onMenu={(m, row, at) => m.id && props.personMenu(m.id, row, at)}
             sections={[
               {
                 title: "In this conversation",

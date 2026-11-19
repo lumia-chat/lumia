@@ -5,7 +5,8 @@
 // with the line of what it quotes over it, its mentions as pills named as
 // the member list names them, its reactions, its own toolbar (Add
 // reaction, Reply, More actions with Edit message, Copy text and Delete
-// message), "(edited)", the "New" line, a jump to a quoted message, and
+// message) and the menu a right-click on it opens with the same things
+// (issue #25), "(edited)", the "New" line, a jump to a quoted message, and
 // "Quote reply" beside a selection. A body is the core's blocks
 // (`MessageBody`, issue #18), a long one collapsed until it is opened, which
 // lasts while the conversation does. A message of this account's is edited
@@ -17,6 +18,7 @@ import {
   ComposerNote,
   Composer,
   ConfirmDelete,
+  ContextMenu,
   Divider,
   EmojiPicker,
   Mention,
@@ -24,6 +26,7 @@ import {
   Message,
   MessageActions,
   MessageBody,
+  MessageContextMenu,
   MessageEdit,
   MessageList,
   MessageMenu,
@@ -32,6 +35,7 @@ import {
   QuoteReplyButton,
   ReplyBar,
   ReplyRef,
+  menuPressAt,
   type MentionOption,
   type MessagePart,
   type ReactionChipProps,
@@ -44,6 +48,7 @@ import { composing } from "../design/body";
 import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
 import { editCardUrls } from "../client/media";
 import { keptById, sameList } from "../client/live";
+import { browsersMenu, menuKey, pressedOn, type MenuPoint } from "../client/menus";
 import { DropTarget, MediaViewer, MessageMedia, pastedFiles } from "./media";
 import type { Display } from "../client/preferences";
 import { byBlock, byDay, initialsOf, shortTimeOf, timeOf, toneFor } from "./app";
@@ -244,6 +249,8 @@ export interface TimelineProps {
   onOpenProfile?: (item: TimelineItem, anchor: HTMLElement) => void;
   /** Someone's card, from a mention of them. */
   openPerson: (accountId: string, anchor: HTMLElement) => void;
+  /** Someone's menu, asked for on a message's author or a mention of them: at the pointer, or under the control for the keyboard. */
+  personMenu?: (accountId: string, anchor: HTMLElement, at?: MenuPoint) => void;
   /** An account's name where it is known (the quote's author, who reacted, who a mention names). */
   knownName: (accountId: string) => string | undefined;
   /** An account's picture, for the line of what a reply quotes. */
@@ -412,6 +419,76 @@ export function Timeline(props: TimelineProps) {
     if (now) props.onDelete(item);
     else setConfirming({ anchor, item });
   };
+  // What can be done to a message, each written once: its toolbar's controls, More actions'
+  // rows and the rows of the menu a right-click opens (#25) all call these. A message has them
+  // where something can be said, while it is there and not being edited; a notice has none.
+  const acts = (m: TimelineItem) => props.canAct && !m.deleted && !m.notice && props.editing !== m.id;
+  const reply = (m: TimelineItem) => props.onReply(m, m.body);
+  const pick = (m: TimelineItem, anchor: HTMLElement) => setPicking({ anchor, item: m });
+  // Edit message, Copy text and Delete message as both menus offer them: `close` puts the
+  // menu away first, and the question a delete asks hangs from `by`.
+  const rest = (m: TimelineItem, close: () => void, by: () => HTMLElement | null) => ({
+    onEdit: m.mine
+      ? () => {
+          close();
+          props.onEditing(m.id);
+        }
+      : undefined,
+    onCopy: () => {
+      close();
+      void navigator.clipboard?.writeText(drawn(m)).catch(() => {});
+    },
+    onDelete: props.canDelete(m)
+      ? (now: boolean) => {
+          close();
+          askDelete(m, by(), now);
+        }
+      : undefined,
+  });
+
+  // The menu a right-click on a message opens, or Shift+F10 and the context menu key with the
+  // keyboard inside one (#25): at the pointer, or under what has the keyboard. It is this
+  // timeline's, as More actions, the picker and the question are, and does not go over the frame
+  // with a person's (`Over` in menus.tsx), since each of its rows is one of the functions above.
+  // One is open at a time all the same: each is closed by a press anywhere outside it.
+  const [asked, setAsked] = createSignal<{ item: TimelineItem; anchor: HTMLElement | null; at?: MenuPoint } | null>(null);
+  // The message a press or the keyboard is in, where its toolbar would come up: its own row, or
+  // the line of what it quotes, which stands over its block.
+  const messageOf = (el: Element): TimelineItem | undefined => {
+    const row = el.closest("[data-message-id]") ?? (el.closest(".lu-replyref") ? el.closest(".lu-msg")?.querySelector("[data-message-id]") : null);
+    const id = row?.getAttribute("data-message-id");
+    const m = id ? byId().get(id) : undefined;
+    return m && acts(m) ? m : undefined;
+  };
+  // The toolbar's own control for what a row of the menu leads to, so that the picker and the
+  // question hang where they do from the toolbar and give the keyboard back to it; the message's
+  // row where it has none.
+  const tool = (m: TimelineItem, opens: "dialog" | "menu") => {
+    const row = find(m.id);
+    return row?.querySelector<HTMLElement>(`.lu-actions [aria-haspopup="${opens}"]`) ?? row;
+  };
+  const onContextMenu = (e: MouseEvent) => {
+    // A person's control under the pointer has taken it (the author's name, a mention): the nearest thing's menu.
+    if (e.defaultPrevented || !(e.target instanceof Element)) return;
+    const item = messageOf(e.target);
+    if (!item) return;
+    const press = menuPressAt(e);
+    // On a link, a picture, a field or text that was selected, the browser's own menu stays.
+    if (browsersMenu(pressedOn(e.target, press.onSelection))) return;
+    e.preventDefault();
+    // The word the press itself selected goes: nothing was selected to copy, and "Quote reply" would come up beside it.
+    press.settle();
+    // A message takes no keyboard, so it goes back to where it was before the press (the composer, mostly).
+    setAsked({ item, anchor: press.focus, at: { x: e.clientX, y: e.clientY } });
+  };
+  const onMenuKey = (e: KeyboardEvent) => {
+    // A person's control with the keyboard has taken it; a field keeps the keys typed in it.
+    if (e.defaultPrevented || !menuKey(e) || !(e.target instanceof HTMLElement) || pressedOn(e.target, false).field) return;
+    const item = messageOf(e.target);
+    if (!item) return;
+    e.preventDefault();
+    setAsked({ item, anchor: e.target });
+  };
   // While editing: the attachments and cards taken off, with the × on each, until it is saved or cancelled.
   const [removedAttachments, setRemovedAttachments] = createSignal<ReadonlySet<string>>(new Set());
   const [removedCards, setRemovedCards] = createSignal<ReadonlySet<string>>(new Set());
@@ -518,7 +595,15 @@ export function Timeline(props: TimelineProps) {
                 const mention = m.mentions[index];
                 return (
                   <Show when={mention} fallback={<Mention>{typed}</Mention>}>
-                    {(mention) => <Mention onOpen={mention().everyone || !mention().accountId ? undefined : (anchor) => props.openPerson(mention().accountId, anchor)}>{mentionWords(typed, mention(), props.knownName)}</Mention>}
+                    {(mention) => {
+                      // A mention of everyone names no one person: no card, no menu.
+                      const person = () => !mention().everyone && !!mention().accountId;
+                      return (
+                        <Mention onOpen={person() ? (anchor) => props.openPerson(mention().accountId, anchor) : undefined} onMenu={person() && props.personMenu ? (anchor, at) => props.personMenu?.(mention().accountId, anchor, at) : undefined}>
+                          {mentionWords(typed, mention(), props.knownName)}
+                        </Mention>
+                      );
+                    }}
                   </Show>
                 );
               }}
@@ -559,17 +644,17 @@ export function Timeline(props: TimelineProps) {
             onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
           }));
   const tools = (m: TimelineItem) => (
-    <Show when={props.canAct && !m.deleted && props.editing !== m.id}>
+    <Show when={acts(m)}>
       <MessageActions
-        onReact={(anchor) => setPicking({ anchor, item: m })}
-        onReply={() => (props.replyingTo === m.id ? props.onCancelReply() : props.onReply(m, m.body))}
+        onReact={(anchor) => pick(m, anchor)}
+        onReply={() => (props.replyingTo === m.id ? props.onCancelReply() : reply(m))}
         replying={props.replyingTo === m.id}
         moreOpen={menu()?.item.id === m.id}
         onMore={(anchor) => setMenu({ anchor, item: m })}
       />
     </Show>
   );
-  const adder = (m: TimelineItem) => (props.canAct ? (anchor: HTMLElement) => setPicking({ anchor, item: m }) : undefined);
+  const adder = (m: TimelineItem) => (props.canAct ? (anchor: HTMLElement) => pick(m, anchor) : undefined);
 
   return (
     <>
@@ -584,6 +669,8 @@ export function Timeline(props: TimelineProps) {
           if (selected()) onSelection();
           nearTop();
         }}
+        onContextMenu={onContextMenu}
+        onKeyDown={onMenuKey}
       >
         {props.before}
         <For each={dayKeys()}>
@@ -652,6 +739,7 @@ export function Timeline(props: TimelineProps) {
                           layout={props.display.layout}
                           avatars={props.display.avatars}
                           onOpenProfile={props.onOpenProfile && first.authorId ? (anchor) => props.onOpenProfile?.(first, anchor) : undefined}
+                          onProfileMenu={props.onOpenProfile && props.personMenu && first.authorId ? (anchor, at) => props.personMenu?.(first.authorId, anchor, at) : undefined}
                           id={first.id}
                           reference={first.reply ? reference(first) : undefined}
                           reactions={chips(first)}
@@ -707,29 +795,26 @@ export function Timeline(props: TimelineProps) {
       <Show when={menu()} keyed>
         {(open) => (
           <Popover anchor={open.anchor} onClose={() => setMenu(null)} closeLabel="Close the menu">
-            <MessageMenu
-              onEdit={
-                open.item.mine
-                  ? () => {
-                      setMenu(null);
-                      props.onEditing(open.item.id);
-                    }
-                  : undefined
-              }
-              onCopy={() => {
-                setMenu(null);
-                void navigator.clipboard?.writeText(drawn(open.item)).catch(() => {});
-              }}
-              onDelete={
-                props.canDelete(open.item)
-                  ? (now) => {
-                      setMenu(null);
-                      askDelete(open.item, open.anchor, now);
-                    }
-                  : undefined
-              }
-            />
+            <MessageMenu {...rest(open.item, () => setMenu(null), () => open.anchor)} />
           </Popover>
+        )}
+      </Show>
+      <Show when={asked()} keyed>
+        {(open) => (
+          <ContextMenu anchor={open.anchor} at={open.at} onClose={() => setAsked(null)}>
+            <MessageContextMenu
+              onReply={() => {
+                setAsked(null);
+                reply(open.item);
+              }}
+              onReact={() => {
+                setAsked(null);
+                const by = tool(open.item, "dialog");
+                if (by) pick(open.item, by);
+              }}
+              {...rest(open.item, () => setAsked(null), () => tool(open.item, "menu"))}
+            />
+          </ContextMenu>
         )}
       </Show>
       <Show when={viewing()} keyed>

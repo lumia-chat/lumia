@@ -2,16 +2,18 @@
 // the popovers it leads to (a new channel, invite links), the Channels
 // heading's plus (create a channel, browse them), "Add people" to a
 // channel and "Message someone" in a server (architecture 6.8), the
-// account menu on the rail's self avatar, and the profile card a
-// member's row or a message's author opens; and a rail tile's menu and
-// Folder settings, which are rail.tsx's. From the Quiet Split and
-// Profile card boards; the popovers, which have no board, are drawn in
-// the card's vocabulary. One is open at a time, held by the app shell.
+// account menu on the rail's self avatar, the profile card a member's
+// row or a message's author opens and the menu a right-click on a
+// person opens (issue #25); and a rail tile's menu and Folder settings,
+// which are rail.tsx's. From the Quiet Split and Profile card boards;
+// the popovers, which have no board, are drawn in the card's
+// vocabulary. One is open at a time, held by the app shell.
 import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
-import { Button, Checkbox, Choice, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, PickRow, Pop, Popover, ProfileCard, SearchField, TextField, type IconName, type Status } from "../design/components";
+import { Button, Checkbox, Choice, ContextMenu, Menu, MenuHead, MenuItem, MenuLabel, MenuRadio, MenuRule, PersonMenu, PickRow, Pop, Popover, ProfileCard, SearchField, TextField, type IconName, type Status } from "../design/components";
 import { ClientError, type InviteSummary, type MemberSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, membersQuery, myStatus, presenceOf, privateStateNow, queryClient, setMyStatus } from "../client/state";
 import { channelRefusal, dmRefusal } from "./channels";
+import { offeredWays, personOffers, type MenuPoint, type PersonOffer, type PersonWay } from "../client/menus";
 import { useNames } from "../client/names";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
@@ -26,7 +28,8 @@ export type Over =
   | { kind: "newDm"; anchor: HTMLElement }
   | { kind: "invite"; anchor: HTMLElement }
   | { kind: "account"; anchor: HTMLElement }
-  | { kind: "person"; anchor: HTMLElement; accountId: string }
+  | { kind: "person"; anchor: HTMLElement; accountId: string; /** What a way chosen from their menu led to instead, said in the card. */ note?: string }
+  | { kind: "personMenu"; anchor: HTMLElement; accountId: string; /** Where the pointer asked; none for the keyboard. */ at?: MenuPoint }
   | { kind: "railMenu"; anchor: HTMLElement; id: string }
   | { kind: "folderSettings"; anchor: HTMLElement; folderId: string };
 
@@ -134,7 +137,12 @@ export function Overlay(props: OverlayProps) {
       <Match when={props.over.kind === "account"}>
         <AccountMenu {...props} />
       </Match>
-      <Match when={props.over.kind === "person" && props.over}>{(over) => <PersonCard {...props} accountId={(over() as Extract<Over, { kind: "person" }>).accountId} />}</Match>
+      <Match when={props.over.kind === "person" && props.over}>
+        {(over) => <PersonCard {...props} accountId={(over() as Extract<Over, { kind: "person" }>).accountId} note={(over() as Extract<Over, { kind: "person" }>).note} />}
+      </Match>
+      <Match when={props.over.kind === "personMenu" && props.over}>
+        {(over) => <PersonMenuOver {...props} accountId={(over() as Extract<Over, { kind: "personMenu" }>).accountId} at={(over() as Extract<Over, { kind: "personMenu" }>).at} />}
+      </Match>
       <Match when={props.over.kind === "railMenu" && props.over}>
         {(over) => (
           <RailMenu
@@ -393,12 +401,61 @@ function AccountMenu(props: OverlayProps) {
   );
 }
 
+// Someone as their card and their menu both meet them: who they are, what
+// they are offered there (`personOffers` holds the rules and the words) and
+// the ways themselves. A way answers with nothing once it has gone where it
+// leads, and with what to say where it did not.
+function usePerson(props: OverlayProps & { accountId: string }) {
+  const names = useNames(() => props.snapshot);
+  // Who it is, read once: what is over the frame is made anew for each thing opened, and a way
+  // chosen from the menu goes on after the menu has closed.
+  const accountId = props.accountId;
+  const me = () => accountId === props.snapshot?.accountId;
+  const name = () => names.nameOf(accountId);
+  // In a server, a server DM first (architecture 6.4), unless they turned those off there.
+  const members = membersQuery(() => props.server?.serverId);
+  const offers = () =>
+    personOffers({
+      me: me(),
+      name: name(),
+      server: props.server ? { canStartDms: props.server.canStartDms, dmsOff: !!(members.data ?? []).find((m) => m.accountId === accountId)?.serverDmsOff } : undefined,
+    });
+  const ways: Record<PersonWay, () => Promise<string>> = {
+    serverDm: async () => {
+      const server = props.server;
+      if (!server) return "";
+      try {
+        const channel = await client().openServerDm(server.serverId, accountId);
+        await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+        props.close();
+        props.toChannel(channel.channelId);
+        return "";
+      } catch (err) {
+        return dmRefusal(err);
+      }
+    },
+    private: async () => {
+      // Personal messages are between devices: a browser that cannot read
+      // them is sent to set them up, or to be brought in (issue #20).
+      if ((await privateStateNow()) !== "ready") {
+        props.close();
+        props.toPrivate();
+        return "";
+      }
+      const outcome = await messagePerson(accountId, name());
+      if ("note" in outcome) return outcome.note;
+      props.close();
+      props.onConversation(outcome.channelId);
+      return "";
+    },
+  };
+  return { ...names, me, name, offers, ways };
+}
+
 // Who someone is: the name, the handle, where they are in the server on
 // screen, what their verified profile says, and a way to write to them.
-function PersonCard(props: OverlayProps & { accountId: string }) {
-  const { nameOf, profile, photoOf } = useNames(() => props.snapshot);
-  const me = () => props.accountId === props.snapshot?.accountId;
-  const name = () => nameOf(props.accountId);
+function PersonCard(props: OverlayProps & { accountId: string; note?: string }) {
+  const { profile, photoOf, me, name, offers, ways } = usePerson(props);
   const handle = () => (me() ? props.snapshot?.handle : profile(props.accountId)?.handle) || undefined;
   const details = () =>
     (
@@ -408,58 +465,22 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
         { icon: "mention", label: "About", text: profile(props.accountId)?.bio ?? "" },
       ] satisfies { icon: IconName; label: string; text: string }[]
     ).filter((d) => d.text.trim() && d.text !== name());
-  const [note, setNote] = createSignal("");
+  // What a way led to instead; the card opens with what one chosen from the menu did.
+  const [note, setNote] = createSignal(props.note ?? "");
   const [busy, setBusy] = createSignal(false);
-  // In a server, a server DM first (architecture 6.4), unless they turned those off there.
-  const members = membersQuery(() => props.server?.serverId);
-  const takes = () => !(members.data ?? []).find((m) => m.accountId === props.accountId)?.serverDmsOff;
-  const inServer = async () => {
-    const server = props.server;
-    if (!server) return;
+  const go = async (way: PersonWay) => {
     setBusy(true);
     setNote("");
     try {
-      const channel = await client().openServerDm(server.serverId, props.accountId);
-      await queryClient.invalidateQueries({ queryKey: ["snapshot"] });
-      props.close();
-      props.toChannel(channel.channelId);
-    } catch (err) {
-      setNote(dmRefusal(err));
+      setNote(await ways[way]());
     } finally {
       setBusy(false);
     }
   };
-  const first = () => name().split(/\s+/)[0] || name();
-  const action = () => {
-    if (me()) return undefined;
-    if (!props.server) return { label: `Message ${first()}`, onClick: () => void message(), disabled: busy() };
-    if (!takes() || !props.server.canStartDms) return undefined;
-    return { label: `Message ${first()}`, onClick: () => void inServer(), disabled: busy() };
-  };
-  const secondary = () => (me() || !props.server ? undefined : { label: "Message privately", onClick: () => void message(), disabled: busy() });
-  const cardNote = () => note() || (props.server && !me() && !takes() ? "Doesn’t take messages here" : "");
-  const message = async () => {
-    setBusy(true);
-    setNote("");
-    try {
-      // Personal messages are between devices: a browser that cannot read
-      // them is sent to set them up, or to be brought in (issue #20).
-      if ((await privateStateNow()) !== "ready") {
-        props.close();
-        props.toPrivate();
-        return;
-      }
-      const outcome = await messagePerson(props.accountId, name());
-      if ("channelId" in outcome) {
-        props.close();
-        props.onConversation(outcome.channelId);
-      } else {
-        setNote(outcome.note);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+  const button = (offer: PersonOffer | undefined) => offer && { label: offer.label, onClick: () => void go(offer.way), disabled: busy() };
+  const action = () => button(offers().action);
+  const secondary = () => button(offers().secondary);
+  const cardNote = () => note() || offers().note || "";
   return (
     <Popover anchor={props.over.anchor} onClose={props.close} closeLabel="Close profile">
       <ProfileCard
@@ -478,6 +499,29 @@ function PersonCard(props: OverlayProps & { accountId: string }) {
         onClose={props.close}
       />
     </Popover>
+  );
+}
+
+// A person's menu (#25), where a right-click or the keyboard asked for it on
+// their row, their name over a message, a mention of them or a conversation
+// with them alone: View profile, which opens the card against the same
+// control as a press on it does, then what the card would offer there. A way
+// that leads nowhere is said in the card, since the menu has gone by then.
+function PersonMenuOver(props: OverlayProps & { accountId: string; at?: MenuPoint }) {
+  const { name, offers, ways } = usePerson(props);
+  // Read once: the card opens against the control after this menu has gone.
+  const anchor = props.over.anchor;
+  const accountId = props.accountId;
+  const card = (note?: string) => props.open({ kind: "person", anchor, accountId, note });
+  const go = async (way: PersonWay) => {
+    props.close();
+    const note = await ways[way]();
+    if (note) card(note);
+  };
+  return (
+    <ContextMenu anchor={anchor} at={props.at} onClose={props.close}>
+      <PersonMenu name={name()} onProfile={() => card()} ways={offeredWays(offers()).map((o) => ({ label: o.label, onSelect: () => void go(o.way) }))} />
+    </ContextMenu>
   );
 }
 

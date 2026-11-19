@@ -15,6 +15,7 @@ import { COLLAPSED_LINES, collapsedLines, composing, linesOf, roomWords, stretch
 import type { BodyBlock, MessageRoom } from "../client/bridge";
 import { fitSize, mediaGrid } from "../client/media";
 import { VIEW_FIT, held, maxScale, ownSize, panBy, pressed as pressedAt, viewFrame, wheelFactor, zoomAt, zoomStep, type View } from "../client/viewer";
+import { menuKey, onRects, placedAt, type MenuPoint } from "../client/menus";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -40,6 +41,74 @@ function cx(...a: (string | false | null | undefined)[]): string {
 function pressed(e: MouseEvent, item: { href?: string; onClick?: () => void }) {
   if (!item.href) e.preventDefault();
   item.onClick?.();
+}
+
+/**
+ * A control's own menu was asked for (issue #25), against the control: at
+ * the pointer for a right-click, and with no point for the keyboard, where
+ * it hangs under the control.
+ */
+export type MenuAsk = (control: HTMLElement, at?: MenuPoint) => void;
+
+const focusedNow = () => (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null);
+// What is selected, and whether a point is on it.
+function selectionAt(x: number, y: number): { text: string; on: boolean } {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed) return { text: "", on: false };
+  let on = false;
+  for (let i = 0; i < sel.rangeCount && !on; i++) on = onRects(sel.getRangeAt(i).getClientRects(), x, y);
+  return { text: sel.toString(), on };
+}
+// The press that asks for a menu, as things stood before the browser acted on it: Safari and
+// Chrome on a Mac select the word under a right-click, and a press takes the keyboard from
+// where it was, both before `contextmenu` is sent.
+let lastPress: { x: number; y: number; text: string; on: boolean; focus: HTMLElement | null } | null = null;
+if (typeof document !== "undefined")
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (e.button === 2 || (e.button === 0 && e.ctrlKey)) lastPress = { x: e.clientX, y: e.clientY, ...selectionAt(e.clientX, e.clientY), focus: focusedNow() };
+    },
+    true,
+  );
+
+/** What a right-click found where it landed, for whoever opens a menu there. */
+export interface MenuPress {
+  /** It was on text selected before it: the browser's own menu, with its Copy, is wanted there. */
+  onSelection: boolean;
+  /** What had the keyboard before it, which a menu about something that takes none gives it back to. */
+  focus: HTMLElement | null;
+  /** Lets go of the word the press itself selected, once the menu is the app's. */
+  settle: () => void;
+}
+
+/** Reads a `contextmenu` event against the press that sent it. */
+export function menuPressAt(e: MouseEvent): MenuPress {
+  const was = lastPress && Math.abs(lastPress.x - e.clientX) <= 1 && Math.abs(lastPress.y - e.clientY) <= 1 ? lastPress : null;
+  lastPress = null;
+  const now = selectionAt(e.clientX, e.clientY);
+  return {
+    onSelection: was ? was.on : now.on,
+    focus: was?.focus?.isConnected ? was.focus : focusedNow(),
+    settle: () => {
+      if (was && now.text !== was.text) document.getSelection()?.removeAllRanges();
+    },
+  };
+}
+
+// A right-click on a control that has a menu. One nearer the pointer that has taken the press keeps it.
+function menuPress(e: MouseEvent & { currentTarget: HTMLElement }, ask: MenuAsk | undefined) {
+  if (!ask || e.defaultPrevented) return;
+  e.preventDefault();
+  menuPressAt(e).settle();
+  ask(e.currentTarget, { x: e.clientX, y: e.clientY });
+}
+
+// The same from the keyboard: Shift+F10 or the context menu key, as the rail's tiles.
+function menuKeyed(e: KeyboardEvent & { currentTarget: HTMLElement }, ask: MenuAsk | undefined) {
+  if (!ask || e.defaultPrevented || !menuKey(e)) return;
+  e.preventDefault();
+  ask(e.currentTarget);
 }
 
 function fieldId(id?: string): string {
@@ -614,6 +683,8 @@ export interface MemberListProps {
   onViewAll?: () => void;
   /** A row was pressed; the row is what a profile card opens against. */
   onOpen?: (member: MemberEntry, row: HTMLElement) => void;
+  /** A row's menu was asked for (right-click, Shift+F10, the context menu key): the person's. */
+  onMenu?: (member: MemberEntry, row: HTMLElement, at?: MenuPoint) => void;
   /** What to say when no section has anyone. */
   empty?: string;
   class?: string;
@@ -633,7 +704,14 @@ export function MemberList(props: MemberListProps) {
               <For each={sec.members}>
                 {(m) => (
                   <li>
-                    <button type="button" aria-haspopup={props.onOpen ? "dialog" : undefined} onClick={(e) => props.onOpen?.(m, e.currentTarget)} class={cx("lu-member", m.status === "away" && "is-away")}>
+                    <button
+                      type="button"
+                      aria-haspopup={props.onOpen ? "dialog" : undefined}
+                      onClick={(e) => props.onOpen?.(m, e.currentTarget)}
+                      onContextMenu={(e) => menuPress(e, props.onMenu && ((row, at) => props.onMenu?.(m, row, at)))}
+                      onKeyDown={(e) => menuKeyed(e, props.onMenu && ((row) => props.onMenu?.(m, row)))}
+                      class={cx("lu-member", m.status === "away" && "is-away")}
+                    >
                       <Avatar initials={m.initials} src={m.src} tone={m.tone} size={34} status={m.status} ring="surface" />
                       <span class="lu-member__text">
                         <span class="lu-member__name">
@@ -869,7 +947,7 @@ export function ServerRail(props: ServerRailProps) {
   };
   // A tile's menu: right-click, Shift+F10 or the context menu key.
   const menuKeys = (e: KeyboardEvent & { currentTarget: HTMLElement }, id: string | undefined) => {
-    if (!id || !props.onMenu || !((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu")) return;
+    if (!id || !props.onMenu || !menuKey(e)) return;
     e.preventDefault();
     props.onMenu(id, e.currentTarget);
   };
@@ -1136,6 +1214,8 @@ export interface ChannelItem {
   people?: Person[];
   /** A row that is a place rather than a conversation (Mentions) leads with its icon. */
   icon?: IconName;
+  /** The row's menu: the person's, where the conversation is with one other person. */
+  onMenu?: MenuAsk;
 }
 
 function RowLead(props: { item: ChannelItem }) {
@@ -1200,7 +1280,7 @@ export function ChannelList(props: ChannelListProps) {
                   const person = () => it.kind === "dm" || it.kind === "group";
                   return (
                     <li>
-                      <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} aria-current={it.active ? "page" : undefined} class={cx("lu-row", "is-" + state(), person() && "lu-row--person")}>
+                      <a href={it.href ?? "#"} onClick={(e) => pressed(e, it)} onContextMenu={(e) => menuPress(e, it.onMenu)} onKeyDown={(e) => menuKeyed(e, it.onMenu)} aria-current={it.active ? "page" : undefined} class={cx("lu-row", "is-" + state(), person() && "lu-row--person")}>
                         <RowLead item={it} />
                         <span class="lu-row__name">
                           {it.name}
@@ -1659,6 +1739,8 @@ export interface MentionProps {
   href?: string;
   /** The person's card, against the pill; a mention of everyone opens nothing. */
   onOpen?: (pressed: HTMLElement) => void;
+  /** The person's menu, where the pill opens their card. */
+  onMenu?: MenuAsk;
   class?: string;
 }
 
@@ -1666,7 +1748,7 @@ export interface MentionProps {
 export function Mention(props: MentionProps) {
   return (
     <Show when={props.onOpen} fallback={<Show when={props.href} fallback={<span class={cx("lu-mention", props.class)}>{props.children}</span>}><a href={props.href} class={cx("lu-mention", props.class)}>{props.children}</a></Show>}>
-      <button type="button" class={cx("lu-mention", props.class)} aria-haspopup="dialog" onClick={(e) => props.onOpen?.(e.currentTarget)}>
+      <button type="button" class={cx("lu-mention", props.class)} aria-haspopup="dialog" onClick={(e) => props.onOpen?.(e.currentTarget)} onContextMenu={(e) => menuPress(e, props.onMenu)} onKeyDown={(e) => menuKeyed(e, props.onMenu)}>
         {props.children}
       </button>
     </Show>
@@ -2460,6 +2542,42 @@ export function MessageMenu(props: MessageMenuProps) {
   );
 }
 
+export interface MessageContextMenuProps {
+  onReply?: () => void;
+  /** The picker, by the message. */
+  onReact?: () => void;
+  /** Its author's own message: it can be edited. */
+  onEdit?: () => void;
+  onCopy?: () => void;
+  /** Its author's own, or a moderator's to take away; `now` when Shift was held, which skips the question. */
+  onDelete?: (now: boolean) => void;
+  class?: string;
+}
+
+/**
+ * What a right-click on a message opens, or Shift+F10 inside one (issue
+ * #25): what its toolbar holds, then what More actions does, with Delete
+ * message in the danger ink.
+ */
+export function MessageContextMenu(props: MessageContextMenuProps) {
+  return (
+    <Menu label="Message" compact class={cx("lu-menu--context", props.class)}>
+      <MenuItem onSelect={() => props.onReply?.()}>Reply</MenuItem>
+      <MenuItem onSelect={() => props.onReact?.()}>Add reaction</MenuItem>
+      <MenuRule />
+      <Show when={props.onEdit}>
+        <MenuItem onSelect={() => props.onEdit?.()}>Edit message</MenuItem>
+      </Show>
+      <MenuItem onSelect={() => props.onCopy?.()}>Copy text</MenuItem>
+      <Show when={props.onDelete}>
+        <MenuItem danger onSelect={(e) => props.onDelete?.(e.shiftKey)}>
+          Delete message
+        </MenuItem>
+      </Show>
+    </Menu>
+  );
+}
+
 export interface ReplyRefProps {
   /**
    * Who wrote what is quoted, and their picture; a personal DM's quote of
@@ -2827,6 +2945,8 @@ export interface MessageProps {
   variant?: "default" | "parent" | "reply";
   /** The name and the avatar open the author's profile, against the one pressed. */
   onOpenProfile?: (pressed: HTMLElement) => void;
+  /** The author's menu, asked for on either; it comes up in place of the message's. */
+  onProfileMenu?: MenuAsk;
   /**
    * What the same person sent straight after: drawn under the first as
    * further paragraphs of one block, each with its time in the avatar's
@@ -2883,7 +3003,7 @@ export function Message(props: MessageProps) {
   const reference = children(() => props.reference);
   const name = (extra?: string) => (
     <Show when={props.onOpenProfile} fallback={<span class={cx("lu-msg__author", extra)}>{props.author}</span>}>
-      <button type="button" class={cx("lu-msg__author", "lu-msg__name", extra)} aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+      <button type="button" class={cx("lu-msg__author", "lu-msg__name", extra)} aria-haspopup="dialog" onClick={(e) => props.onOpenProfile?.(e.currentTarget)} onContextMenu={(e) => menuPress(e, props.onProfileMenu)} onKeyDown={(e) => menuKeyed(e, props.onProfileMenu)}>
         {props.author}
       </button>
     </Show>
@@ -2948,7 +3068,7 @@ export function Message(props: MessageProps) {
           <Show when={compact() || avatars() !== "hidden"}>
             <Show when={props.onOpenProfile} fallback={avatar()}>
               {/* The name is the control; the avatar is the same one for a pointer. */}
-              <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)}>
+              <button type="button" class="lu-msg__avatar" tabindex={-1} aria-hidden="true" onClick={(e) => props.onOpenProfile?.(e.currentTarget)} onContextMenu={(e) => menuPress(e, props.onProfileMenu)}>
                 {avatar()}
               </button>
             </Show>
@@ -3080,13 +3200,16 @@ export interface MessageListProps {
   /** The pane that scrolls, and its scrolling: whether it is at its newest end, where a jump goes. */
   scrollRef?: (el: HTMLDivElement) => void;
   onScroll?: () => void;
+  /** A right-click and a key anywhere in the list, for a message's menu; a person's control inside has had them first. */
+  onContextMenu?: (e: MouseEvent) => void;
+  onKeyDown?: (e: KeyboardEvent) => void;
   class?: string;
 }
 
 /** Bottom-anchored scrolling log. */
 export function MessageList(props: MessageListProps) {
   return (
-    <div ref={(el) => props.scrollRef?.(el)} onScroll={() => props.onScroll?.()} class={cx("lu-msglist", props.spacing && props.spacing !== "roomy" && "lu-msglist--" + props.spacing, props.layout === "one_line" && "lu-msglist--lines", props.avatars === "hidden" && "lu-msglist--avatars-hidden", props.class)}>
+    <div ref={(el) => props.scrollRef?.(el)} onScroll={() => props.onScroll?.()} onContextMenu={(e) => props.onContextMenu?.(e)} onKeyDown={(e) => props.onKeyDown?.(e)} class={cx("lu-msglist", props.spacing && props.spacing !== "roomy" && "lu-msglist--" + props.spacing, props.layout === "one_line" && "lu-msglist--lines", props.avatars === "hidden" && "lu-msglist--avatars-hidden", props.class)}>
       <div role="log" aria-label={props.label ?? "Messages"} class="lu-msglist__log">
         {props.children}
       </div>
@@ -3594,6 +3717,12 @@ export interface PopoverProps {
    * right with their tops in line, as a rail tile's menu.
    */
   placement?: "below" | "beside" | "right";
+  /**
+   * Where the pointer asked for it, for a menu at a point: its corner goes
+   * there (`placedAt`) whatever the anchor is, which then only takes the
+   * focus back.
+   */
+  at?: MenuPoint;
   closeLabel?: string;
   onClose: () => void;
   children?: JSX.Element;
@@ -3615,7 +3744,9 @@ export function Popover(props: PopoverProps) {
     const r = props.anchor?.isConnected ? props.anchor.getBoundingClientRect() : null;
     let left = (vw - w) / 2;
     let top = (vh - h) / 2;
-    if (r && props.placement === "beside") {
+    if (props.at) {
+      ({ left, top } = placedAt(props.at, { width: w, height: h }, { width: vw, height: vh }));
+    } else if (r && props.placement === "beside") {
       left = r.right + 12;
       top = r.bottom - h;
     } else if (r && props.placement === "right") {
@@ -3659,6 +3790,9 @@ export function Popover(props: PopoverProps) {
   };
   onMount(() => {
     place();
+    // Shown before the keyboard goes in: nothing hidden takes the focus, and the style
+    // that shows the box where `place` put it is not written until this has run.
+    if (box) box.style.visibility = "visible";
     inside()[0]?.focus({ preventScroll: true });
     // What it holds can grow after it opens (a list that arrives, a note).
     const watch = new ResizeObserver(place);
@@ -3792,6 +3926,81 @@ export function MenuRadio(props: MenuRadioProps) {
         <Icon name="check" size={16} strokeWidth={2.2} class="lu-menu__check" />
       </Show>
     </button>
+  );
+}
+
+export interface ContextMenuProps {
+  /**
+   * What the keyboard goes back to as the menu closes: the control it is
+   * about, or what had the keyboard before a right-click on something that
+   * takes none. With no `at` the menu hangs under it.
+   */
+  anchor?: HTMLElement | null;
+  /** Where the pointer asked for it; none when the keyboard did. */
+  at?: MenuPoint;
+  onClose: () => void;
+  /** The menu: a `Menu` of the `lu-menu--context` kind. */
+  children?: JSX.Element;
+}
+
+/**
+ * A menu where it was asked for (issue #25): at the pointer for a
+ * right-click, kept inside the window, and under the control for Shift+F10
+ * and the context menu key. Escape, a press outside and a choice close it
+ * as they do any popover; so does whatever scrolls under it, which takes
+ * what it is about away from the pointer. A right-click outside closes it
+ * and asks again where it landed, so the menu follows the pointer as a
+ * window's own does.
+ */
+export function ContextMenu(props: ContextMenuProps) {
+  onMount(() => {
+    let gone = false;
+    const onScroll = (e: Event) => {
+      if (!(e.target instanceof Element && e.target.closest(".lu-popover"))) props.onClose();
+    };
+    const onContextMenu = (e: MouseEvent) => {
+      // The browser's menu comes up neither over this one nor over the page while it is open.
+      e.preventDefault();
+      if (e.target instanceof Element && e.target.closest(".lu-popover__box")) return;
+      e.stopPropagation();
+      props.onClose();
+      // Asked again of what the press was over, once this menu is out of the way (and only then: it would hear its own asking).
+      const under = gone ? document.elementFromPoint(e.clientX, e.clientY) : null;
+      if (under && !under.closest(".lu-popover")) under.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, view: window, button: 2, clientX: e.clientX, clientY: e.clientY }));
+    };
+    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("contextmenu", onContextMenu, true);
+    onCleanup(() => {
+      gone = true;
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("contextmenu", onContextMenu, true);
+    });
+  });
+  return (
+    <Popover anchor={props.anchor} at={props.at} onClose={props.onClose} closeLabel="Close menu">
+      {props.children}
+    </Popover>
+  );
+}
+
+export interface PersonMenuProps {
+  /** Who it is about: the menu's name, and the line at its head. */
+  name: string;
+  /** Their profile card, as a press on the control opens it. */
+  onProfile?: () => void;
+  /** The ways to write to them that their card would offer there, in its words. */
+  ways?: { label: string; onSelect?: () => void }[];
+  class?: string;
+}
+
+/** What a right-click on a person opens, or Shift+F10 on their control (issue #25): View profile, then what their card offers. */
+export function PersonMenu(props: PersonMenuProps) {
+  return (
+    <Menu label={props.name} compact class={cx("lu-menu--context", props.class)}>
+      <MenuLabel>{props.name}</MenuLabel>
+      <MenuItem onSelect={() => props.onProfile?.()}>View profile</MenuItem>
+      <For each={props.ways}>{(way) => <MenuItem onSelect={() => way.onSelect?.()}>{way.label}</MenuItem>}</For>
+    </Menu>
   );
 }
 

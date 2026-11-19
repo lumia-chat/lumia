@@ -59,8 +59,10 @@ import {
   ProfileCard,
   QuickTiles,
   ConfirmDelete,
+  MessageContextMenu,
   MessageEdit,
   MessageMenu,
+  PersonMenu,
   QuoteReplyButton,
   ReactionChip,
   ReplyBar,
@@ -1627,6 +1629,14 @@ function Pieces() {
             <MessageMenu onEdit={() => {}} onCopy={() => {}} onDelete={() => {}} />
             <ConfirmDelete text="Morning all. The new onboarding flow is ready for a look before standup." />
           </div>
+        </div>
+        <h2>A right-click’s menus: this account’s own message, someone else’s to a member, a person in a server, a person at Home, this account itself</h2>
+        <div class="pieces__row pieces__row--top">
+          <MessageContextMenu onEdit={() => {}} onDelete={() => {}} />
+          <MessageContextMenu />
+          <PersonMenu name={PEOPLE.maya.name} ways={[{ label: "Message Maya" }, { label: "Message privately" }]} />
+          <PersonMenu name={PEOPLE.maya.name} ways={[{ label: "Message Maya" }]} />
+          <PersonMenu name={PEOPLE.self.name} />
         </div>
         <h2>Editing a message where it is drawn</h2>
         <div class="pieces__row" style={{ "flex-direction": "column", "align-items": "stretch", "max-width": "720px" }}>

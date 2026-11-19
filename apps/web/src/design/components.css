@@ -799,6 +799,9 @@ button.lu-mention:hover { text-decoration: underline; text-underline-offset: 3px
 .lu-menu__item .lu-menu__more { color: var(--ink-faint); }
 .lu-menu__item[aria-expanded="true"] { background: var(--hover-member); color: var(--ink); }
 .lu-menu--rail { width: 240px; }
+/* A menu where it was asked for (a right-click, Shift+F10): a message's, a person's. A name too long for its line is cut short there. */
+.lu-menu--context .lu-menu__label, .lu-menu--context .lu-menu__text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-menu--context .lu-menu__label { flex: none; }
 /* A menu and the one an item of it opened, side by side. */
 .lu-menupair { display: flex; align-items: flex-start; gap: var(--space-4); }
 

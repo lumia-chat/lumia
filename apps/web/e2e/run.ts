@@ -1970,6 +1970,209 @@ async function editingStep(which: string, stamp: number) {
   console.log(`  ${which}: edited its own message in place ("(edited)"), what it typed staying while a message and a reaction arrived, took it up again with Up and put it down with Escape, deleted one after the question and one at once with Shift, and was offered neither on someone else's, in ${Date.now() - t0} ms`);
 }
 
+// A right-click's menus (#25). A message's has what its toolbar and More
+// actions hold, by their rules: someone else's offers a member neither Edit
+// message nor Delete message, this account's own offers both, and Delete
+// message asks first unless Shift is held. It opens at the pointer, and
+// with Shift+F10 from inside the message, where the arrow keys move through
+// it and Escape gives the keyboard back. A link in a message keeps the
+// browser's own menu. A person's, on a member's row and on a message's
+// author, has View profile and what their card offers; this account's own
+// has View profile alone. A right-click elsewhere while one is open moves
+// to the other.
+async function menusStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-menus-owner-${which}`);
+  const memberDir = resolve(work, `cli-menus-member-${which}`);
+  const owner = `asked${which}${stamp}`;
+  const member = `clicks${which}${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", `Menus ${stamp}`).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(memberDir, "instance", "add", instance);
+  lumia(memberDir, "account", "create", "--handle", member, "--password", password);
+  lumia(memberDir, "join", code);
+  lumia(ownerDir, "send", general, "Not yours to change.");
+  lumia(ownerDir, "send", general, "The notes are at https://example.com/notes for now.");
+  const { ctx, page } = await open(which, "menus");
+  if (which === "chromium") await ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const t0 = Date.now();
+  try {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(member);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.waitFor();
+    const part = (text: string) => page.locator(".lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: text }) });
+    // A message's words: where its menu is asked for.
+    const words = (text: string) => part(text).locator(".lu-body__para", { hasText: text });
+    const menu = page.getByRole("menu", { name: "Message" });
+    const reads = async (want: string, what: string) => {
+      const got = (await page.getByRole("menuitem").allTextContents()).map((s) => s.trim()).join(" | ");
+      if (got !== want) throw new Error(`${what}: the menu reads ${got}, not ${want}`);
+    };
+    const gone = () => page.getByRole("menu").waitFor({ state: "detached" });
+    const focusedOn = () =>
+      page.evaluate(() => {
+        const a = document.activeElement;
+        return a ? `${a.getAttribute("role") ?? a.tagName.toLowerCase()}:${a.getAttribute("aria-label") ?? a.getAttribute("placeholder") ?? a.textContent?.trim() ?? ""}` : "nothing";
+      });
+    await part("The notes are at").waitFor();
+    phase("someone else's");
+    await composer.click();
+    await words("Not yours to change.").click({ button: "right" });
+    await menu.waitFor();
+    await reads("Reply | Add reaction | Copy text", "someone else's message, to a member");
+    // At the pointer, which was on the middle of the words: the menu's corner is there, under it or over it.
+    const pressedAt = await words("Not yours to change.").boundingBox();
+    const box = await page.locator(".lu-popover__box").boundingBox();
+    if (!pressedAt || !box) throw new Error("the menu or the message has no place on the page");
+    const [x, y] = [pressedAt.x + pressedAt.width / 2, pressedAt.y + pressedAt.height / 2];
+    if (Math.abs(box.x - x) > 2 || (Math.abs(box.y - y) > 2 && Math.abs(box.y + box.height - y) > 2)) throw new Error(`the menu is at ${JSON.stringify(box)}, not at the pointer (${x}, ${y})`);
+    if ((await focusedOn()) !== "menuitem:Reply") throw new Error(`the menu opened with the keyboard in ${await focusedOn()}`);
+    await page.screenshot({ path: `${out}/${which}-menus-message.png` });
+    await page.keyboard.press("Escape");
+    await gone();
+    // A message takes no keyboard: it goes back to where it was.
+    if ((await focusedOn()) !== "textarea:Message #general") throw new Error(`closing the menu left the keyboard in ${await focusedOn()}, not the composer`);
+    phase("reply");
+    await words("Not yours to change.").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Reply", exact: true }).click();
+    await gone();
+    await page.locator(".lu-replybar", { hasText: `Replying to ${owner}` }).waitFor();
+    await part("Not yours to change.").getByRole("button", { name: "Reply", pressed: true }).waitFor();
+    if ((await focusedOn()) !== "textarea:Message #general") throw new Error(`Reply left the keyboard in ${await focusedOn()}, not the composer`);
+    await composer.press("Escape");
+    await page.locator(".lu-replybar").waitFor({ state: "detached" });
+    phase("own");
+    await composer.fill("Mine to change.");
+    await composer.press("Enter");
+    await part("Mine to change.").waitFor();
+    await words("Mine to change.").click({ button: "right" });
+    await menu.waitFor();
+    await reads("Reply | Add reaction | Edit message | Copy text | Delete message", "this account's own message");
+    if (!(await page.getByRole("menuitem", { name: "Delete message" }).evaluate((el) => el.classList.contains("is-danger")))) throw new Error("Delete message is not in the danger ink");
+    await page.screenshot({ path: `${out}/${which}-menus-own.png` });
+    phase("copy");
+    await page.getByRole("menuitem", { name: "Copy text" }).click();
+    await gone();
+    if (which === "chromium") {
+      const held = await page.evaluate(() => navigator.clipboard.readText());
+      if (held !== "Mine to change.") throw new Error(`Copy text copied ${JSON.stringify(held)}`);
+    }
+    phase("add reaction");
+    await words("Mine to change.").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Add reaction" }).click();
+    const picker = page.getByRole("dialog", { name: "Emoji" });
+    await picker.getByLabel("Search emoji").fill("thumbs up");
+    await picker.getByRole("button", { name: "thumbs up", exact: true }).first().click();
+    await part("Mine to change.").getByRole("button", { name: "You reacted with 👍" }).waitFor();
+    phase("edit");
+    await words("Mine to change.").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Edit message" }).click();
+    const field = page.getByRole("textbox", { name: "Edit message" });
+    await field.waitFor();
+    if ((await field.inputValue()) !== "Mine to change.") throw new Error(`the edit opened with ${JSON.stringify(await field.inputValue())}`);
+    // The field being typed in keeps the browser's menu.
+    await field.click({ button: "right" });
+    await Bun.sleep(300);
+    if ((await page.getByRole("menu").count()) > 0) throw new Error("a right-click in the edit field opened the message's menu");
+    await field.press("Escape");
+    await field.waitFor({ state: "detached" });
+    phase("delete");
+    await words("Mine to change.").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Delete message" }).click();
+    const ask = page.getByRole("dialog", { name: "Delete this message?" });
+    await ask.waitFor();
+    await ask.getByText("Mine to change.").waitFor();
+    await page.screenshot({ path: `${out}/${which}-menus-delete.png` });
+    await ask.getByRole("button", { name: "Cancel" }).click();
+    await ask.waitFor({ state: "detached" });
+    await part("Mine to change.").waitFor();
+    await words("Mine to change.").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Delete message" }).click({ modifiers: ["Shift"] });
+    await part("Mine to change.").waitFor({ state: "detached" });
+    if ((await ask.count()) > 0) throw new Error("Shift did not skip the question");
+    phase("link");
+    // Whether the page took the last right-click from the browser, asked after the page has had it.
+    await page.evaluate(() => window.addEventListener("contextmenu", (e) => ((window as unknown as { lumiaMenuTaken?: boolean }).lumiaMenuTaken = e.defaultPrevented)));
+    const taken = () => page.evaluate(() => (window as unknown as { lumiaMenuTaken?: boolean }).lumiaMenuTaken);
+    await part("The notes are at").locator("a.lu-body__link").click({ button: "right" });
+    await Bun.sleep(300);
+    if ((await page.getByRole("menu").count()) > 0) throw new Error("a right-click on a link opened the message's menu");
+    if ((await taken()) !== false) throw new Error("a right-click on a link was taken from the browser");
+    await page.keyboard.press("Escape");
+    phase("a person");
+    const aside = page.locator(".lu-shell__aside");
+    const row = aside.getByRole("button", { name: new RegExp(`^${owner}`) });
+    const theirs = page.getByRole("menu", { name: owner });
+    await row.click({ button: "right" });
+    await theirs.waitFor();
+    await reads(`View profile | Message ${owner} | Message privately`, "a member's row");
+    await page.screenshot({ path: `${out}/${which}-menus-person.png` });
+    await page.getByRole("menuitem", { name: "View profile" }).click();
+    const card = page.getByRole("dialog", { name: owner });
+    await card.waitFor();
+    await card.getByRole("button", { name: `Message ${owner}` }).waitFor();
+    await card.getByRole("button", { name: "Message privately" }).waitFor();
+    await page.keyboard.press("Escape");
+    await card.waitFor({ state: "detached" });
+    if (!(await row.evaluate((el) => el === document.activeElement))) throw new Error(`closing the card left the keyboard in ${await focusedOn()}, not the member's row`);
+    // This account itself: its profile, and nothing to write to.
+    await aside.getByRole("button", { name: new RegExp(`^${member}`) }).click({ button: "right" });
+    await page.getByRole("menu", { name: member }).waitFor();
+    await reads("View profile", "this account's own row");
+    await page.keyboard.press("Escape");
+    await gone();
+    // On a message's author the person's menu comes up, not the message's.
+    await page.locator(".lu-msg__name", { hasText: owner }).first().click({ button: "right" });
+    await theirs.waitFor();
+    await reads(`View profile | Message ${owner} | Message privately`, "a message's author");
+    if ((await menu.count()) > 0) throw new Error("the message's menu came up on its author's name");
+    await page.keyboard.press("Escape");
+    await gone();
+    phase("keyboard");
+    await part("Not yours to change.").hover();
+    const replyButton = part("Not yours to change.").getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Reply", exact: true });
+    await replyButton.focus();
+    await page.keyboard.press("Shift+F10");
+    await menu.waitFor();
+    await reads("Reply | Add reaction | Copy text", "Shift+F10 in a message's toolbar");
+    if ((await focusedOn()) !== "menuitem:Reply") throw new Error(`the menu opened with the keyboard in ${await focusedOn()}`);
+    await page.keyboard.press("ArrowDown");
+    if ((await focusedOn()) !== "menuitem:Add reaction") throw new Error(`Down moved the keyboard to ${await focusedOn()}`);
+    await page.keyboard.press("Escape");
+    await gone();
+    if (!(await replyButton.evaluate((el) => el === document.activeElement))) throw new Error(`closing the menu left the keyboard in ${await focusedOn()}, not the toolbar's button`);
+    await row.focus();
+    await page.keyboard.press("Shift+F10");
+    await theirs.waitFor();
+    await page.keyboard.press("Escape");
+    await gone();
+    if (!(await row.evaluate((el) => el === document.activeElement))) throw new Error(`closing a person's menu left the keyboard in ${await focusedOn()}, not their row`);
+    phase("another right-click");
+    // With one open, a right-click elsewhere closes it and opens the menu of what it landed on.
+    await words("Not yours to change.").click({ button: "right" });
+    await menu.waitFor();
+    const there = await row.boundingBox();
+    if (!there) throw new Error("the member's row has no place on the page");
+    await page.mouse.click(there.x + there.width / 2, there.y + there.height / 2, { button: "right" });
+    await theirs.waitFor();
+    if ((await page.getByRole("menu").count()) !== 1) throw new Error("two menus are open at once");
+    await page.keyboard.press("Escape");
+    await gone();
+  } finally {
+    await ctx.close();
+  }
+  console.log(`  ${which}: a right-click on someone else's message offered Reply, Add reaction and Copy text, and on its own Edit message and Delete message too; Reply, Copy text, Add reaction, Edit message and Delete message (asked, and at once with Shift) each worked from it; a link kept the browser's menu; a member's row and a message's author opened the person's menu, View profile the card; Shift+F10 opened both, and a right-click elsewhere moved from one to the other, in ${Date.now() - t0} ms`);
+}
+
 // A changed name or picture (#15): someone in the browser account's server
 // renames themself and sets a picture from the CLI, and with the page open
 // and no reload, their message and the member list draw them as they now are.
@@ -2929,6 +3132,7 @@ try {
       ["replies", () => repliesStep(which, stamp)],
       ["drafts", () => draftsStep(which, stamp)],
       ["editing", () => editingStep(which, stamp)],
+      ["menus", () => menusStep(which, stamp)],
       ["profile", () => profileStep(which, stamp)],
       ["media", () => mediaStep(which, stamp)],
       ["expired", () => expiredStep(which, stamp)],

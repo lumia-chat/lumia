@@ -46,6 +46,7 @@ import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connec
 import { useNames } from "../client/names";
 import { preferences, setAsideHidden } from "../client/preferences";
 import { keepDrafts } from "../client/drafts";
+import type { MenuPoint } from "../client/menus";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
@@ -347,6 +348,8 @@ function Frame() {
   // One thing is open over the frame at a time: a menu, a popover or a profile card.
   const [over, setOver] = createSignal<Over | null>(null);
   const openPerson = (id: string, anchor: HTMLElement) => setOver({ kind: "person", anchor, accountId: id });
+  // A person's menu (#25), asked for on their row, their name or a mention: at the pointer, or under the control for the keyboard.
+  const personMenu = (id: string, anchor: HTMLElement, at?: MenuPoint) => setOver({ kind: "personMenu", anchor, accountId: id, at });
 
   // Replying, the note a send leaves (someone mentioned is not in the
   // channel), and a jump asked for from a Mentions page (architecture 6.6).
@@ -638,6 +641,8 @@ function Frame() {
         active,
         ...readMarks(c.channelId, active),
         onClick: () => openChannel(c.channelId),
+        // A conversation with one other person: its row's menu is theirs.
+        onMenu: (row, at) => personMenu(partner, row, at),
       };
     }),
   );
@@ -674,6 +679,7 @@ function Frame() {
     asideShown: asideShown(),
     toggleAside,
     openPerson,
+    personMenu,
     toMessage,
   });
 
@@ -826,6 +832,7 @@ function Frame() {
                               tone={(m) => toneFor(m.authorId)}
                               onOpenProfile={(m, anchor) => openPerson(m.authorId, anchor)}
                               openPerson={openPerson}
+                              personMenu={personMenu}
                               knownName={knownName}
                               photoOf={photoOf}
                               readState={() => (readStates.data ? (stateOf(id) ?? undefined) : null)}
@@ -904,7 +911,7 @@ function Frame() {
             <Show when={!home()} fallback={<ConversationAside {...homeProps()} />}>
               <Switch>
                 <Match when={settingsOpen() || page()}>
-                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
+                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} personMenu={personMenu} />
                 </Match>
                 <Match when={current()?.kind === "TEXT" && server() && current()}>
                   {(first) => {
@@ -918,6 +925,7 @@ function Frame() {
                         joined={joined()}
                         me={accountId()}
                         openPerson={openPerson}
+                        personMenu={personMenu}
                         addPeople={(anchor) => setOver({ kind: "addPeople", anchor, channelId: ch().channelId })}
                         left={() => setChannelId(channels().find((c) => c.channelId !== ch().channelId)?.channelId)}
                       />
@@ -925,7 +933,7 @@ function Frame() {
                   }}
                 </Match>
                 <Match when={!current()}>
-                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} />
+                  <MembersAside serverId={serverId() ?? ""} me={accountId()} openPerson={openPerson} personMenu={personMenu} />
                 </Match>
               </Switch>
             </Show>
@@ -979,7 +987,7 @@ function Frame() {
 
 // A server's members, in the aside panel, named as everywhere else: the
 // ones "Find a member" matches when it holds something.
-function MembersAside(props: { serverId: string; me: string; openPerson: (accountId: string, anchor: HTMLElement) => void }) {
+function MembersAside(props: { serverId: string; me: string; openPerson: (accountId: string, anchor: HTMLElement) => void; personMenu: (accountId: string, anchor: HTMLElement, at?: MenuPoint) => void }) {
   const members = membersQuery(() => props.serverId || undefined);
   const [query, setQuery] = createSignal("");
   createEffect(on(() => props.serverId, () => setQuery("")));
@@ -1015,7 +1023,7 @@ function MembersAside(props: { serverId: string; me: string; openPerson: (accoun
         <SearchField label="Find a member" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
       </SidePanelSearch>
       <SidePanelScroll>
-        <MemberList sections={sections()} empty={query().trim() ? "No member matches that." : undefined} onOpen={(m, row) => m.id && props.openPerson(m.id, row)} />
+        <MemberList sections={sections()} empty={query().trim() ? "No member matches that." : undefined} onOpen={(m, row) => m.id && props.openPerson(m.id, row)} onMenu={(m, row, at) => m.id && props.personMenu(m.id, row, at)} />
       </SidePanelScroll>
     </SidePanel>
   );

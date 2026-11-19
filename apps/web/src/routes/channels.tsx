@@ -6,6 +6,7 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { BrowseRow, Button, Card, ChannelHeader, Checkbox, EmptyState, MemberList, SearchField, SidePanel, SidePanelScroll, SidePanelSearch } from "../design/components";
 import { ClientError, type ChannelSummary, type ServerSummary, type SnapshotSummary } from "../client/bridge";
+import type { MenuPoint } from "../client/menus";
 import { avatarSrc, browseQuery, channelMembersQuery, client, customStatusOf, membersQuery, presence, presenceOf, queryClient, tookSnapshot } from "../client/state";
 import { initialsOf, toneFor } from "./app";
 
@@ -235,6 +236,7 @@ export function ChannelMembersAside(props: {
   joined: boolean;
   me: string;
   openPerson: (accountId: string, anchor: HTMLElement) => void;
+  personMenu: (accountId: string, anchor: HTMLElement, at?: MenuPoint) => void;
   addPeople: (anchor: HTMLElement) => void;
   left: () => void;
 }) {
@@ -313,7 +315,7 @@ export function ChannelMembersAside(props: {
         <SearchField label="Find a member" value={query()} onInput={(e) => setQuery(e.currentTarget.value)} />
       </SidePanelSearch>
       <SidePanelScroll>
-        <MemberList sections={sections()} empty={query().trim() ? "No member matches that." : undefined} onOpen={(m, row) => m.id && props.openPerson(m.id, row)} />
+        <MemberList sections={sections()} empty={query().trim() ? "No member matches that." : undefined} onOpen={(m, row) => m.id && props.openPerson(m.id, row)} onMenu={(m, row, at) => m.id && props.personMenu(m.id, row, at)} />
       </SidePanelScroll>
       <div class="lu-memberfoot">
         <Show when={error()}>
