@@ -114,13 +114,13 @@ import chat.lumia.kit.LumiaSecondaryButton
 import chat.lumia.kit.LumiaSession
 import chat.lumia.kit.LumiaTag
 import chat.lumia.kit.LumiaTokens
-import chat.lumia.kit.NOT_SHOWN_AS_TAG
 import chat.lumia.kit.addHoldersButton
 import chat.lumia.kit.avatarTone
 import chat.lumia.kit.editingOf
 import chat.lumia.kit.followed
 import chat.lumia.kit.grouped
 import chat.lumia.kit.holderCandidates
+import chat.lumia.kit.holderCounts
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.labelClipped
 import chat.lumia.kit.lumiaCode
@@ -232,8 +232,8 @@ fun RolesScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit,
     var asking by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val roles = rolesInOrder(server?.roles ?: emptyList(), moved)
-    // How many hold each role, asked of the core once for the list as it is, not for every row as it is drawn.
-    val held = remember(roles, members) { roles.associate { it.roleId to rolesHolders(it, members) } }
+    // How many hold each role, in one call of the core for the list as it is (`holderCounts`), not one a role or a row.
+    val held = remember(roles, members) { holderCounts(roles, members) ?: emptyMap() }
     AskMembers(session, serverId, members)
 
     fun move(roleId: String, beforeId: String?) {
@@ -344,7 +344,7 @@ private fun RoleRow(role: RoleSummary, held: ULong?, onOpen: () -> Unit, end: @C
                     if (role.hideTag && !role.isEveryone) {
                         Row(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space4), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.VisibilityOff, contentDescription = null, tint = LumiaTokens.inkMuted.color, modifier = Modifier.size(LumiaTokens.space14))
-                            Text(NOT_SHOWN_AS_TAG, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
+                            Text(roleSentences.notShownAsTag, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                         }
                     }
                 }

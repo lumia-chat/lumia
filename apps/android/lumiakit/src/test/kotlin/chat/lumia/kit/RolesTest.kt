@@ -178,30 +178,41 @@ class RolesTest {
     // Finding members
 
     @Test
-    fun aSearchReadsTheNameTheHandleAndTheTitle() {
+    fun aSearchIsReadBackIntoTheMembersInTheirOrder() {
         val people = listOf(
-            member("devon", display = "Devon Park", title = "Staff Engineer"),
+            member("sam", display = "Sam Okafor"),
+            member("devon", display = "Devon Park"),
             member("maya", display = "Maya Chen"),
         )
-        assertEquals(2, searched(people, "").size)
-        assertEquals(2, searched(people, "  ").size)
-        assertEquals(2, searched(people, "@").size)
-        assertEquals(listOf("devon"), searched(people, "ENGINEER").map { it.handle })
-        assertEquals(listOf("maya"), searched(people, "@maya").map { it.handle })
+        assertEquals(people, searched(people, ""))
+        assertEquals(people, searched(people, "  "))
+        assertEquals(listOf("sam", "devon", "maya"), searched(people, "a").map { it.handle })
         assertEquals(listOf("maya"), searched(people, "chen").map { it.handle })
-        assertEquals(emptyList<MemberSummary>(), searched(people, "nobody"))
+        assertEquals(emptyList<MemberSummary>(), searched(emptyList(), "chen"))
     }
 
     @Test
-    fun addMembersOffersThoseWhoDoNotHoldTheRoleAndNoGuest() {
+    fun holderCountsAreOneCallReadBackByRole() {
+        val people = listOf(member("a", roleIds = listOf("mod", "eng")), member("b", roleIds = listOf("eng")), member("c"))
+        val counts = holderCounts(ACME, people)!!
+        assertEquals(1uL, counts["mod"])
+        assertEquals(2uL, counts["eng"])
+        assertEquals(0uL, counts["admin"])
+        assertEquals(3uL, counts["everyone"])
+        assertEquals(ACME.size, counts.size)
+        assertNull(holderCounts(ACME, null))
+    }
+
+    @Test
+    fun addMembersIsInTheOrderOfNames() {
         val people = listOf(
-            member("sam", display = "Sam Okafor", roleIds = listOf("eng")),
+            member("sam", display = "Sam Okafor"),
             member("maya", display = "Maya Chen"),
-            member("jordan", display = "Jordan Lee", guest = true),
             member("devon", display = "Devon Park", roleIds = listOf("mod")),
         )
-        assertEquals(listOf("devon", "maya"), holderCandidates(people, "eng", "").map { it.handle })
-        assertEquals(listOf("maya"), holderCandidates(people, "eng", "chen").map { it.handle })
+        assertEquals(listOf("devon", "maya", "sam"), holderCandidates(people, "eng", "").map { it.handle })
+        assertEquals(listOf("maya", "sam"), holderCandidates(people, "mod", "").map { it.handle })
+        assertEquals(listOf("devon", "sam"), holderCandidates(people, "eng", "o").map { it.handle })
         assertEquals("Add", addHoldersButton(0))
         assertEquals("Add", addHoldersButton(1))
         assertEquals("Add 2 members", addHoldersButton(2))

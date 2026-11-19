@@ -21,11 +21,12 @@ import uniffi.lumia_ffi.roleWords
 import uniffi.lumia_ffi.rolesDraftOf
 import uniffi.lumia_ffi.rolesFollowed
 import uniffi.lumia_ffi.rolesFormOf
-import uniffi.lumia_ffi.rolesFound
+import uniffi.lumia_ffi.rolesHolderCounts
 import uniffi.lumia_ffi.rolesMayBeGiven
 import uniffi.lumia_ffi.rolesMemberFollowed
 import uniffi.lumia_ffi.rolesMemberRefusal
 import uniffi.lumia_ffi.rolesRoleRefusal
+import uniffi.lumia_ffi.rolesSearched
 import uniffi.lumia_ffi.rolesToneOf
 
 /** Every fixed sentence the roles screens say, the core's, asked once (and not before a screen needs one, so the library is loaded by then). */
@@ -94,20 +95,31 @@ fun MemberForms.ticked(roleIds: List<String>): MemberForms = copy(form = MemberF
 /** A form with [title] typed, its roles as they were. */
 fun MemberForms.titled(title: String): MemberForms = copy(form = MemberForm(form.roleIds, title))
 
-/** Members Members' search finds by [query] (the core's `rolesFound`); all of them for nothing typed. */
+/**
+ * Members Members' search finds by [query]: the core's `rolesSearched`,
+ * asked once for the whole list and not once a member, its places read back
+ * into the list; all of them for nothing typed, with nothing asked.
+ */
 fun searched(members: List<MemberSummary>, query: String): List<MemberSummary> =
-    if (query.isBlank()) members else members.filter { rolesFound(query, it) }
+    if (query.isBlank()) members else rolesSearched(query, members).mapNotNull { members.getOrNull(it.toInt()) }
+
+/**
+ * How many of [members] hold each of [roles], by role id: the core's
+ * `rolesHolderCounts`, asked once for the whole list and not once a role;
+ * none while the members are not known.
+ */
+fun holderCounts(roles: List<RoleSummary>, members: List<MemberSummary>?): Map<String, ULong>? =
+    members?.let { roles.map { r -> r.roleId }.zip(rolesHolderCounts(roles, it)).toMap() }
 
 /** Who "Add members" offers a role: those the core's `rolesMayBeGiven` says may be (no guest, nobody who holds it), found by [query], by name. */
 fun holderCandidates(members: List<MemberSummary>, roleId: String, query: String): List<MemberSummary> =
-    searched(members.filter { rolesMayBeGiven(roleId, it) }, query).sortedBy { nameOf(it).lowercase() }
+    searched(members, query).filter { rolesMayBeGiven(roleId, it) }.sortedBy { nameOf(it).lowercase() }
 
 /** What the Add button of "Add members" says for [chosen] ticked. */
 fun addHoldersButton(chosen: Int): String = if (chosen > 1) "Add $chosen members" else "Add"
 
 // The words the core has no sentence for
 
-const val NOT_SHOWN_AS_TAG = "Not shown as tag"
 const val LOCKED_ROLE = "At or above your own highest role, so not yours to change"
 const val LOCKED_CHOICE = "Not yours to give or take"
 
