@@ -584,6 +584,17 @@ pub fn holders(role: &RoleSummary, members: Option<&[Vec<String>]>) -> Option<u6
     Some(n as u64)
 }
 
+/// How many of `members` (each by the role ids it holds) hold each of `roles`, in their order:
+/// [`holders`] for the whole list at once, so a shell across a binding asks once and not once
+/// a role.
+#[must_use]
+pub fn holder_counts(roles: &[RoleSummary], members: &[Vec<String>]) -> Vec<u64> {
+    roles
+        .iter()
+        .map(|role| holders(role, Some(members)).unwrap_or(0))
+        .collect()
+}
+
 /// A role at or above this account's own highest: listed with a lock, and it does not open.
 /// `Everyone` always opens.
 #[must_use]
@@ -986,7 +997,25 @@ pub fn found(query: &str, display_name: &str, nickname: &str, handle: &str, titl
             .any(|s| s.to_lowercase().contains(q))
 }
 
+/// The places in `members` (each its display name, nickname, handle and title) of those
+/// `query` finds ([`found`]), in order: the whole list at once, so a shell across a binding asks
+/// once a key typed and not once a member.
+#[must_use]
+pub fn searched(query: &str, members: &[[&str; 4]]) -> Vec<u32> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, [display_name, nickname, handle, title])| {
+            found(query, display_name, nickname, handle, title)
+        })
+        .filter_map(|(i, _)| u32::try_from(i).ok())
+        .collect()
+}
+
 // The words, as every shell says them.
+
+/// Beside a role in Roles whose "Show as tag" is off.
+pub const NOT_SHOWN_AS_TAG: &str = "Not shown as tag";
 
 pub const ROLES_HINT: &str =
     "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.";

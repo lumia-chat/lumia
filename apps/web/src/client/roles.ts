@@ -66,6 +66,11 @@ export function holders(role: Pick<RoleSummary, "roleId" | "isEveryone">, member
   return role.isEveryone ? members.length : members.filter((m) => m.roleIds.includes(role.roleId)).length;
 }
 
+/** How many of `members` hold each of `roles`, in their order (`holders` for the whole list). */
+export function holderCounts(roles: Pick<RoleSummary, "roleId" | "isEveryone">[], members: Pick<MemberSummary, "roleIds">[]): number[] {
+  return roles.map((r) => holders(r, members) ?? 0);
+}
+
 /** A role at or above this account's own highest: listed with a lock, and it does not open. Everyone always opens. */
 export function lockedRole(role: Pick<RoleSummary, "isEveryone" | "canManage">): boolean {
   return !role.isEveryone && !role.canManage;
@@ -345,6 +350,11 @@ export function found(query: string, m: Pick<MemberSummary, "displayName" | "nic
   return !q || [m.displayName, m.nickname, m.handle, m.title].some((s) => s.toLowerCase().includes(q));
 }
 
+/** The places in `members` of those `query` finds, in order. */
+export function searchedPlaces(query: string, members: Pick<MemberSummary, "displayName" | "nickname" | "handle" | "title">[]): number[] {
+  return members.flatMap((m, i) => (found(query, m) ? [i] : []));
+}
+
 /** The members `query` finds (`found`); all of them for nothing typed. */
 export function searched<M extends Pick<MemberSummary, "displayName" | "nickname" | "handle" | "title">>(members: M[], query: string): M[] {
   return members.filter((m) => found(query, m));
@@ -376,6 +386,8 @@ export const TAG_CHOICES = {
 } as const;
 
 export const ADMINISTRATOR_TITLE = "Turn on Administrator?";
+/** Beside a role in Roles whose "Show as tag" is off. */
+export const NOT_SHOWN_AS_TAG = "Not shown as tag";
 
 /** The title of what is asked before a role is deleted: "Delete Moderator?". */
 export function deleteTitle(roleName: string): string {

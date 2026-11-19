@@ -258,7 +258,7 @@ fn role_words(s: &State, role: &RoleSummary, locked: bool, look: Look) -> El {
                 .items_center()
                 .child(icon(&icons::EYE_OFF, t::META_GLYPH).color(c.ink_muted))
                 .child(
-                    text("Not shown as tag")
+                    text(core::NOT_SHOWN_AS_TAG)
                         .font(t::read(t::TEXT_META))
                         .color(c.ink_muted),
                 ),

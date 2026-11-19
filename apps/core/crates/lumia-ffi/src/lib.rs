@@ -3859,6 +3859,7 @@ pub struct RoleWords {
     pub reading_members: String,
     pub no_roles: String,
     pub administrator_title: String,
+    pub not_shown_as_tag: String,
     /// The permission whose switch asks before it is turned on, by its wire name.
     pub administrator: String,
     /// The most characters a role's name or a title keeps.
@@ -3888,6 +3889,7 @@ pub fn role_words() -> RoleWords {
         reading_members: roles::READING_MEMBERS.into(),
         no_roles: roles::NO_ROLES.into(),
         administrator_title: roles::ADMINISTRATOR_TITLE.into(),
+        not_shown_as_tag: roles::NOT_SHOWN_AS_TAG.into(),
         administrator: roles::ADMINISTRATOR.into(),
         label_max: u32::try_from(roles::LABEL_MAX).unwrap_or(u32::MAX),
     }
@@ -3966,6 +3968,32 @@ pub fn roles_holders(role: RoleSummary, members: Option<Vec<MemberSummary>>) -> 
     let held: Option<Vec<Vec<String>>> =
         members.map(|list| list.into_iter().map(|m| m.role_ids).collect());
     roles::holders(&role.into(), held.as_deref())
+}
+
+/// How many of `members` hold each of `roles`, in their order: asked once for the whole list,
+/// since a call across the binding costs more than the counting.
+#[uniffi::export]
+pub fn roles_holder_counts(roles: Vec<RoleSummary>, members: Vec<MemberSummary>) -> Vec<u64> {
+    let held: Vec<Vec<String>> = members.into_iter().map(|m| m.role_ids).collect();
+    roles::holder_counts(&roles_in(roles), &held)
+}
+
+/// The places in `members` of those Members' search finds by `query`, in order: asked once a
+/// key typed for the whole list.
+#[uniffi::export]
+pub fn roles_searched(query: String, members: Vec<MemberSummary>) -> Vec<u32> {
+    let fields: Vec<[&str; 4]> = members
+        .iter()
+        .map(|m| {
+            [
+                m.display_name.as_str(),
+                m.nickname.as_str(),
+                m.handle.as_str(),
+                m.title.as_str(),
+            ]
+        })
+        .collect();
+    roles::searched(&query, &fields)
 }
 
 /// A role at or above this account's own highest: a lock, and it does not open.

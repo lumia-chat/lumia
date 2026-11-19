@@ -43,6 +43,10 @@ function answer(c: Case): unknown {
       return roles.formUntouched(a.opened, a.form);
     case "mayBeGiven":
       return roles.mayBeGiven(a.roleId, { guest: a.guest, roleIds: a.roleIds });
+    case "holderCounts":
+      return roles.holderCounts(listOf(a.roles), a.members.map((roleIds: string[]) => ({ roleIds })));
+    case "searched":
+      return roles.searchedPlaces(a.query, a.members);
     case "toneOf":
       return roles.toneOf(a.color);
     case "rolesCount":
@@ -145,6 +149,7 @@ describe("the shared cases", () => {
       READING_MEMBERS: roles.READING_MEMBERS,
       NO_ROLES: roles.NO_ROLES,
       ADMINISTRATOR_TITLE: roles.ADMINISTRATOR_TITLE,
+      NOT_SHOWN_AS_TAG: roles.NOT_SHOWN_AS_TAG,
       ADMINISTRATOR: roles.ADMINISTRATOR,
     };
     expect(words).toEqual(vectors.words);

@@ -91,6 +91,25 @@ fn answer(file: &File, case: &Case) -> Value {
             a["guest"].as_bool().unwrap(),
             &of::<Vec<String>>(&a["roleIds"])
         )),
+        "holderCounts" => json!(roles::holder_counts(
+            &roles_of(file, &a["roles"]),
+            &of::<Vec<Vec<String>>>(&a["members"])
+        )),
+        "searched" => {
+            let people: Vec<Value> = of(&a["members"]);
+            let fields: Vec<[&str; 4]> = people
+                .iter()
+                .map(|p| {
+                    [
+                        s(&p["displayName"]),
+                        s(&p["nickname"]),
+                        s(&p["handle"]),
+                        s(&p["title"]),
+                    ]
+                })
+                .collect();
+            json!(roles::searched(s(&a["query"]), &fields))
+        }
         "toneOf" => json!(roles::tone_of(s(&a["color"]))),
         "rolesCount" => json!(roles::roles_count(&roles_of(file, &a["roles"]))),
         "membersCount" => json!(roles::members_count(a["n"].as_u64().unwrap())),
@@ -279,6 +298,7 @@ fn the_words_are_the_cores() {
         ("READING_MEMBERS", roles::READING_MEMBERS),
         ("NO_ROLES", roles::NO_ROLES),
         ("ADMINISTRATOR_TITLE", roles::ADMINISTRATOR_TITLE),
+        ("NOT_SHOWN_AS_TAG", roles::NOT_SHOWN_AS_TAG),
         ("ADMINISTRATOR", roles::ADMINISTRATOR),
     ]
     .into_iter()

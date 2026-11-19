@@ -78,7 +78,8 @@
     "READING_MEMBERS": "Reading the members…",
     "NO_ROLES": "No roles",
     "ADMINISTRATOR_TITLE": "Turn on Administrator?",
-    "ADMINISTRATOR": "ADMINISTRATOR"
+    "ADMINISTRATOR": "ADMINISTRATOR",
+    "NOT_SHOWN_AS_TAG": "Not shown as tag"
   },
   "cases": [
     {
@@ -486,6 +487,132 @@
       },
       "answer": null,
       "why": "not known while the members are not read"
+    },
+    {
+      "rule": "holderCounts",
+      "args": {
+        "roles": "acme",
+        "members": [
+          [
+            "eng"
+          ],
+          [
+            "eng",
+            "design"
+          ],
+          []
+        ]
+      },
+      "answer": [
+        0,
+        0,
+        1,
+        2,
+        0,
+        3
+      ],
+      "why": "each role's holders in the roles' order, everyone holding Everyone"
+    },
+    {
+      "rule": "holderCounts",
+      "args": {
+        "roles": "acme",
+        "members": []
+      },
+      "answer": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "why": "no members: nobody holds anything"
+    },
+    {
+      "rule": "searched",
+      "args": {
+        "query": "engineer",
+        "members": [
+          {
+            "displayName": "Devon Park",
+            "nickname": "",
+            "handle": "devon",
+            "title": "Staff Engineer"
+          },
+          {
+            "displayName": "Maya Chen",
+            "nickname": "",
+            "handle": "maya",
+            "title": ""
+          },
+          {
+            "displayName": "Sam Okafor",
+            "nickname": "",
+            "handle": "sam",
+            "title": "Backend Engineer"
+          }
+        ]
+      },
+      "answer": [
+        0,
+        2
+      ],
+      "why": "the places of those found, in order"
+    },
+    {
+      "rule": "searched",
+      "args": {
+        "query": "",
+        "members": [
+          {
+            "displayName": "Devon Park",
+            "nickname": "",
+            "handle": "devon",
+            "title": "Staff Engineer"
+          },
+          {
+            "displayName": "Maya Chen",
+            "nickname": "",
+            "handle": "maya",
+            "title": ""
+          },
+          {
+            "displayName": "Sam Okafor",
+            "nickname": "",
+            "handle": "sam",
+            "title": "Backend Engineer"
+          }
+        ]
+      },
+      "answer": [
+        0,
+        1,
+        2
+      ],
+      "why": "nothing typed finds everyone"
+    },
+    {
+      "rule": "searched",
+      "args": {
+        "query": "nobody",
+        "members": [
+          {
+            "displayName": "Devon Park",
+            "nickname": "",
+            "handle": "devon",
+            "title": "Staff Engineer"
+          },
+          {
+            "displayName": "Maya Chen",
+            "nickname": "",
+            "handle": "maya",
+            "title": ""
+          }
+        ]
+      },
+      "answer": [],
+      "why": "nobody found"
     },
     {
       "rule": "lockedRole",
