@@ -14,6 +14,17 @@
 //! or the card under it showing what was saved; the editor, which has no Cancel, says
 //! "Saved."; a refusal is said where the thing was tried.
 //!
+//! What a save sends is what the person changed, never what the form happened to hold. An
+//! editor and a member's form each keep what they opened on (`opened`) beside what is being
+//! edited: Save is offered and its request made from the difference of the two
+//! ([`roles::savable`], [`roles::member_changes`]; the core's `change_role` and
+//! `change_member`), so a form left open while someone else changed the same role or member
+//! undoes nothing of theirs. A form nobody has touched follows what it shows as it changes
+//! underneath ([`roles::followed`], [`State::follow_roles`], after everything the session
+//! reports); one the person has changed stays as it is. Taking a role from a holder and
+//! giving it are changes of that one role. Each change of a member is answered by its number,
+//! so two forms open on one person each take their own answer.
+//!
 //! A drag starts once the pointer has gone [`DRAG_START`] from the press on a handle. The
 //! role's place stays, dashed; a line in the accent says where it would land, which is before
 //! the first row whose middle is under the pointer, when [`roles::lands_before`] allows it.
@@ -26,19 +37,25 @@ use lumia_client::roles::RoleSummary;
 use rune::{Drag, LiveRegion, Phase, TextEdit, Tx};
 
 use super::rail::DRAG_START;
-use super::roles::{self, RoleDraft, Section, Step};
+use super::roles::{self, MemberDraft, RoleDraft, Section, Step};
 use super::server_settings::Saving;
 use super::{Popover, State};
-use crate::session::roles::{RoleSave, RoleUpdate};
+use crate::session::roles::RoleUpdate;
 
 /// How many members the Members section draws before "Show more members", and how many
 /// more each press of it adds.
 pub const MEMBERS_PAGE: usize = 50;
 
-/// A role's editor: the role it is open for (none for a new one) and what is chosen in it.
+/// A role's editor: the role it is open for (none for a new one), the role as it opened on
+/// it, and what is chosen in it.
 #[derive(Debug, Default)]
 pub struct RoleEditor {
     pub role_id: Option<String>,
+    /// The role as the editor opened on it, and after a save as the answer had it: what
+    /// Save is offered against and what the save says the role was. None for a new role.
+    pub opened: Option<RoleDraft>,
+    /// The role is Everyone, of which only the permissions change.
+    pub everyone: bool,
     pub name: TextEdit,
     /// A tone, or empty for none.
     pub color: String,
@@ -46,8 +63,9 @@ pub struct RoleEditor {
     /// The permissions switched on, by their wire names.
     pub permissions: Vec<String>,
     pub saving: Saving,
-    /// The holder being taken out of the role, and why one was not.
-    pub removing: Option<String>,
+    /// The holder being taken out of the role with the number of that change, and why one
+    /// was not.
+    pub removing: Option<(String, u64)>,
     pub holders_error: String,
 }
 
@@ -56,11 +74,30 @@ impl RoleEditor {
         let draft = roles::draft_of(role);
         Self {
             role_id: role.map(|r| r.role_id.clone()),
+            opened: role.map(|_| draft.clone()),
+            everyone: role.is_some_and(|r| r.is_everyone),
             name: TextEdit::new(&draft.name),
             color: draft.color,
             hide_tag: draft.hide_tag,
             permissions: draft.permissions,
             ..Self::default()
+        }
+    }
+
+    /// An untouched editor takes the role as it now is, and opened on it from then; one the
+    /// person has changed, a saving one and a new role's stay.
+    fn follow(&mut self, now: &RoleSummary) {
+        let Some(opened) = self.opened.as_ref().filter(|_| !self.saving.busy) else {
+            return;
+        };
+        if let Some(now) = roles::followed(opened, &self.draft(), &roles::draft_of(Some(now))) {
+            if self.name.text != now.name {
+                self.name.replace_text(&now.name);
+            }
+            self.color.clone_from(&now.color);
+            self.hide_tag = now.hide_tag;
+            self.permissions.clone_from(&now.permissions);
+            self.opened = Some(now);
         }
     }
 
@@ -72,6 +109,13 @@ impl RoleEditor {
             hide_tag: self.hide_tag,
             permissions: self.permissions.clone(),
         }
+    }
+
+    /// Whether the holder `account_id` is being taken out of the role.
+    pub fn removing(&self, account_id: &str) -> bool {
+        self.removing
+            .as_ref()
+            .is_some_and(|(who, _)| who == account_id)
     }
 }
 
@@ -105,14 +149,45 @@ pub struct AddHolders {
     pub error: String,
 }
 
-/// A member's row opened in Members: their roles as ticked, their title as typed.
+/// A member's row opened in Members, or one of the card's forms: their roles as ticked and
+/// their title as typed, beside both as the form opened on them.
 #[derive(Debug, Default)]
 pub struct MemberEdit {
     pub account_id: String,
+    /// The member's roles and title as the form opened on them: what its Save is the
+    /// difference from.
+    pub opened: MemberDraft,
     pub roles: Vec<String>,
     pub title: TextEdit,
     pub busy: bool,
+    /// The number of the change this form's Save asked for, which its answer names.
+    pub request: u64,
     pub error: String,
+}
+
+impl MemberEdit {
+    /// What the form holds, as the sheet compares it.
+    pub fn form(&self) -> MemberDraft {
+        MemberDraft {
+            roles: self.roles.clone(),
+            title: self.title.text.clone(),
+        }
+    }
+
+    /// An untouched form takes the member as they now are; a touched or a saving one stays.
+    fn follow(&mut self, now: &MemberSummary) {
+        if self.busy {
+            return;
+        }
+        let now = roles::member_draft_of(now);
+        if let Some(now) = roles::followed_member(&self.opened, &self.form(), &now) {
+            self.roles.clone_from(&now.roles);
+            if self.title.text != now.title {
+                self.title.replace_text(&now.title);
+            }
+            self.opened = now;
+        }
+    }
 }
 
 /// Which of the profile card's two forms is open.
@@ -384,10 +459,49 @@ impl State {
 
     /// Whether the editor's Save is offered.
     pub fn role_savable(&self) -> bool {
-        self.roles
-            .editor
-            .as_ref()
-            .is_some_and(|e| !e.saving.busy && roles::savable(&e.draft(), self.edited_role()))
+        self.roles.editor.as_ref().is_some_and(|e| {
+            !e.saving.busy && roles::savable(&e.draft(), e.opened.as_ref(), e.everyone)
+        })
+    }
+
+    /// After anything the session reports: a role's editor and a member's forms that nobody
+    /// has touched follow the role and the member as they now are ([`roles::followed`]).
+    /// One the person has changed stays, with what it opened on, so its save sends that
+    /// change and nothing else.
+    pub(super) fn follow_roles(&mut self) {
+        if self.roles.editor.is_none() && self.roles.member.is_none() && self.roles.card.is_none() {
+            return;
+        }
+        let settings = self.settings_server();
+        let Self { session, roles, .. } = self;
+        let server = settings.as_deref().and_then(|id| session.server(id));
+        if let (Some(editor), Some(server)) = (&mut roles.editor, server)
+            && let Some(id) = editor.role_id.as_deref()
+            && let Some(now) = server.roles.iter().find(|r| r.role_id == id)
+        {
+            editor.follow(now);
+        }
+        if let (Some(open), Some(server)) = (&mut roles.member, server)
+            && let Some(now) = session.member_in(&server.server_id, &open.account_id)
+        {
+            open.follow(now);
+        }
+        if self.roles.card.is_some() {
+            self.follow_card();
+        }
+    }
+
+    /// [`State::follow_roles`] for the form on the profile card, whose member is the
+    /// on-screen server's.
+    fn follow_card(&mut self) {
+        let Some(now) = self.card_member().map(|(_, member)| member.clone()) else {
+            return;
+        };
+        if let Some(card) = &mut self.roles.card
+            && card.member.account_id == now.account_id
+        {
+            card.member.follow(&now);
+        }
     }
 
     pub fn choose_role_color(&mut self, color: &str) {
@@ -441,7 +555,8 @@ impl State {
         }
     }
 
-    /// The editor's Save: the role created, or changed whole.
+    /// The editor's Save: a new role created, or what the editor changed of the role it
+    /// opened on sent, and nothing else of it.
     pub fn save_role(&mut self) {
         if !self.role_savable() {
             return;
@@ -456,14 +571,16 @@ impl State {
             busy: true,
             ..Saving::default()
         };
-        let role = RoleSave {
+        let now = RoleDraft {
             name: editor.name.text.trim().to_string(),
-            color: editor.color.clone(),
-            hide_tag: editor.hide_tag,
-            permissions: editor.permissions.clone(),
+            ..editor.draft()
         };
-        self.session
-            .save_role(&server_id, editor.role_id.as_deref(), role);
+        match (editor.role_id.clone(), editor.opened.clone()) {
+            (Some(role_id), Some(was)) => {
+                self.session.change_role(&server_id, &role_id, was, now);
+            }
+            _ => self.session.create_role(&server_id, now),
+        }
     }
 
     /// The members of the server whose settings are open, once they are known: none while
@@ -642,7 +759,8 @@ impl State {
 
     // ---- Who holds a role ---------------------------------------------------------------
 
-    /// Takes the role in the editor away from one of its holders, at once.
+    /// Takes the role in the editor away from one of its holders, at once: that role and
+    /// no other, whatever else they hold by now.
     pub fn remove_holder(&mut self, account_id: &str) {
         let Some(server_id) = self.settings_server() else {
             return;
@@ -650,25 +768,17 @@ impl State {
         let Some(role_id) = self.edited_role().map(|r| r.role_id.clone()) else {
             return;
         };
-        let Some(member) = self.session.member_in(&server_id, account_id) else {
-            return;
-        };
-        let rest: Vec<String> = member
-            .role_ids
-            .iter()
-            .filter(|id| **id != role_id)
-            .cloned()
-            .collect();
         let Some(editor) = &mut self.roles.editor else {
             return;
         };
         if editor.removing.is_some() {
             return;
         }
-        editor.removing = Some(account_id.to_string());
         editor.holders_error.clear();
-        self.session
-            .save_member(&server_id, account_id, Some(rest), None);
+        let request =
+            self.session
+                .change_member(&server_id, account_id, Vec::new(), vec![role_id], None);
+        editor.removing = Some((account_id.to_string(), request));
     }
 
     /// "Add members": the server's members who do not hold the role in the editor.
@@ -718,6 +828,7 @@ impl State {
     fn member_edit(member: &MemberSummary) -> MemberEdit {
         MemberEdit {
             account_id: member.account_id.clone(),
+            opened: roles::member_draft_of(member),
             roles: member.role_ids.clone(),
             title: TextEdit::new(&member.title),
             ..MemberEdit::default()
@@ -762,52 +873,33 @@ impl State {
         }
     }
 
-    /// What of `edit` differs from the member as the server has them, among what this account
-    /// is offered: the roles to send, and the title.
-    fn member_changes(
-        server: &ServerSummary,
-        member: &MemberSummary,
-        me: bool,
-        edit: &MemberEdit,
-    ) -> (Option<Vec<String>>, Option<String>) {
-        let offers = roles::member_offers(server, member, me);
-        let same = edit.roles.len() == member.role_ids.len()
-            && edit.roles.iter().all(|id| member.role_ids.contains(id));
-        let title = edit.title.text.trim();
-        (
-            (offers.roles && !same).then(|| edit.roles.clone()),
-            (offers.title && title != member.title).then(|| title.to_string()),
-        )
-    }
-
-    /// Save, in a member's row: what changed is sent; nothing changed, and the row closes.
+    /// Save, in a member's row: what the row changed of the member it opened on is sent,
+    /// as one change (the roles ticked since to give, those unticked to take, the title if
+    /// it differs); nothing changed, and the row closes with nothing asked.
     pub fn save_member(&mut self) {
-        let Some(server) = self.settings_summary() else {
+        let Some(server_id) = self.settings_server() else {
             return;
         };
-        let Some(open) = &self.roles.member else {
+        let Some(open) = &mut self.roles.member else {
             return;
         };
         if open.busy {
             return;
         }
-        let Some(member) = self.session.member_in(&server.server_id, &open.account_id) else {
-            self.roles.member = None;
-            return;
-        };
-        let me = open.account_id == self.session.me();
-        let (roles, title) = Self::member_changes(server, member, me, open);
-        if roles.is_none() && title.is_none() {
+        let changes = roles::member_changes(&open.opened, &open.form());
+        if changes.nothing() {
             self.roles.member = None;
             return;
         }
-        let (server_id, account_id) = (server.server_id.clone(), open.account_id.clone());
-        if let Some(open) = &mut self.roles.member {
-            open.busy = true;
-            open.error.clear();
-        }
-        self.session
-            .save_member(&server_id, &account_id, roles, title);
+        open.busy = true;
+        open.error.clear();
+        open.request = self.session.change_member(
+            &server_id,
+            &open.account_id,
+            changes.give,
+            changes.take,
+            changes.title,
+        );
     }
 
     /// Kick: the member is removed from the server. Nothing is asked first.
@@ -893,9 +985,10 @@ impl State {
         }
     }
 
-    /// Save, in the card's form.
+    /// Save, in the card's form: what it changed of the member it opened on, the roles'
+    /// form its roles and the title's its title.
     pub fn save_card_form(&mut self) {
-        let Some((server, member)) = self.card_member() else {
+        let Some(server_id) = self.server_id().map(str::to_string) else {
             return;
         };
         let Some(card) = &self.roles.card else {
@@ -904,23 +997,30 @@ impl State {
         if card.member.busy {
             return;
         }
-        let me = member.account_id == self.session.me();
-        let (roles, title) = Self::member_changes(server, member, me, &card.member);
-        let (roles, title) = match card.form {
-            CardForm::Roles => (roles, None),
-            CardForm::Title => (None, title),
+        let all = roles::member_changes(&card.member.opened, &card.member.form());
+        let changes = match card.form {
+            CardForm::Roles => roles::MemberChanges { title: None, ..all },
+            CardForm::Title => roles::MemberChanges {
+                title: all.title,
+                ..roles::MemberChanges::default()
+            },
         };
-        if roles.is_none() && title.is_none() {
+        if changes.nothing() {
             self.close_card_form();
             return;
         }
-        let (server_id, account_id) = (server.server_id.clone(), member.account_id.clone());
-        if let Some(card) = &mut self.roles.card {
-            card.member.busy = true;
-            card.member.error.clear();
-        }
-        self.session
-            .save_member(&server_id, &account_id, roles, title);
+        let Some(card) = &mut self.roles.card else {
+            return;
+        };
+        card.member.busy = true;
+        card.member.error.clear();
+        card.member.request = self.session.change_member(
+            &server_id,
+            &card.member.account_id,
+            changes.give,
+            changes.take,
+            changes.title,
+        );
     }
 
     // ---- What the session reports -------------------------------------------------------
@@ -968,9 +1068,13 @@ impl State {
                                 })
                             });
                         match role {
+                            // What it opened on and what it holds are from now the role
+                            // as this answer has it.
                             Some(role) => {
                                 let mut now = RoleEditor::of(Some(role));
                                 now.saving.saved = true;
+                                now.removing = editor.removing.take();
+                                now.holders_error = std::mem::take(&mut editor.holders_error);
                                 self.roles.editor = Some(now);
                             }
                             None => self.roles.editor = None,
@@ -1028,16 +1132,18 @@ impl State {
                     Err(failure) => roles::role_refusal(failure, &server_name(self, server_id)),
                 };
             }
+            // Whichever asked for the change with this number takes its answer, and nothing
+            // else does: a holder taken out of a role while their row is open and saving
+            // are two changes of one person.
             RoleUpdate::Member {
-                account_id, result, ..
+                request, result, ..
             } => {
                 let why = result.as_ref().err().map(roles::member_refusal);
-                if let Some(editor) = self
-                    .roles
-                    .editor
-                    .as_mut()
-                    .filter(|e| e.removing.as_deref() == Some(account_id.as_str()))
-                {
+                if let Some(editor) = self.roles.editor.as_mut().filter(|e| {
+                    e.removing
+                        .as_ref()
+                        .is_some_and(|(_, asked)| asked == request)
+                }) {
                     editor.removing = None;
                     editor.holders_error = why.clone().unwrap_or_default();
                 }
@@ -1045,7 +1151,7 @@ impl State {
                     .roles
                     .member
                     .as_mut()
-                    .filter(|open| open.busy && open.account_id == *account_id)
+                    .filter(|open| open.busy && open.request == *request)
                 {
                     match &why {
                         None => self.roles.member = None,
@@ -1059,7 +1165,7 @@ impl State {
                     .roles
                     .card
                     .as_mut()
-                    .filter(|card| card.member.busy && card.member.account_id == *account_id)
+                    .filter(|card| card.member.busy && card.member.request == *request)
                 {
                     match &why {
                         None => self.close_card_form(),
@@ -1089,20 +1195,22 @@ impl State {
                     }
                 }
             }
-            RoleUpdate::Given { result, .. } => {
+            // Those who have the role now hold it and leave the list. Whoever does not stays
+            // ticked, with why under them: that is who was refused.
+            RoleUpdate::Given { left, why, .. } => {
                 let form = &mut self.roles.adding;
                 if !form.busy {
                     return;
                 }
                 form.busy = false;
-                match result {
-                    Ok(()) => {
-                        form.chosen.clear();
+                form.chosen.clone_from(left);
+                match why {
+                    None => {
                         if self.popover == Some(Popover::AddHolders) {
                             self.close_popover();
                         }
                     }
-                    Err(failure) => form.error = roles::member_refusal(failure),
+                    Some(failure) => form.error = roles::member_refusal(failure),
                 }
             }
         }

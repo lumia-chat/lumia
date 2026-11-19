@@ -12,11 +12,18 @@
 //! else made arrives while a screen is open.
 //!
 //! A role moved is drawn moved at once ([`RolesState::pending`]), as a rail tile is, and put
-//! back if the instance refuses. A member's roles and title are two calls of the core's, sent
-//! one after the other; the instance would take both in one request.
+//! back if the instance refuses.
+//!
+//! What is sent is what was changed, never what a screen happened to hold (the core's
+//! `change_role` and `change_member`): a role's editor says what the role was when it opened
+//! and what it holds now, and the core sends the difference; a member is sent the roles to
+//! give and to take and the title, in one request the instance does whole or not at all. So a
+//! save made from a screen left open undoes nothing someone else did meanwhile. Each change
+//! of a member carries a number ([`Session::change_member`] answers it), which its answer
+//! names: two forms open on one member each take their own.
 
 use lumia_client::app::{MemberSummary, ServerSummary, SnapshotSummary};
-use lumia_client::roles::{RoleSummary, TagSummary};
+use lumia_client::roles::{RoleDraft, RoleSummary, TagSummary};
 
 use super::{Failure, Session, Update};
 
@@ -27,6 +34,8 @@ pub struct RolesState {
     pub pending: Option<(String, Vec<String>)>,
     /// How many orders were sent; an answer to any but the last is not the order.
     sent: u64,
+    /// How many changes of a member were asked for: the last one's number.
+    asked: u64,
 }
 
 impl RolesState {
@@ -39,6 +48,11 @@ impl RolesState {
     /// How many orders were sent: what the last one's answer carries.
     pub fn sent(&self) -> u64 {
         self.sent
+    }
+
+    /// The number of the change of a member asked for last, which its answer carries.
+    pub fn asked(&self) -> u64 {
+        self.asked
     }
 }
 
@@ -62,10 +76,13 @@ pub enum RoleUpdate {
         sent: u64,
         result: Result<SnapshotSummary, Failure>,
     },
-    /// A member's roles, title or both saved: the member as the server now shows them.
+    /// A member's roles, title or both changed, by the change numbered `request`
+    /// ([`Session::change_member`]): the member as the server now shows them. Refused,
+    /// nothing of them was changed.
     Member {
         server_id: String,
         account_id: String,
+        request: u64,
         result: Result<MemberSummary, Failure>,
     },
     /// A member removed from the server.
@@ -74,22 +91,16 @@ pub enum RoleUpdate {
         account_id: String,
         result: Result<(), Failure>,
     },
-    /// A role given to the members chosen in its editor; a failure names nobody, and those
-    /// before it in the list have the role.
+    /// A role given to the members chosen in its editor. `left` are those who do not have
+    /// it, in the order chosen: whoever the instance refused it to, and with a failure that
+    /// is no refusal (the instance not reached) everyone after, who were not asked about.
+    /// `why` is the first of those answers. Everyone else chosen has the role.
     Given {
         server_id: String,
         role_id: String,
-        result: Result<(), Failure>,
+        left: Vec<String>,
+        why: Option<Failure>,
     },
-}
-
-/// What a role's editor saves.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleSave {
-    pub name: String,
-    pub color: String,
-    pub hide_tag: bool,
-    pub permissions: Vec<String>,
 }
 
 /// Whether what dresses a server's members differs between two snapshots of it: its roles,
@@ -181,37 +192,39 @@ impl Session {
             .collect()
     }
 
-    /// Creates a role (`role_id` none) or changes one ([`RoleUpdate::Saved`]).
-    pub fn save_role(&self, server_id: &str, role_id: Option<&str>, role: RoleSave) {
+    /// Creates a role ([`RoleUpdate::Saved`] with no `role_id`).
+    pub fn create_role(&self, server_id: &str, role: RoleDraft) {
         let Some(app) = self.client() else { return };
-        let (server_id, role_id) = (server_id.to_string(), role_id.map(str::to_string));
+        let server_id = server_id.to_string();
         self.task(async move {
-            let result = match &role_id {
-                Some(id) => {
-                    app.update_role(
-                        &server_id,
-                        id,
-                        &role.name,
-                        &role.color,
-                        role.hide_tag,
-                        &role.permissions,
-                    )
-                    .await
-                }
-                None => {
-                    app.create_role(
-                        &server_id,
-                        &role.name,
-                        &role.color,
-                        role.hide_tag,
-                        &role.permissions,
-                    )
-                    .await
-                }
-            };
+            let result = app
+                .create_role(
+                    &server_id,
+                    &role.name,
+                    &role.color,
+                    role.hide_tag,
+                    &role.permissions,
+                )
+                .await;
             Update::Role(RoleUpdate::Saved {
                 server_id,
-                role_id,
+                role_id: None,
+                result: result.map_err(Failure::from),
+            })
+        });
+    }
+
+    /// Saves what an editor changed of a role ([`RoleUpdate::Saved`]): `was` is the role as
+    /// the editor opened on it and `now` what it holds, and the core sends the difference
+    /// and nothing else of the role, so what someone else changed of it meanwhile stays.
+    pub fn change_role(&self, server_id: &str, role_id: &str, was: RoleDraft, now: RoleDraft) {
+        let Some(app) = self.client() else { return };
+        let (server_id, role_id) = (server_id.to_string(), role_id.to_string());
+        self.task(async move {
+            let result = app.change_role(&server_id, &role_id, &was, &now).await;
+            Update::Role(RoleUpdate::Saved {
+                server_id,
+                role_id: Some(role_id),
                 result: result.map_err(Failure::from),
             })
         });
@@ -249,42 +262,36 @@ impl Session {
         });
     }
 
-    /// Saves a member's roles (the whole set), their title, or both, whichever is given
-    /// ([`RoleUpdate::Member`]): the roles first, and the title only once they were taken.
-    pub fn save_member(
-        &self,
+    /// Changes a member: the roles to give them and to take away, and their title when one
+    /// is given, in one request the instance does whole or not at all
+    /// ([`RoleUpdate::Member`]). Their other roles stay as the instance has them. Answers
+    /// the change's number, which its answer names.
+    pub fn change_member(
+        &mut self,
         server_id: &str,
         account_id: &str,
-        roles: Option<Vec<String>>,
+        give: Vec<String>,
+        take: Vec<String>,
         title: Option<String>,
-    ) {
-        let Some(app) = self.client() else { return };
+    ) -> u64 {
+        self.roles.asked += 1;
+        let request = self.roles.asked;
+        let Some(app) = self.client() else {
+            return request;
+        };
         let (server_id, account_id) = (server_id.to_string(), account_id.to_string());
         self.task(async move {
-            let mut result = Err(Failure {
-                message: "nothing to save".into(),
-                ..Failure::default()
-            });
-            if let Some(roles) = &roles {
-                result = app
-                    .set_member_roles(&server_id, &account_id, roles)
-                    .await
-                    .map_err(Failure::from);
-            }
-            if let Some(title) = &title
-                && (roles.is_none() || result.is_ok())
-            {
-                result = app
-                    .set_member_title(&server_id, &account_id, title)
-                    .await
-                    .map_err(Failure::from);
-            }
+            let result = app
+                .change_member(&server_id, &account_id, &give, &take, title.as_deref())
+                .await;
             Update::Role(RoleUpdate::Member {
                 server_id,
                 account_id,
-                result,
+                request,
+                result: result.map_err(Failure::from),
             })
         });
+        request
     }
 
     /// Removes a member from a server ([`RoleUpdate::Kicked`]).
@@ -301,33 +308,39 @@ impl Session {
         });
     }
 
-    /// Gives a role to each of `members`, who hold what the server's list says they do
-    /// ([`RoleUpdate::Given`]). It stops at the first the instance refuses.
+    /// Gives a role to each of `members`, one change each of that role alone
+    /// ([`RoleUpdate::Given`]): what else each holds is the instance's to say, not this
+    /// list's. Someone the instance refuses it to does not stop the rest; a failure that is
+    /// no refusal does, since nobody after would be reached either.
     pub fn give_role(&self, server_id: &str, role_id: &str, members: &[String]) {
         let Some(app) = self.client() else { return };
-        let holding: Vec<(String, Vec<String>)> = members
-            .iter()
-            .filter_map(|id| self.member_in(server_id, id))
-            .filter(|member| !member.role_ids.iter().any(|held| held == role_id))
-            .map(|member| {
-                let mut roles = member.role_ids.clone();
-                roles.push(role_id.to_string());
-                (member.account_id.clone(), roles)
-            })
-            .collect();
+        let members = members.to_vec();
         let (server_id, role_id) = (server_id.to_string(), role_id.to_string());
         self.task(async move {
-            let mut result = Ok(());
-            for (account_id, roles) in &holding {
-                if let Err(error) = app.set_member_roles(&server_id, account_id, roles).await {
-                    result = Err(Failure::from(error));
+            let give = [role_id.clone()];
+            let (mut left, mut why) = (Vec::new(), None);
+            for (i, account_id) in members.iter().enumerate() {
+                let Err(error) = app
+                    .change_member(&server_id, account_id, &give, &[], None)
+                    .await
+                else {
+                    continue;
+                };
+                let failure = Failure::from(error);
+                let refused = !failure.code.is_empty();
+                why.get_or_insert(failure);
+                if refused {
+                    left.push(account_id.clone());
+                } else {
+                    left.extend(members[i..].iter().cloned());
                     break;
                 }
             }
             Update::Role(RoleUpdate::Given {
                 server_id,
                 role_id,
-                result,
+                left,
+                why,
             })
         });
     }
@@ -363,6 +376,7 @@ impl Session {
                 server_id,
                 account_id,
                 result,
+                ..
             } => {
                 // Held as answered where the core keeps no list of this server to read.
                 if let (Ok(now), Some(list)) = (result, self.members.get_mut(server_id))
@@ -370,7 +384,7 @@ impl Session {
                 {
                     *held = now.clone();
                 }
-                // And read again either way: the roles may have been taken and the title not.
+                // And read again either way: someone refused may have changed meanwhile.
                 self.read_members(server_id);
                 self.revision += 1;
             }

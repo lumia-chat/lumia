@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use common::*;
 use lumia_client::app::{MemberSummary, ServerSummary, SnapshotSummary};
 use lumia_client::roles::{RoleSummary, TagSummary};
-use lumia_shell::app::roles::Section;
+use lumia_shell::app::roles::{self, Section};
 use lumia_shell::app::{Popover, State};
 use lumia_shell::scenes::roles::{ACME, Acme, acme, person_id, role_id};
 use lumia_shell::session::roles::RoleUpdate;
@@ -57,6 +57,24 @@ fn changed(rt: &Runtime<State>, change: impl Fn(&mut ServerSummary)) -> Snapshot
 fn answer(rt: &mut Runtime<State>, update: RoleUpdate) {
     rt.update(move |s, _| s.receive(&Update::Role(update)));
     settle(rt);
+}
+
+/// The instance's answer to the change of a member asked for last.
+fn answer_member(
+    rt: &mut Runtime<State>,
+    account_id: String,
+    result: Result<MemberSummary, Failure>,
+) {
+    let request = rt.state.session.roles.asked();
+    answer(
+        rt,
+        RoleUpdate::Member {
+            server_id: ACME.into(),
+            account_id,
+            request,
+            result,
+        },
+    );
 }
 
 /// The roles as the list draws them, by name.
@@ -592,6 +610,84 @@ fn an_editor_closes_when_someone_else_deletes_its_role() {
     assert!(words(&rt).contains("That role is gone. Someone deleted it."));
 }
 
+/// Someone else changed Acme's roles: the snapshot the account log brings.
+fn someone_changes(rt: &mut Runtime<State>, change: impl Fn(&mut ServerSummary)) {
+    let snapshot = changed(rt, change);
+    rt.update(move |s, _| s.receive(&Update::Snapshot(Ok(snapshot))));
+    settle(rt);
+}
+
+#[test]
+fn an_editor_left_open_follows_the_role_until_it_is_touched_and_then_saves_its_change_alone() {
+    let mut rt = seen_by("ryan");
+    open(&mut rt, "roles");
+    press(&mut rt, &format!("role-open-{}", role_id("mod")));
+    let holds = |rt: &Runtime<State>, permission: &str| {
+        let editor = rt.state.roles.editor.as_ref().unwrap();
+        editor.permissions.iter().any(|p| p == permission)
+    };
+    assert!(holds(&rt, "MANAGE_MESSAGES") && holds(&rt, "MENTION_EVERYONE"));
+
+    // Nobody has touched it. Someone else takes Manage messages from Moderator: the editor
+    // shows the role as it now is, and that is no change of this editor's to save.
+    someone_changes(&mut rt, |server| {
+        server.roles[1]
+            .permissions
+            .retain(|p| p != "MANAGE_MESSAGES");
+    });
+    assert!(!holds(&rt, "MANAGE_MESSAGES"));
+    assert!(!rt.state.role_savable());
+
+    // Now it is touched: a new name. Someone else then switches Mention everyone off and
+    // recolours the role. The editor stays as the person left it, with what it opened on,
+    // and Save is offered for the name, which is all it would send.
+    rt.update(|s, _| s.roles.role_name().replace_text("Mods"));
+    settle(&mut rt);
+    someone_changes(&mut rt, |server| {
+        let role = &mut server.roles[1];
+        role.permissions.retain(|p| p != "MENTION_EVERYONE");
+        role.color = "sky".into();
+    });
+    let editor = rt.state.roles.editor.as_ref().unwrap();
+    assert_eq!(
+        (editor.name.text.as_str(), editor.color.as_str()),
+        ("Mods", "green")
+    );
+    assert!(holds(&rt, "MENTION_EVERYONE"));
+    assert!(rt.state.role_savable());
+    let opened = editor.opened.clone().unwrap();
+    assert_eq!(opened.name, "Moderator");
+    let sent = lumia_client::roles::changes(&opened, &editor.draft());
+    assert_eq!(sent.name.as_deref(), Some("Mods"));
+    assert!(
+        sent.color.is_none()
+            && sent.hide_tag.is_none()
+            && sent.grant.is_empty()
+            && sent.revoke.is_empty(),
+        "the save names more than the name: {sent:?}"
+    );
+
+    // Saved: the editor is the role as the answer has it, their change and the others'.
+    press(&mut rt, "save-role");
+    let snapshot = changed(&rt, |server| server.roles[1].name = "Mods".into());
+    answer(
+        &mut rt,
+        RoleUpdate::Saved {
+            server_id: ACME.into(),
+            role_id: Some(role_id("mod")),
+            result: Ok(snapshot),
+        },
+    );
+    let editor = rt.state.roles.editor.as_ref().unwrap();
+    assert_eq!(
+        (editor.name.text.as_str(), editor.color.as_str()),
+        ("Mods", "sky")
+    );
+    assert!(!holds(&rt, "MENTION_EVERYONE") && !holds(&rt, "MANAGE_MESSAGES"));
+    assert_eq!(editor.opened, Some(editor.draft()));
+    assert!(words(&rt).contains("Saved.") && !rt.state.role_savable());
+}
+
 // ---- Moving -------------------------------------------------------------------------------
 
 #[test]
@@ -778,20 +874,10 @@ fn a_roles_holders_are_removed_and_added_from_its_editor() {
     assert!(rt.find(&format!("holder-{priya}")).is_none());
 
     press(&mut rt, &format!("remove-holder-{sam}"));
-    assert_eq!(
-        rt.state.roles.editor.as_ref().unwrap().removing.as_deref(),
-        Some(sam.as_str())
-    );
+    assert!(rt.state.roles.editor.as_ref().unwrap().removing(&sam));
     let mut now = member(&rt, "sam");
     now.role_ids.retain(|id| *id != role_id("eng"));
-    answer(
-        &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: sam.clone(),
-            result: Ok(now),
-        },
-    );
+    answer_member(&mut rt, sam.clone(), Ok(now));
     assert!(rt.find(&format!("holder-{sam}")).is_none());
     assert!(rt.state.roles.editor.as_ref().unwrap().removing.is_none());
 
@@ -809,25 +895,89 @@ fn a_roles_holders_are_removed_and_added_from_its_editor() {
     assert!(words(&rt).contains("Add 2 members"));
     press(&mut rt, "add-holders-confirm");
     assert!(rt.state.roles.adding.busy);
+    // Sam has it; Priya was refused it. Who that is is said by who is left: Sam holds the
+    // role and is no longer listed, Priya is, still ticked, with why.
+    let mut now = member(&rt, "sam");
+    now.role_ids.push(role_id("eng"));
+    answer_member(&mut rt, sam.clone(), Ok(now));
     answer(
         &mut rt,
         RoleUpdate::Given {
             server_id: ACME.into(),
             role_id: role_id("eng"),
-            result: Err(refused("FAILED_PRECONDITION", None)),
+            left: vec![priya.clone()],
+            why: Some(refused("FAILED_PRECONDITION", None)),
         },
     );
     assert!(words(&rt).contains("A member can’t hold that many roles."));
+    assert_eq!(rt.state.popover, Some(Popover::AddHolders));
+    assert_eq!(rt.state.roles.adding.chosen, std::slice::from_ref(&priya));
+    assert!(rt.find(&format!("add-holder-{sam}")).is_none());
+    assert!(rt.find(&format!("add-holder-{priya}")).is_some());
     press(&mut rt, "add-holders-confirm");
     answer(
         &mut rt,
         RoleUpdate::Given {
             server_id: ACME.into(),
             role_id: role_id("eng"),
-            result: Ok(()),
+            left: Vec::new(),
+            why: None,
         },
     );
     assert_eq!(rt.state.popover, None);
+    assert!(rt.state.roles.adding.chosen.is_empty());
+}
+
+#[test]
+fn a_holder_taken_out_while_their_row_is_saving_are_two_changes_each_answered_by_its_own() {
+    let mut rt = seen_by("ryan");
+    let sam = person_id("sam");
+    // Sam's row in Members, a title typed and Save pressed: the first change.
+    open(&mut rt, "members");
+    press(&mut rt, &format!("roster-{sam}"));
+    rt.update(|s, _| s.roles.member_title().replace_text("Platform Engineer"));
+    settle(&mut rt);
+    press(&mut rt, "member-save");
+    let saving = rt.state.roles.member.as_ref().unwrap().request;
+    // And Sam taken out of Engineering from the role's editor: the second.
+    rt.update(|s, _| {
+        s.choose_section(Section::Roles);
+        s.open_role(&role_id("eng"));
+        s.remove_holder(&person_id("sam"));
+    });
+    settle(&mut rt);
+    let removing = rt.state.session.roles.asked();
+    assert_ne!(saving, removing);
+
+    // The removal is refused. That is the editor's to say; the row is still saving.
+    answer(
+        &mut rt,
+        RoleUpdate::Member {
+            server_id: ACME.into(),
+            account_id: sam.clone(),
+            request: removing,
+            result: Err(refused("PERMISSION_DENIED", None)),
+        },
+    );
+    let editor = rt.state.roles.editor.as_ref().unwrap();
+    assert!(editor.removing.is_none());
+    assert!(editor.holders_error.contains("That isn’t yours to change."));
+    let row = rt.state.roles.member.as_ref().expect("the row stays open");
+    assert!(row.busy && row.error.is_empty());
+
+    // The row's own answer closes it.
+    let mut now = member(&rt, "sam");
+    now.title = "Platform Engineer".into();
+    answer(
+        &mut rt,
+        RoleUpdate::Member {
+            server_id: ACME.into(),
+            account_id: sam,
+            request: saving,
+            result: Ok(now),
+        },
+    );
+    assert!(rt.state.roles.member.is_none());
 }
 
 // ---- Members ------------------------------------------------------------------------------
@@ -884,13 +1034,10 @@ fn a_members_row_opens_to_their_roles_title_and_kick_and_saves_what_changed() {
     press(&mut rt, "member-save");
     assert!(rt.state.roles.member.as_ref().unwrap().busy);
 
-    answer(
+    answer_member(
         &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: devon.clone(),
-            result: Err(refused("INVALID_ARGUMENT", Some("title"))),
-        },
+        devon.clone(),
+        Err(refused("INVALID_ARGUMENT", Some("title"))),
     );
     assert!(
         words(&rt)
@@ -909,14 +1056,7 @@ fn a_members_row_opens_to_their_roles_title_and_kick_and_saves_what_changed() {
         label: "Design".into(),
         color: "peach".into(),
     });
-    answer(
-        &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: devon.clone(),
-            result: Ok(now),
-        },
-    );
+    answer_member(&mut rt, devon.clone(), Ok(now));
     // Saved: the row closes and shows it.
     assert!(rt.state.roles.member.is_none());
     assert_eq!(
@@ -932,6 +1072,102 @@ fn a_members_row_opens_to_their_roles_title_and_kick_and_saves_what_changed() {
     press(&mut rt, &format!("roster-{devon}"));
     press(&mut rt, "member-save");
     assert!(rt.state.roles.member.is_none());
+}
+
+/// Someone else changed a member of Acme: the list as it then is.
+fn someone_changes_member(rt: &mut Runtime<State>, who: &str, change: impl Fn(&mut MemberSummary)) {
+    let mut members = rt.state.session.members.get(ACME).cloned().unwrap();
+    let id = person_id(who);
+    change(members.iter_mut().find(|m| m.account_id == id).unwrap());
+    rt.update(move |s, _| {
+        s.receive(&Update::Members {
+            server_id: ACME.into(),
+            members,
+        });
+    });
+    settle(rt);
+}
+
+#[test]
+fn a_members_row_left_open_takes_only_what_was_unticked_in_it() {
+    let mut rt = seen_by("ryan");
+    open(&mut rt, "members");
+    let devon = person_id("devon");
+    let ids = |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| role_id(k)).collect() };
+    press(&mut rt, &format!("roster-{devon}"));
+    assert_eq!(
+        rt.state.roles.member.as_ref().unwrap().roles,
+        ids(&["mod", "eng"])
+    );
+
+    // Nobody has touched the row. Someone else gives Devon a title and Can invite: the row
+    // shows them as they now are, with nothing of its own to save.
+    someone_changes_member(&mut rt, "devon", |m| {
+        m.role_ids.push(role_id("invite"));
+        m.title = "Principal Engineer".into();
+    });
+    let row = rt.state.roles.member.as_ref().unwrap();
+    assert_eq!(row.roles, ids(&["mod", "eng", "invite"]));
+    assert_eq!(row.title.text, "Principal Engineer");
+    assert!(roles::member_changes(&row.opened, &row.form()).nothing());
+
+    // Engineering is unticked: the row is touched. Someone else then gives Devon Design,
+    // which this row never had ticked or unticked.
+    press(&mut rt, &format!("member-role-{}", role_id("eng")));
+    someone_changes_member(&mut rt, "devon", |m| m.role_ids.push(role_id("design")));
+    let row = rt.state.roles.member.as_ref().unwrap();
+    assert_eq!(
+        row.roles,
+        ids(&["mod", "invite"]),
+        "the row stays as it was left"
+    );
+    // What Save sends: Engineering to take, and nothing else. Design is not the row's to
+    // take, as a whole set of what it had ticked would have taken it.
+    assert_eq!(
+        roles::member_changes(&row.opened, &row.form()),
+        roles::MemberChanges {
+            give: Vec::new(),
+            take: ids(&["eng"]),
+            title: None,
+        }
+    );
+    press(&mut rt, "member-save");
+    assert!(rt.state.roles.member.as_ref().unwrap().busy);
+    let mut now = member(&rt, "devon");
+    now.role_ids.retain(|id| *id != role_id("eng"));
+    answer_member(&mut rt, devon.clone(), Ok(now));
+    assert!(rt.state.roles.member.is_none());
+    assert_eq!(
+        label_of(&rt, &format!("roster-{devon}")),
+        "Devon Park, Principal Engineer, Moderator, Design, Can invite"
+    );
+}
+
+#[test]
+fn the_cards_title_form_follows_until_it_is_typed_in() {
+    let mut rt = seen_by("ryan");
+    card(&mut rt, "devon");
+    press(&mut rt, "card-edit-title");
+    let typed = |rt: &Runtime<State>| {
+        rt.state
+            .roles
+            .card
+            .as_ref()
+            .unwrap()
+            .member
+            .title
+            .text
+            .clone()
+    };
+    assert_eq!(typed(&rt), "Staff Engineer");
+    someone_changes_member(&mut rt, "devon", |m| m.title = "Principal Engineer".into());
+    assert_eq!(typed(&rt), "Principal Engineer");
+    // Typed in, it is theirs: a later change by someone else leaves it.
+    rt.update(|s, _| s.roles.card_title().replace_text("Architect"));
+    settle(&mut rt);
+    someone_changes_member(&mut rt, "devon", |m| m.title = "Fellow".into());
+    assert_eq!(typed(&rt), "Architect");
+    assert_eq!(rt.state.popover, Some(Popover::CardTitle));
 }
 
 #[test]
@@ -1124,14 +1360,7 @@ fn a_tag_comes_only_from_the_list_of_the_server_on_screen() {
     let mut maya = member(&rt, "maya");
     maya.role_ids.clear();
     maya.tag = None;
-    answer(
-        &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: person_id("maya"),
-            result: Ok(maya),
-        },
-    );
+    answer_member(&mut rt, person_id("maya"), Ok(maya));
     assert_eq!(
         label_of(&rt, &format!("member-{}", person_id("maya"))),
         "Maya Chen, online"
@@ -1238,14 +1467,7 @@ fn a_member_with_no_title_is_offered_one_on_their_own_card() {
     assert!(rt.state.roles.card.as_ref().unwrap().member.busy);
     let mut now = member(&rt, "priya");
     now.title = "Designer".into();
-    answer(
-        &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: person_id("priya"),
-            result: Ok(now),
-        },
-    );
+    answer_member(&mut rt, person_id("priya"), Ok(now));
     // Back to the card, which has it.
     assert_eq!(rt.state.popover, Some(Popover::Person));
     let title = rt
@@ -1275,14 +1497,7 @@ fn a_title_the_instance_refuses_is_said_where_it_was_typed() {
     ] {
         press(&mut rt, "card-form-save");
         assert!(rt.state.roles.card.as_ref().unwrap().member.busy);
-        answer(
-            &mut rt,
-            RoleUpdate::Member {
-                server_id: ACME.into(),
-                account_id: person_id("sam"),
-                result: Err(refusal),
-            },
-        );
+        answer_member(&mut rt, person_id("sam"), Err(refusal));
         // The form stays, with what was typed and why it was not taken.
         assert_eq!(rt.state.popover, Some(Popover::CardTitle));
         assert_eq!(
@@ -1299,13 +1514,10 @@ fn a_title_the_instance_refuses_is_said_where_it_was_typed() {
     rt.update(|s, _| s.roles.member_title().replace_text("Principal"));
     settle(&mut rt);
     press(&mut rt, "member-save");
-    answer(
+    answer_member(
         &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: person_id("devon"),
-            result: Err(refused("RATE_LIMITED", None)),
-        },
+        person_id("devon"),
+        Err(refused("RATE_LIMITED", None)),
     );
     assert!(rt.state.roles.member.is_some());
     assert!(words(&rt).contains(too_often), "{}", words(&rt));
@@ -1349,27 +1561,17 @@ fn the_cards_edit_opens_the_roles_to_tick_and_cancel_goes_back_to_the_card() {
     press(&mut rt, "card-edit-roles");
     press(&mut rt, &format!("card-role-{}", role_id("design")));
     press(&mut rt, "card-form-save");
-    answer(
+    answer_member(
         &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: person_id("devon"),
-            result: Err(refused("PERMISSION_DENIED", None)),
-        },
+        person_id("devon"),
+        Err(refused("PERMISSION_DENIED", None)),
     );
     assert_eq!(rt.state.popover, Some(Popover::CardRoles));
     assert!(words(&rt).contains("That isn’t yours to change."));
     press(&mut rt, "card-form-save");
     let mut now = member(&rt, "devon");
     now.role_ids.push(role_id("design"));
-    answer(
-        &mut rt,
-        RoleUpdate::Member {
-            server_id: ACME.into(),
-            account_id: person_id("devon"),
-            result: Ok(now),
-        },
-    );
+    answer_member(&mut rt, person_id("devon"), Ok(now));
     assert_eq!(rt.state.popover, Some(Popover::Person));
     let roles: Vec<String> = rt
         .elements()

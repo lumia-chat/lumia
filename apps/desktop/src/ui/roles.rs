@@ -883,7 +883,7 @@ fn holders(s: &State, role: &RoleSummary, look: Look) -> El {
         .iter()
         .filter(|m| m.role_ids.contains(&role.role_id))
         .collect();
-    let removing = s.roles.editor.as_ref().and_then(|e| e.removing.as_deref());
+    let removing = s.roles.editor.as_ref().and_then(|e| e.removing.as_ref());
     let mut titled = row()
         .grow(1.0)
         .min_w(0.0)

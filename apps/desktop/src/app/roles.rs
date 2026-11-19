@@ -168,16 +168,11 @@ pub fn step_before(roles: &[RoleSummary], role_id: &str, step: Step) -> Option<S
     lands_before(roles, role_id, &before.role_id).then(|| before.role_id.clone())
 }
 
-/// What a role's editor holds while it is open.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RoleDraft {
-    pub name: String,
-    /// A tone, or empty for none.
-    pub color: String,
-    pub hide_tag: bool,
-    /// The permissions switched on, by their wire names.
-    pub permissions: Vec<String>,
-}
+/// What a role's editor holds: its name, its tone (empty for none), whether it is never a
+/// tag, and the permissions switched on, by their wire names. An editor holds two: the role
+/// as it opened on it (`opened`) and the one being edited. The core's own type, since Save
+/// hands it both (`App::change_role`) and it sends what differs.
+pub use lumia_client::roles::RoleDraft;
 
 /// The editor's fields for a role, or for a new one: no name, no colour, shown as a tag,
 /// nothing granted.
@@ -194,24 +189,119 @@ fn same_set(a: &[String], b: &[String]) -> bool {
     a.len() == b.len() && a.iter().all(|x| b.contains(x))
 }
 
-/// Whether Save is offered: a new role once it has a name, a role once something of it
-/// differs and it still has one. Of Everyone only the permissions are compared, since
-/// nothing else of it changes.
-pub fn savable(draft: &RoleDraft, role: Option<&RoleSummary>) -> bool {
-    let name = draft.name.trim();
-    let Some(role) = role else {
-        return !name.is_empty();
+/// Whether an editor's draft differs from the role as it opened on it: what the person has
+/// changed. Blanks around the name are not a change, and the order the permissions were
+/// switched in is not one.
+fn changed(opened: &RoleDraft, draft: &RoleDraft) -> bool {
+    draft.name.trim() != opened.name.trim()
+        || draft.color != opened.color
+        || draft.hide_tag != opened.hide_tag
+        || !same_set(&draft.permissions, &opened.permissions)
+}
+
+/// Whether Save is offered: a new role (`opened` none) once it has a name, a role once
+/// something of the draft differs from the role as the editor opened on it and it still has
+/// a name. Never against the role as it now is: what someone else changed of it meanwhile
+/// is not this editor's change, and does not light Save. Of Everyone only the permissions
+/// are compared, since nothing else of it changes.
+pub fn savable(draft: &RoleDraft, opened: Option<&RoleDraft>, everyone: bool) -> bool {
+    let Some(opened) = opened else {
+        return !draft.name.trim().is_empty();
     };
-    if role.is_everyone {
-        return !same_set(&draft.permissions, &role.permissions);
+    if everyone {
+        return !same_set(&draft.permissions, &opened.permissions);
     }
-    if name.is_empty() {
-        return false;
+    !draft.name.trim().is_empty() && changed(opened, draft)
+}
+
+/// Whether an editor holds what it opened on: nothing typed, chosen or switched. Stricter
+/// than [`savable`]: blanks typed around the name are no change to save, but they are the
+/// person's typing, which following would throw away. The order of the permissions is not
+/// a change.
+fn untouched(opened: &RoleDraft, draft: &RoleDraft) -> bool {
+    draft.name == opened.name
+        && draft.color == opened.color
+        && draft.hide_tag == opened.hide_tag
+        && same_set(&draft.permissions, &opened.permissions)
+}
+
+/// An editor nobody has touched follows the role as it changes underneath: with the draft
+/// still the role as the editor opened on it, and `now` the role as it is, both become
+/// `now`, which this answers. None when the person has changed something (the draft and
+/// `opened` stay, so a save sends their changes and nothing else) and when the role is as
+/// it opened.
+pub fn followed(opened: &RoleDraft, draft: &RoleDraft, now: &RoleDraft) -> Option<RoleDraft> {
+    (untouched(opened, draft) && !untouched(opened, now)).then(|| now.clone())
+}
+
+/// A member as a form holds them, in their row in Members and in the card's two forms: the
+/// roles ticked, by id, and the title as typed. A form holds two, as a role's editor does:
+/// the member as it opened on them, and the one being edited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberDraft {
+    pub roles: Vec<String>,
+    pub title: String,
+}
+
+/// A form's fields for a member as the server's list has them.
+pub fn member_draft_of(member: &MemberSummary) -> MemberDraft {
+    MemberDraft {
+        roles: member.role_ids.clone(),
+        title: member.title.clone(),
     }
-    name != role.name
-        || draft.color != role.color
-        || draft.hide_tag != role.hide_tag
-        || !same_set(&draft.permissions, &role.permissions)
+}
+
+/// What a form changed of a member, which is what its Save sends, in one request: the roles
+/// to give and to take, and the title when it was changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MemberChanges {
+    pub give: Vec<String>,
+    pub take: Vec<String>,
+    pub title: Option<String>,
+}
+
+impl MemberChanges {
+    /// Nothing was changed: Save asks the instance nothing.
+    pub fn nothing(&self) -> bool {
+        self.give.is_empty() && self.take.is_empty() && self.title.is_none()
+    }
+}
+
+/// What `form` changed of the member it opened on (`opened`): the roles ticked that they
+/// did not hold then to give, those they held then that are no longer ticked to take, and
+/// the title, trimmed, only when it differs. Never the whole set: a role someone else gave
+/// or took since the form opened is in neither list, and stays as the instance has it.
+pub fn member_changes(opened: &MemberDraft, form: &MemberDraft) -> MemberChanges {
+    let only_in = |a: &[String], b: &[String]| -> Vec<String> {
+        let mut only: Vec<String> = Vec::new();
+        for id in a {
+            if !b.contains(id) && !only.contains(id) {
+                only.push(id.clone());
+            }
+        }
+        only
+    };
+    let title = form.title.trim();
+    MemberChanges {
+        give: only_in(&form.roles, &opened.roles),
+        take: only_in(&opened.roles, &form.roles),
+        title: (title != opened.title.trim()).then(|| title.to_string()),
+    }
+}
+
+/// Whether a member's form holds what it opened on: the title exactly as it was, and the
+/// same roles ticked in any order.
+fn member_untouched(opened: &MemberDraft, form: &MemberDraft) -> bool {
+    form.title == opened.title && same_set(&form.roles, &opened.roles)
+}
+
+/// [`followed`] for a member's form: untouched, it becomes the member as they now are.
+pub fn followed_member(
+    opened: &MemberDraft,
+    form: &MemberDraft,
+    now: &MemberDraft,
+) -> Option<MemberDraft> {
+    (member_untouched(opened, form) && !member_untouched(opened, now)).then(|| now.clone())
 }
 
 /// A permission this account does not hold, and so cannot give or take: its switch is shown
@@ -694,19 +784,19 @@ mod tests {
 
     #[test]
     fn a_new_role_saves_once_it_has_a_name() {
-        assert!(!savable(&draft_of(None), None));
+        assert!(!savable(&draft_of(None), None, false));
         let named = |name: &str| RoleDraft {
             name: name.into(),
             ..draft_of(None)
         };
-        assert!(!savable(&named("  "), None));
-        assert!(savable(&named("Design"), None));
+        assert!(!savable(&named("  "), None, false));
+        assert!(savable(&named("Design"), None, false));
     }
 
     #[test]
-    fn a_role_saves_once_something_differs() {
-        let moderator = moderator();
-        let draft = || draft_of(Some(&moderator));
+    fn a_role_saves_once_something_differs_from_how_the_editor_opened() {
+        let opened = draft_of(Some(&moderator()));
+        let draft = || opened.clone();
         let named = |name: &str| RoleDraft {
             name: name.into(),
             ..draft()
@@ -715,29 +805,21 @@ mod tests {
             permissions: ids(permissions),
             ..draft()
         };
-        assert!(!savable(&draft(), Some(&moderator)));
-        assert!(!savable(&named(" Moderator "), Some(&moderator)));
-        assert!(savable(&named("Mods"), Some(&moderator)));
-        assert!(!savable(&named(""), Some(&moderator)));
-        assert!(savable(
-            &RoleDraft {
-                color: String::new(),
-                ..draft()
-            },
-            Some(&moderator)
-        ));
-        assert!(savable(
-            &RoleDraft {
-                hide_tag: true,
-                ..draft()
-            },
-            Some(&moderator)
-        ));
-        assert!(!savable(
-            &granting(&["SEND_IN_THREADS", "MANAGE_ROLES"]),
-            Some(&moderator)
-        ));
-        assert!(savable(&granting(&["MANAGE_ROLES"]), Some(&moderator)));
+        let offered = |draft: &RoleDraft| savable(draft, Some(&opened), false);
+        assert!(!offered(&draft()));
+        assert!(!offered(&named(" Moderator ")));
+        assert!(offered(&named("Mods")));
+        assert!(!offered(&named("")));
+        assert!(offered(&RoleDraft {
+            color: String::new(),
+            ..draft()
+        }));
+        assert!(offered(&RoleDraft {
+            hide_tag: true,
+            ..draft()
+        }));
+        assert!(!offered(&granting(&["SEND_IN_THREADS", "MANAGE_ROLES"])));
+        assert!(offered(&granting(&["MANAGE_ROLES"])));
     }
 
     #[test]
@@ -748,14 +830,138 @@ mod tests {
             permissions: ids(&["VIEW_CHANNEL"]),
             ..role("everyone")
         };
-        assert!(!savable(&draft_of(Some(&everyone)), Some(&everyone)));
+        let opened = draft_of(Some(&everyone));
+        assert!(!savable(&opened, Some(&opened), true));
+        // Its name is not its editor's to change, whatever a draft holds.
+        assert!(!savable(
+            &RoleDraft {
+                name: "All".into(),
+                ..opened.clone()
+            },
+            Some(&opened),
+            true
+        ));
         assert!(savable(
             &RoleDraft {
                 permissions: Vec::new(),
-                ..draft_of(Some(&everyone))
+                ..opened.clone()
             },
-            Some(&everyone)
+            Some(&opened),
+            true
         ));
+    }
+
+    #[test]
+    fn an_editor_nobody_touched_follows_the_role_and_a_touched_one_stays() {
+        let opened = draft_of(Some(&moderator()));
+        let now = RoleDraft {
+            name: "Mods".into(),
+            permissions: ids(&["SEND_IN_THREADS"]),
+            ..opened.clone()
+        };
+        // Untouched: it becomes the role as it now is.
+        assert_eq!(followed(&opened, &opened, &now), Some(now.clone()));
+        // Blanks typed around the name are no change to save, but they are typing: the
+        // editor is touched, and stays.
+        let spaced = RoleDraft {
+            name: "Moderator ".into(),
+            ..opened.clone()
+        };
+        assert!(!savable(&spaced, Some(&opened), false));
+        assert_eq!(followed(&opened, &spaced, &now), None);
+        // Permissions switched off and on again, in another order: untouched.
+        let reswitched = RoleDraft {
+            permissions: opened.permissions.iter().rev().cloned().collect(),
+            ..opened.clone()
+        };
+        assert_eq!(followed(&opened, &reswitched, &now), Some(now.clone()));
+        // The role as it opened: nothing to follow.
+        assert_eq!(followed(&opened, &opened, &opened), None);
+        let reordered = RoleDraft {
+            permissions: ids(&["SEND_IN_THREADS", "MANAGE_ROLES"]),
+            ..opened.clone()
+        };
+        assert_eq!(followed(&opened, &opened, &reordered), None);
+        // Touched: the draft and what it opened on stay, so a save sends this change alone.
+        let touched = RoleDraft {
+            color: "sky".into(),
+            ..opened.clone()
+        };
+        assert_eq!(followed(&opened, &touched, &now), None);
+    }
+
+    // ---- a member's form ----
+
+    fn form(roles: &[&str], title: &str) -> MemberDraft {
+        MemberDraft {
+            roles: ids(roles),
+            title: title.into(),
+        }
+    }
+
+    #[test]
+    fn a_members_form_sends_what_was_ticked_unticked_and_retitled() {
+        let opened = form(&["mod", "eng"], "Staff Engineer");
+        // Design ticked, Moderator unticked, a new title: one change of all three.
+        assert_eq!(
+            member_changes(&opened, &form(&["eng", "design"], " Principal Engineer ")),
+            MemberChanges {
+                give: ids(&["design"]),
+                take: ids(&["mod"]),
+                title: Some("Principal Engineer".into()),
+            }
+        );
+        // Nothing changed, whatever order the ticks are in and whatever blanks were typed.
+        let same = member_changes(&opened, &form(&["eng", "mod"], "Staff Engineer "));
+        assert!(same.nothing(), "{same:?}");
+        // A title emptied is cleared, which is a change; roles alone leave the title out.
+        assert_eq!(
+            member_changes(&opened, &form(&["mod", "eng"], "")).title,
+            Some(String::new())
+        );
+        assert_eq!(
+            member_changes(&opened, &form(&["mod"], "Staff Engineer")),
+            MemberChanges {
+                give: Vec::new(),
+                take: ids(&["eng"]),
+                title: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_role_given_since_the_form_opened_is_not_the_forms_to_take() {
+        // The form opened on Moderator and Engineering, and Engineering was unticked.
+        // Someone else gave Design meanwhile: it is in neither list, so it stays.
+        let opened = form(&["mod", "eng"], "");
+        let changes = member_changes(&opened, &form(&["mod"], ""));
+        assert_eq!(changes.take, ids(&["eng"]));
+        assert!(changes.give.is_empty() && changes.title.is_none());
+    }
+
+    #[test]
+    fn a_members_form_nobody_touched_follows_them_and_a_touched_one_stays() {
+        let opened = form(&["mod", "eng"], "Staff Engineer");
+        let now = form(&["mod", "eng", "design"], "Principal Engineer");
+        assert_eq!(followed_member(&opened, &opened, &now), Some(now.clone()));
+        assert_eq!(followed_member(&opened, &opened, &opened), None);
+        assert_eq!(
+            followed_member(&opened, &form(&["eng", "mod"], "Staff Engineer"), &now),
+            Some(now.clone()),
+            "the same roles in another order are untouched"
+        );
+        // A blank typed after the title is no change to save, but it is typing.
+        let spaced = form(&["mod", "eng"], "Staff Engineer ");
+        assert!(member_changes(&opened, &spaced).nothing());
+        assert_eq!(followed_member(&opened, &spaced, &now), None);
+        assert_eq!(
+            followed_member(&opened, &form(&["mod"], "Staff Engineer"), &now),
+            None
+        );
+        assert_eq!(
+            followed_member(&opened, &form(&["mod", "eng"], "Staff"), &now),
+            None
+        );
     }
 
     #[test]

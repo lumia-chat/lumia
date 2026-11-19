@@ -7,10 +7,21 @@
 //! They are read when a conversation comes under the composer, at a launch too. They are
 //! kept once they have rested (the composer has no hook for an edit, so [`State::tick`]
 //! looks), and at once when the conversation leaves, the window goes behind another or
-//! closes, and the app quits. A send, and a field emptied, keep nothing, which clears what
-//! was kept. Words still being composed by an input method are not kept until they are
-//! settled. The files waiting over the composer are not kept. Nothing here is sent to the
-//! instance, and signing out forgets every draft in the core.
+//! closes, and the app quits. A field emptied keeps nothing, which clears what was kept.
+//! Words still being composed by an input method are not kept until they are settled. The
+//! files waiting over the composer are not kept. Nothing here is sent to the instance, and
+//! signing out forgets every draft in the core.
+//!
+//! A send lets the words go only once it has returned without an error, from the field and
+//! from what is kept alike. In a server's channel or server DM that is at once: the core
+//! has the message in its outbox when `send_message…` returns, and cleared the kept draft in
+//! the same write; the field is emptied then, in the same call, so nothing rested can write
+//! the sent words back. In a personal conversation the engine answers later
+//! (`DmUpdate::Sent`): until it does the words stay in the field (kept as any others, and
+//! not sent twice: `State::can_send` waits), which is [`Leaving`]. Queued, they go from the
+//! field and from what is kept. Refused, they are where they were: in the field, or, the
+//! conversation having left the composer meanwhile, in its kept draft, and what is said of
+//! the failure says where ([`kept_elsewhere`]).
 //!
 //! The write is made on the window's thread, through the core's second connection to the
 //! instance's store, and so waits for whoever holds the file's write lock (the store is in
@@ -19,17 +30,17 @@
 //! sent a write took 0.4 ms, 4 ms at most; while the gateway's connection applied a catch-up
 //! in pages of 200 events (2 to 25 ms a transaction) with a request between pages, 0.1 to
 //! 0.4 ms at the median, 22 ms at the 99th percentile, and once in some five hundred writes
-//! 190 ms, SQLite's busy handler sleeping in growing steps while it waits. Nothing holds a
+//! 190 ms, SQLite's busy handler sleeping in growing steps while it waited. Nothing holds a
 //! write transaction near the connection's ten-second timeout. So it stays here: at most
-//! a frame or two late, after the keys have rested, while a catch-up runs. Moving it to a
-//! thread of the session's would not take that wait off this one as the core stands:
-//! `App::set_draft` waits for the store's lock while it holds the core's own, which every
-//! read this thread makes of the core takes too (the read counts, after each applied batch).
-//! It would take a write in the core that does not hold that lock while it waits.
+//! a frame or two late, after the keys have rested, while a catch-up runs. Since then the
+//! core's writes (`App::write`) try the lock a millisecond apart and do not hold the
+//! client's own lock while they wait, so the long sleeps are gone and nothing else this
+//! thread asks of the core stands behind a draft's write; that has not been measured again.
 
 use lumia_client::app::QuoteSummary;
 
 use super::{Route, State};
+use crate::session::dms::DmUpdate;
 
 /// How long the composer rests before what it holds is kept: a crash loses that much typing
 /// at most, and a run of keys is one write.
@@ -50,7 +61,115 @@ pub struct Drafts {
     changed_at: i64,
 }
 
+/// The composer's words handed to a send that has not returned: a personal conversation's,
+/// which the engine answers later. They are still the composer's until it has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leaving {
+    /// The ticket the engine's answer names.
+    pub ticket: String,
+    /// The conversation they were written in.
+    pub conversation: String,
+    /// The words as the field held them.
+    pub words: String,
+}
+
+/// What is said when a send failed in a conversation that is no longer the one under the
+/// composer: why, and where the message waits (`place` is "your conversation with Ada").
+/// The web's `keptElsewhere`, word for word.
+pub fn kept_elsewhere(why: &str, place: &str) -> String {
+    let said = why.trim();
+    let stop = if said.ends_with(['.', '!', '?', '…']) {
+        ""
+    } else {
+        "."
+    };
+    format!("{said}{stop} Your message is kept in {place}.")
+}
+
 impl State {
+    /// Whether the conversation under the composer has a send that has not returned: its
+    /// words are in the field still, and are not sent again.
+    pub fn sending_here(&self) -> bool {
+        self.composing_in()
+            .is_some_and(|here| self.leaving.iter().any(|l| l.conversation == here))
+    }
+
+    /// The composer's words went: the field is emptied, with the reply they answered, and
+    /// nothing is kept of them, now and not once the field has rested.
+    pub(super) fn words_sent(&mut self) {
+        self.draft.clear();
+        self.draft_seen.clear();
+        self.forget_typed();
+        self.replies.replying = None;
+        self.replies.mention = None;
+        self.keep_draft();
+    }
+
+    /// The composer's words were handed to a send that answers later, under `ticket`: they
+    /// stay where they are until it does.
+    pub(super) fn words_handed(&mut self, ticket: String) {
+        if let Some(conversation) = self.composing_in().map(str::to_string) {
+            self.leaving.push(Leaving {
+                ticket,
+                conversation,
+                words: self.draft.text.clone(),
+            });
+        }
+    }
+
+    /// A send handed to the engine came back ([`DmUpdate::Sent`]). Queued, its words go:
+    /// from the field when their conversation is still under the composer (what was typed
+    /// after them stays), and from what is kept of that conversation when it is these
+    /// words. Refused, they stay: in the field, or in the kept draft of the conversation
+    /// they were written in when another is under the composer, and what the session says
+    /// of the failure says where.
+    pub(super) fn words_answered(&mut self, update: &DmUpdate) {
+        let DmUpdate::Sent { pending_id, result } = update else {
+            return;
+        };
+        let Some(at) = self.leaving.iter().position(|l| l.ticket == *pending_id) else {
+            return;
+        };
+        let left = self.leaving.remove(at);
+        let here = self.composing_in() == Some(left.conversation.as_str());
+        if let Err(failure) = result {
+            if !here {
+                let place = self
+                    .session
+                    .channel_summary(&left.conversation)
+                    .map(|channel| self.session.conversation_name(channel));
+                let why = format!("Not sent: {}", failure.message);
+                self.session.last_error = Some(match place {
+                    Some(name) => kept_elsewhere(&why, &format!("your conversation with {name}")),
+                    None => why,
+                });
+            }
+            return;
+        }
+        if here {
+            if self.draft.text == left.words {
+                self.words_sent();
+            } else if let Some(after) = self.draft.text.strip_prefix(left.words.as_str()) {
+                // More was typed after Return and before the engine answered: that stays.
+                let after = after.trim_start().to_string();
+                self.draft.replace_text(after.clone());
+                self.draft.set_caret(after.len());
+                self.replies.replying = None;
+                self.keep_draft();
+            }
+            self.sent_now = true;
+        }
+        // What is kept of that conversation, when it is these words: kept while the send
+        // was out (the field had rested, or the conversation left the composer with them).
+        let kept = self.session.draft(&left.conversation);
+        if kept.is_some_and(|draft| draft.body.trim() == left.words.trim()) {
+            self.session.keep_draft(&left.conversation, "", None);
+            if self.drafts.of.as_deref() == Some(left.conversation.as_str()) {
+                self.drafts.kept = Held::default();
+            }
+        }
+    }
+
     /// The conversation the composer writes to: the one on screen, once signed in, unless
     /// it is a channel read before joining, which has "Join" where the composer would be.
     fn composing_in(&self) -> Option<&str> {

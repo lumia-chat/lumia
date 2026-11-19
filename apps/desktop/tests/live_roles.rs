@@ -6,7 +6,12 @@
 //! is refused, in the sheet's words, a title with a hidden character and an eleventh change
 //! in the hour, as the owner is a role's name with one; the
 //! owner has the server show titles, and back; a second role is moved above the first; the
-//! first is deleted, asked first, and the tag goes on both; and the member is kicked. Runs
+//! first is deleted, asked first, and the tag goes on both. Made a lead, the member switches a
+//! permission off a role while the owner's editor, open on it with a new name typed, still
+//! shows it on: the owner's save renames the role and the permission stays off. The member
+//! gives itself a role while the owner's row on them, open from before, has another unticked:
+//! the owner's save takes that one and the member keeps the one it gave itself. And the member
+//! is kicked. Runs
 //! only with `LUMIA_DEV_INSTANCE` set; without it it passes having checked nothing, and says
 //! so. It makes its own accounts, so it needs an instance with open registration.
 
@@ -93,10 +98,22 @@ fn role_names(state: &State, server_id: &str) -> Vec<String> {
 
 /// Makes a role in the editor of the server whose settings are open, and answers its id.
 fn make_role(owner: &mut State, name: &str, color: &str) -> String {
+    make_role_allowing(owner, name, color, &[])
+}
+
+/// [`make_role`], with `permissions` switched on.
+fn make_role_allowing(owner: &mut State, name: &str, color: &str, permissions: &[&str]) -> String {
     owner.choose_section(Section::Roles);
     owner.new_role();
     owner.roles.role_name().replace_text(name);
     owner.choose_role_color(color);
+    for permission in permissions {
+        owner.toggle_permission(permission);
+    }
+    assert_eq!(
+        owner.roles.editor.as_ref().unwrap().permissions.len(),
+        permissions.len()
+    );
     assert!(owner.role_savable());
     owner.save_role();
     wait(owner, "the new role's editor", |s| {
@@ -113,6 +130,30 @@ fn make_role(owner: &mut State, name: &str, color: &str) -> String {
         .unwrap();
     owner.close_role();
     id
+}
+
+/// Whether a role allows `permission`, as a shell's snapshot has it.
+fn allows(state: &State, server_id: &str, role_id: &str, permission: &str) -> bool {
+    state.session.server(server_id).is_some_and(|server| {
+        server
+            .roles
+            .iter()
+            .any(|r| r.role_id == role_id && r.permissions.iter().any(|p| p == permission))
+    })
+}
+
+/// The roles someone holds in a server, as a shell's list of its members has them.
+fn held(state: &State, server_id: &str, account_id: &str) -> Vec<String> {
+    state
+        .session
+        .member_in(server_id, account_id)
+        .map(|member| member.role_ids.clone())
+        .unwrap_or_default()
+}
+
+/// Whether `held` is exactly `roles`, in any order.
+fn holds(held: &[String], roles: &[&String]) -> bool {
+    held.len() == roles.len() && roles.iter().all(|id| held.contains(id))
 }
 
 /// Types `title` into the form on this account's own card, saves it, and waits for the
@@ -421,6 +462,147 @@ fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
                 && tag(b, &at, &who).is_none()
                 && role_names(b, &at) == ["Helpers", "Everyone"]
         },
+    );
+
+    // ---- Two shells on one role: an editor left open undoes nothing of the other's -----
+    // The member is to manage roles too: Leads, above two roles made for what follows
+    // (a new role starts last, so Guides and Scouts are below it).
+    let everyone = "MENTION_EVERYONE";
+    let leads = make_role_allowing(
+        &mut owner,
+        "Leads",
+        "",
+        &["MANAGE_ROLES", "MANAGE_MEMBERS", everyone],
+    );
+    let guides = make_role_allowing(&mut owner, "Guides", "", &[everyone]);
+    let scouts = make_role(&mut owner, "Scouts", "");
+    assert_eq!(
+        role_names(&owner, &server_id),
+        ["Helpers", "Leads", "Guides", "Scouts", "Everyone"]
+    );
+    owner.choose_section(Section::Members);
+    owner.toggle_member(&member_id);
+    owner.tick_member_role(&leads);
+    owner.tick_member_role(&guides);
+    owner.save_member();
+    wait(&mut owner, "Leads and Guides given", |s| {
+        s.roles.member.is_none()
+    });
+    let (at, who, both) = (server_id.clone(), member_id.clone(), [&leads, &guides]);
+    wait_both(
+        &mut owner,
+        &mut member,
+        "the member a lead on both shells",
+        |a, b| {
+            holds(&held(a, &at, &who), &both)
+                && holds(&held(b, &at, &who), &both)
+                && b.session.server(&at).is_some_and(|server| {
+                    server.can_manage_roles
+                        && server
+                            .roles
+                            .iter()
+                            .any(|r| r.role_id == guides && r.can_manage)
+                })
+        },
+    );
+
+    // The owner's editor is open on Guides, and a new name typed in it. The member then
+    // switches Mention everyone off in its own editor and saves.
+    owner.choose_section(Section::Roles);
+    owner.open_role(&guides);
+    owner.roles.role_name().replace_text("Guides and scouts");
+    member.open_server_settings();
+    member.choose_section(Section::Roles);
+    member.open_role(&guides);
+    assert!(member.roles.editor.is_some(), "the member's editor opens");
+    member.toggle_permission(everyone);
+    assert!(member.role_savable());
+    member.save_role();
+    wait(&mut member, "the member's save", |s| {
+        s.roles
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.saving.saved && !e.saving.busy)
+    });
+    let (at, role) = (server_id.clone(), guides.clone());
+    wait(&mut owner, "the permission off on the owner's shell", |s| {
+        !allows(s, &at, &role, everyone)
+    });
+    // The owner's editor was touched, so it stays as it was left: its switch still on, and
+    // Save offered for the name. Saved whole, that would switch the permission back on.
+    let editor = owner.roles.editor.as_ref().expect("the owner's editor");
+    assert_eq!(editor.name.text, "Guides and scouts");
+    assert!(editor.permissions.iter().any(|p| p == everyone));
+    assert!(owner.role_savable());
+    owner.save_role();
+    wait(&mut owner, "the owner's save", |s| {
+        s.roles
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.saving.saved && !e.saving.busy)
+    });
+    let named = |s: &State| {
+        role_names(s, &at).contains(&"Guides and scouts".to_string())
+            && !allows(s, &at, &role, everyone)
+    };
+    wait_both(
+        &mut owner,
+        &mut member,
+        "renamed, the permission still off",
+        |a, b| named(a) && named(b),
+    );
+    // Each editor is the role as it now is: the owner's by its save's answer, and the
+    // member's, which nobody has touched since its own save, by following.
+    let editor = owner.roles.editor.as_ref().unwrap();
+    assert!(!editor.permissions.iter().any(|p| p == everyone));
+    wait(&mut member, "the member's editor following the name", |s| {
+        s.roles
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.name.text == "Guides and scouts")
+    });
+    assert!(!member.role_savable());
+    owner.close_role();
+    member.close_role();
+
+    // ---- Two shells on one member: a row left open takes only what was unticked in it --
+    // The owner's row on the member is open, with Guides unticked. The member then gives
+    // itself Scouts from its own row.
+    owner.choose_section(Section::Members);
+    owner.toggle_member(&member_id);
+    owner.tick_member_role(&guides);
+    assert!(holds(
+        &owner.roles.member.as_ref().unwrap().roles,
+        &[&leads]
+    ));
+    member.choose_section(Section::Members);
+    member.toggle_member(&member_id);
+    assert!(member.roles.member.is_some(), "the member's own row opens");
+    member.tick_member_role(&scouts);
+    member.save_member();
+    wait(&mut member, "Scouts given", |s| s.roles.member.is_none());
+    let (at, who, three) = (
+        server_id.clone(),
+        member_id.clone(),
+        [&leads, &guides, &scouts],
+    );
+    wait(&mut owner, "Scouts on the owner's list", |s| {
+        holds(&held(s, &at, &who), &three)
+    });
+    // The row stays as the owner left it, and its Save takes Guides and nothing else: the
+    // set it had ticked would have taken Scouts too.
+    assert!(holds(
+        &owner.roles.member.as_ref().unwrap().roles,
+        &[&leads]
+    ));
+    owner.save_member();
+    wait(&mut owner, "Guides taken", |s| s.roles.member.is_none());
+    let kept = [&leads, &scouts];
+    wait_both(
+        &mut owner,
+        &mut member,
+        "Scouts kept and Guides gone on both shells",
+        |a, b| holds(&held(a, &at, &who), &kept) && holds(&held(b, &at, &who), &kept),
     );
 
     // ---- Kick: nothing is asked first, and the member's shell leaves the server -------

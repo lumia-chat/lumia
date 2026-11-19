@@ -40,7 +40,7 @@ use std::sync::Arc;
 use lumia_client::body::Room;
 use rune::{LiveRegion, TextEdit, Tx, Waker};
 
-use crate::session::{Session, Update};
+use crate::session::{Sent, Session, Update};
 use crate::settings::{self, Settings};
 pub use sign_in::SignIn;
 
@@ -194,6 +194,10 @@ pub struct State {
     pub replies: replies::Replies,
     /// Whose words the composer holds, and what is kept of them (`drafts`).
     pub(crate) drafts: drafts::Drafts,
+    /// The composer's words handed to sends that have not returned (`drafts`).
+    pub leaving: Vec<drafts::Leaving>,
+    /// A send just went from the composer: the list is owed its end, which `poll` pays.
+    pub(crate) sent_now: bool,
     /// The rail's drag, its menus and Folder settings (`rail`).
     pub rail: rail::RailUi,
     /// The menu a right-click opened, and where (`context`).
@@ -251,6 +255,8 @@ impl State {
             aside_open: false,
             replies: replies::Replies::default(),
             drafts: drafts::Drafts::default(),
+            leaving: Vec::new(),
+            sent_now: false,
             rail: rail::RailUi::default(),
             context: context::Context::default(),
             roles: role_settings::RoleForms::default(),
@@ -479,30 +485,34 @@ impl State {
             return;
         }
         let reply = self.replies.replying.clone();
-        if let Some(outside) = self.session.send_with(
+        match self.session.send_with(
             &self.draft.text,
             chrono::Utc::now().timestamp_micros(),
             reply.as_ref(),
         ) {
-            self.draft.clear();
-            self.draft_seen.clear();
-            self.forget_typed();
-            self.replies.replying = None;
-            self.replies.mention = None;
-            // Sent: nothing is kept of it, now and not once the field has rested.
-            self.keep_draft();
-            self.sent_outside(outside);
-            // Without a glide: a send from further up is at the newest message at once (#26).
-            tx.scroll_to_bottom_instant("messages");
+            // It did not go, and the session says why: the words stay.
+            None => {}
+            // In the outbox, which is sent: the words go, from the field and from what is
+            // kept (`drafts`).
+            Some(Sent::Queued(outside)) => {
+                self.words_sent();
+                self.sent_outside(outside);
+                // Without a glide: a send from further up is at the newest message at once
+                // (#26).
+                tx.scroll_to_bottom_instant("messages");
+            }
+            // With the engine, which answers later: the words stay until it has.
+            Some(Sent::Handed(ticket)) => self.words_handed(ticket),
         }
     }
 
     /// Whether the composer has something to send: words, or files uploaded with none still
-    /// on their way (a send waits for every file in the strip).
+    /// on their way (a send waits for every file in the strip), and no send of this
+    /// conversation's still to return, whose words these still are.
     pub fn can_send(&self) -> bool {
         let words = !self.draft.text.trim().is_empty();
         let files = self.session.waiting_here().any(|w| w.draft().is_some());
-        (words || files) && !self.session.uploading_here()
+        (words || files) && !self.session.uploading_here() && !self.sending_here()
     }
 
     /// After the draft changes: the @ list follows the caret, and a screen reader is told
@@ -568,6 +578,7 @@ impl State {
         self.placed = false;
         self.popover = None;
         self.forget_draft();
+        self.leaving.clear();
         self.replies = replies::Replies::default();
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
@@ -654,7 +665,10 @@ impl State {
                     self.sign_in.error = SIGNED_OUT.into();
                 }
             }
-            Update::Dm(update) => self.react_dm(update),
+            Update::Dm(update) => {
+                self.words_answered(update);
+                self.react_dm(update);
+            }
             Update::Server(update) => self.react_server(update),
             Update::Channel(update) => self.react_channel(update),
             Update::Identity(update) => self.react_identity(update),
@@ -689,6 +703,8 @@ impl State {
             | Update::Profile { .. }
             | Update::SignedOut => {}
         }
+        // Whatever arrived may have changed a role or a member that a form is open on.
+        self.follow_roles();
     }
 
     /// Applies what the session finished and reacts to it; true when anything changed.
@@ -777,6 +793,10 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
         tx.wake_after(std::time::Duration::from_millis(16));
     }
     let drained = state.drain();
+    // A send the engine has just queued: its row is the newest, shown at once (#26).
+    if std::mem::take(&mut state.sent_now) {
+        tx.scroll_to_bottom_instant("messages");
+    }
     let now = chrono::Utc::now().timestamp_micros();
     let ticked = state.tick(now);
     state.poll_playback(tx);

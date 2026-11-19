@@ -270,6 +270,20 @@ pub struct Pending {
     pub failed: Option<String>,
 }
 
+/// What became of a send the session took ([`Session::send_with`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sent {
+    /// It is in the core's outbox (a server's channel or server DM), which is to say sent:
+    /// it goes when the instance can be reached, on this launch or a later one, and the
+    /// core cleared the conversation's kept draft with it. With it, whom it mentions that
+    /// is not in the channel, so not notified.
+    Queued(Vec<String>),
+    /// It was handed to the engine (a personal conversation), which has not answered. Its
+    /// answer names this ticket ([`dms::DmUpdate::Sent`]): queued, or why not. Until then
+    /// the words are the composer's to keep.
+    Handed(String),
+}
+
 /// The requests out for servers' member lists: one at a time for a server. A list is every
 /// page of it (fifty requests for a server of ten thousand), and what asks for one comes in
 /// bursts: someone joining posts a notice in each default channel, and each notice asks.
@@ -1047,7 +1061,7 @@ impl Session {
     }
 
     /// Sends a message to the open conversation; it shows as pending until the store holds
-    /// it. False when it could not even be queued (nothing open, or the gateway loop is not
+    /// it. False when it could not even be tried (nothing open, or the gateway loop is not
     /// running), so the caller keeps the draft.
     pub fn send(&mut self, body: &str, now_micros: i64) -> bool {
         self.send_with(body, now_micros, None).is_some()
@@ -1057,15 +1071,15 @@ impl Session {
     /// makes of the server's members (and of everyone, for one who may). It carries the
     /// files uploaded in the conversation's composer and asks for the cards of the links
     /// whose preview was not put away (specs/media.md 4.2, 6.4); with files, the words may be
-    /// empty. Nothing is sent while a file is still uploading. The answer is who was
-    /// mentioned and is not in the channel, so not notified; `None` when nothing could be
-    /// queued.
+    /// empty. Nothing is sent while a file is still uploading, or while a send in the same
+    /// personal conversation has not been answered. The answer is what became of it
+    /// ([`Sent`]); `None` when nothing was sent, and the caller keeps the words.
     pub fn send_with(
         &mut self,
         body: &str,
         now_micros: i64,
         reply: Option<&QuoteSummary>,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Sent> {
         let body = body.trim();
         let drafts = self.drafts_here();
         if (body.is_empty() && drafts.is_empty()) || self.uploading_here() {
@@ -1074,12 +1088,13 @@ impl Session {
         let channel = match self.conversation.clone() {
             Some(Conversation::Channel(id)) => id,
             Some(Conversation::Dm(id)) => {
-                let cards = self.kept_links(&id, body);
-                let sent = self.send_dm(&id, body, now_micros, reply, &drafts, &cards);
-                if sent {
-                    self.sent_media(&id, &drafts);
+                if self.sending_in(&id) {
+                    return None;
                 }
-                return sent.then(Vec::new);
+                let cards = self.kept_links(&id, body);
+                return self
+                    .send_dm(&id, body, now_micros, reply, &drafts, &cards)
+                    .map(Sent::Handed);
             }
             None => return None,
         };
@@ -1101,7 +1116,7 @@ impl Session {
                     failed: None,
                 });
                 self.sent_media(&channel, &drafts);
-                Some(outside)
+                Some(Sent::Queued(outside))
             }
             Err(error) => {
                 self.last_error = Some(format!("Not sent: {error}"));

@@ -102,6 +102,32 @@ fn a_message_sent_from_the_shell_goes_from_pending_into_the_store() {
         rt.state.session.draft(&here).is_none(),
         "a send keeps nothing of what it sent"
     );
+    // However long the field then rests, nothing puts back what went: not the words the
+    // core cleared with the send, and not a part of a message kept before the rest of it
+    // was typed and sent.
+    rt.update(move |s, _| {
+        s.tick(at + 10 * KEEP_AFTER_MICROS);
+    });
+    assert!(rt.state.session.draft(&here).is_none());
+    rt.update(move |s, _| {
+        s.draft.replace_text("Half");
+        s.tick(at + 20 * KEEP_AFTER_MICROS);
+        s.tick(at + 21 * KEEP_AFTER_MICROS);
+    });
+    assert_eq!(rt.state.session.draft(&here).expect("kept").body, "Half");
+    rt.update(|s, tx| {
+        s.draft.replace_text("Half and the rest");
+        s.send(tx);
+    });
+    assert_eq!(rt.state.draft.text, "", "{:?}", rt.state.session.last_error);
+    assert!(rt.state.session.draft(&here).is_none());
+    rt.update(move |s, _| {
+        s.tick(at + 40 * KEEP_AFTER_MICROS);
+    });
+    assert!(
+        rt.state.session.draft(&here).is_none(),
+        "the part kept before the send came back"
+    );
     wait(&mut rt.state, "the composer's send to land", |s| {
         s.session.pending.is_empty()
     });

@@ -63,7 +63,8 @@ pub enum DmUpdate {
         channel_id: String,
         log: Result<DmLogSummary, Failure>,
     },
-    /// A send was queued, under the message id the engine gave it, or could not be.
+    /// The send handed to the engine under the ticket `pending_id` ([`DmSending`]) was
+    /// queued, under the message id the engine gave it, or could not be.
     Sent {
         pending_id: String,
         result: Result<String, Failure>,
@@ -109,8 +110,26 @@ pub struct DmState {
     /// another device makes cannot hold this one. The engine says so only in a note; the
     /// live tests wait for it before someone else opens a conversation with the shell.
     pub published: bool,
-    /// How many sends this session has minted a placeholder id for.
+    /// How many sends this session has minted a ticket for.
     sends: u64,
+    /// The sends handed to the engine that it has not answered for: not yet in the outbox,
+    /// so not yet a message on its way.
+    pub sending: Vec<DmSending>,
+}
+
+/// A personal message handed to the engine, which has not said whether it queued it. Until
+/// it has, nothing is on its way: the composer keeps the words (and the strip the files),
+/// and no row is drawn for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DmSending {
+    /// What the engine's answer names ([`DmUpdate::Sent`]).
+    pub ticket: String,
+    pub channel_id: String,
+    pub body: String,
+    pub sent_at_micros: i64,
+    pub reply: Option<QuoteSummary>,
+    /// The files it carries.
+    drafts: Vec<AttachmentDraft>,
 }
 
 impl Session {
@@ -366,32 +385,40 @@ impl Session {
                     self.last_error = Some(failure.message.clone());
                 }
             }
-            DmUpdate::Sent {
-                pending_id,
-                result: Err(failure),
-            } => {
-                if let Some(pending) = self.pending.iter_mut().find(|p| p.id == *pending_id) {
-                    pending.failed = Some(failure.message.clone());
-                    self.revision += 1;
-                }
-            }
-            // The send has its real id now. The log may already hold it: it can be read
-            // before this answer arrives.
-            DmUpdate::Sent {
-                pending_id,
-                result: Ok(id),
-            } => {
-                let Some(pending) = self.pending.iter_mut().find(|p| p.id == *pending_id) else {
+            DmUpdate::Sent { pending_id, result } => {
+                let Some(at) = self.dm.sending.iter().position(|s| s.ticket == *pending_id) else {
                     return;
                 };
-                if !id.is_empty() {
-                    pending.id.clone_from(id);
-                }
-                let channel_id = pending.channel_id.clone();
-                if let Some(log) = self.dm.logs.get(&channel_id).cloned() {
-                    self.settle_dm_sends(&channel_id, &log);
-                }
+                let send = self.dm.sending.remove(at);
                 self.revision += 1;
+                match result {
+                    // Nothing went, and nothing was taken: the words are the composer's
+                    // still, and the files are in its strip.
+                    Err(failure) => {
+                        self.last_error = Some(format!("Not sent: {}", failure.message));
+                    }
+                    // It is queued, under its real id: on its way from now, and shown so.
+                    // The log may already hold it: it can be read before this answer.
+                    Ok(id) => {
+                        self.pending.push(Pending {
+                            id: if id.is_empty() {
+                                send.ticket
+                            } else {
+                                id.clone()
+                            },
+                            channel_id: send.channel_id.clone(),
+                            body: send.body,
+                            sent_at_micros: send.sent_at_micros,
+                            reply: send.reply,
+                            attachments: super::names(&send.drafts),
+                            failed: None,
+                        });
+                        self.sent_media(&send.channel_id, &send.drafts);
+                        if let Some(log) = self.dm.logs.get(&send.channel_id).cloned() {
+                            self.settle_dm_sends(&send.channel_id, &log);
+                        }
+                    }
+                }
             }
             // The conversation exists, or its group is being made: the engine's own events
             // (`DmSubscribed`, `DmReady`) say when there is more to read.
@@ -515,9 +542,16 @@ impl Session {
         }
     }
 
-    /// Sends to a personal conversation: shown as pending at once, and marked failed with
-    /// the reason when the engine cannot queue it. False when it could not even be tried
-    /// (this device is not in the conversation's group), so the caller keeps the draft.
+    /// Whether a send in a personal conversation is with the engine, unanswered.
+    pub fn sending_in(&self, channel_id: &str) -> bool {
+        self.dm.sending.iter().any(|s| s.channel_id == channel_id)
+    }
+
+    /// Hands a message for a personal conversation to the engine and answers the ticket its
+    /// answer will name ([`DmUpdate::Sent`]). Until that says it is queued nothing is on its
+    /// way and nothing is shown as sent: the caller keeps the words, as it does when the
+    /// engine says why it could not queue them. None when it could not even be tried (this
+    /// device is not in the conversation's group).
     pub(super) fn send_dm(
         &mut self,
         channel_id: &str,
@@ -526,27 +560,24 @@ impl Session {
         reply: Option<&QuoteSummary>,
         drafts: &[AttachmentDraft],
         cards: &[String],
-    ) -> bool {
-        let Some(app) = self.client() else {
-            return false;
-        };
+    ) -> Option<String> {
+        let app = self.client()?;
         if self.dm_member(channel_id) != Some(true) {
             self.last_error =
                 Some("Not sent: this device is not in the conversation's group yet.".into());
-            return false;
+            return None;
         }
         self.dm.sends += 1;
         let pending_id = format!("{SEND_PREFIX}{}", self.dm.sends);
-        self.pending.push(Pending {
-            id: pending_id.clone(),
+        self.dm.sending.push(DmSending {
+            ticket: pending_id.clone(),
             channel_id: channel_id.to_string(),
             body: body.to_string(),
             sent_at_micros: now_micros,
             reply: reply.cloned(),
-            attachments: super::names(drafts),
-            failed: None,
+            drafts: drafts.to_vec(),
         });
-        self.revision += 1;
+        let ticket = pending_id.clone();
         let (channel_id, body) = (channel_id.to_string(), body.to_string());
         let reply = reply.cloned();
         let ids: Vec<String> = drafts.iter().map(|d| d.draft_id.clone()).collect();
@@ -558,6 +589,6 @@ impl Session {
                 .map_err(Failure::from);
             Update::Dm(DmUpdate::Sent { pending_id, result })
         });
-        true
+        Some(ticket)
     }
 }

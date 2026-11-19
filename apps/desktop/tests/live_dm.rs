@@ -190,11 +190,16 @@ fn say(state: &mut State, body: &str) {
         "{:?}",
         state.session.last_error
     );
-    let pending: Vec<_> = state.session.pending_here().collect();
-    assert_eq!(pending.len(), 1, "it is pending at once");
-    assert_eq!(pending[0].body, body);
+    // With the engine, and nothing says it is on its way until the engine has queued it.
+    assert!(state.session.pending_here().next().is_none());
+    let sending = &state.session.dm.sending;
+    assert_eq!(sending.len(), 1, "it is with the engine at once");
+    assert_eq!(sending[0].body, body);
+    wait(state, "the engine to queue the send", |s| {
+        s.session.dm.sending.is_empty()
+    });
     wait(state, "the send to be delivered", |s| {
-        s.session.pending.is_empty()
+        s.session.pending.is_empty() && s.session.entries.len() > before
     });
     let me = state.session.me().to_string();
     let entries = &state.session.entries;

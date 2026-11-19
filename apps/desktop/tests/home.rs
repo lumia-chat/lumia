@@ -457,8 +457,25 @@ fn a_device_outside_the_group_cannot_write_and_can_rejoin() {
     );
 }
 
+/// The ticket of the send the engine has not answered for.
+fn ticket(rt: &Runtime<State>) -> String {
+    let sending = &rt.state.session.dm.sending;
+    assert_eq!(sending.len(), 1, "one send is with the engine");
+    sending[0].ticket.clone()
+}
+
+fn sent(rt: &mut Runtime<State>, ticket: String, result: Result<&str, Failure>) {
+    receive(
+        rt,
+        Update::Dm(DmUpdate::Sent {
+            pending_id: ticket,
+            result: result.map(str::to_string),
+        }),
+    );
+}
+
 #[test]
-fn a_send_is_pending_until_the_log_holds_it_and_one_that_cannot_be_queued_says_why() {
+fn a_send_keeps_its_words_until_the_engine_has_it_and_is_pending_until_the_log_holds_it() {
     let mut rt = runtime(at_home(true, home_snapshot()));
     press(&mut rt, "dm-with-grace");
     receive(&mut rt, channels(&[("with-grace", true)]));
@@ -477,12 +494,23 @@ fn a_send_is_pending_until_the_log_holds_it_and_one_that_cannot_be_queued_says_w
     press(&mut rt, "composer");
     type_text(&mut rt, "On my way.");
     enter(&mut rt);
+    // With the engine, and not yet on its way: the words are the composer's still, no row
+    // says it is sending, and Return does not send them a second time.
+    assert_eq!(rt.state.draft.text, "On my way.");
+    assert!(rt.state.session.pending.is_empty());
+    assert!(!words(&rt).contains("Sending…"));
+    assert!(!rt.state.can_send());
+    enter(&mut rt);
+    let placeholder = ticket(&rt);
+
+    // The engine queued it and says which message it is: the words go, and it is pending.
+    sent(&mut rt, placeholder, Ok("new1"));
     assert_eq!(rt.state.draft.text, "", "the draft is taken");
-    assert_eq!(rt.state.session.pending.len(), 1);
-    let placeholder = rt.state.session.pending[0].id.clone();
+    assert!(rt.state.leaving.is_empty() && rt.state.session.dm.sending.is_empty());
+    assert_eq!(rt.state.session.pending[0].id, "new1");
     assert!(words(&rt).contains("Sending…"));
 
-    // The same words in the log under another id are not this send.
+    // The same words in the log under another id are not this send; its own id settles it.
     let old = said("old", true, "me", "On my way.", before - 1_000_000);
     let other = said("other", true, "me", "On my way.", now());
     receive(
@@ -490,17 +518,6 @@ fn a_send_is_pending_until_the_log_holds_it_and_one_that_cannot_be_queued_says_w
         log("with-grace", vec![old.clone(), other.clone()], 0, 0),
     );
     assert_eq!(rt.state.session.pending.len(), 1);
-
-    // The engine queued it and says which message it is; the log then settles it.
-    receive(
-        &mut rt,
-        Update::Dm(DmUpdate::Sent {
-            pending_id: placeholder,
-            result: Ok("new1".into()),
-        }),
-    );
-    assert_eq!(rt.state.session.pending[0].id, "new1");
-    assert!(words(&rt).contains("Sending…"));
     let mut held = vec![old, other, said("new1", true, "me", "On my way.", now())];
     receive(&mut rt, log("with-grace", held.clone(), 0, 0));
     assert!(rt.state.session.pending.is_empty());
@@ -510,72 +527,158 @@ fn a_send_is_pending_until_the_log_holds_it_and_one_that_cannot_be_queued_says_w
     // A log read before the engine's answer settles the send when the answer names it.
     type_text(&mut rt, "Nearly there.");
     enter(&mut rt);
-    let placeholder = rt.state.session.pending[0].id.clone();
+    let placeholder = ticket(&rt);
     held.push(said("new2", true, "me", "Nearly there.", now()));
     receive(&mut rt, log("with-grace", held.clone(), 0, 0));
-    assert_eq!(
-        rt.state.session.pending.len(),
-        1,
-        "not yet known to be new2"
-    );
-    receive(
-        &mut rt,
-        Update::Dm(DmUpdate::Sent {
-            pending_id: placeholder,
-            result: Ok("new2".into()),
-        }),
-    );
+    sent(&mut rt, placeholder, Ok("new2"));
     assert!(rt.state.session.pending.is_empty());
+    assert_eq!(rt.state.draft.text, "");
+
+    // What is typed after Return and before the engine answers stays in the field.
+    type_text(&mut rt, "One.");
+    enter(&mut rt);
+    let placeholder = ticket(&rt);
+    type_text(&mut rt, " Two.");
+    sent(&mut rt, placeholder, Ok("new3"));
+    assert_eq!(rt.state.draft.text, "Two.");
+    assert_eq!(rt.state.session.pending[0].body, "One.");
+    rt.update(|s, _| {
+        s.draft.clear();
+        s.session.pending.clear();
+    });
 
     // A send the instance refuses after it was queued is marked by its id.
     type_text(&mut rt, "Let me in.");
     enter(&mut rt);
-    let placeholder = rt.state.session.pending[0].id.clone();
-    receive(
-        &mut rt,
-        Update::Dm(DmUpdate::Sent {
-            pending_id: placeholder,
-            result: Ok("new3".into()),
-        }),
-    );
+    let placeholder = ticket(&rt);
+    sent(&mut rt, placeholder, Ok("new4"));
     receive(
         &mut rt,
         Update::Gateway(AppEvent::Error {
             code: "PERMISSION_DENIED".into(),
             message: "you are not in this conversation".into(),
-            command_id: "new3".into(),
+            command_id: "new4".into(),
         }),
     );
     assert!(words(&rt).contains("Not sent: you are not in this conversation"));
     press(&mut rt, "dismiss");
     assert!(rt.state.session.pending.is_empty());
+}
 
-    // A send the engine cannot queue is marked with the reason and can be dismissed.
+#[test]
+fn a_send_the_engine_cannot_queue_leaves_its_words_in_the_field_and_says_why() {
+    let mut rt = runtime(at_home(true, home_snapshot()));
+    press(&mut rt, "dm-with-grace");
+    receive(&mut rt, channels(&[("with-grace", true)]));
     press(&mut rt, "composer");
     type_text(&mut rt, "Are you there?");
     enter(&mut rt);
-    let id = rt.state.session.pending[0].id.clone();
-    receive(
+    let placeholder = ticket(&rt);
+    sent(
         &mut rt,
-        Update::Dm(DmUpdate::Sent {
-            pending_id: id,
-            result: Err(failure("", "a commit is pending")),
-        }),
+        placeholder,
+        Err(failure("", "a commit is pending")),
     );
-    assert!(words(&rt).contains("Not sent: a commit is pending"));
-    // A failed send is not settled by someone saying the same words.
-    receive(
-        &mut rt,
-        log(
-            "with-grace",
-            vec![said("x", true, "me", "Are you there?", now())],
-            0,
-            0,
-        ),
-    );
-    assert_eq!(rt.state.session.pending.len(), 1);
-    press(&mut rt, "dismiss");
+    // Nothing went: no row, the reason over the composer, and the words where they were,
+    // to send again.
     assert!(rt.state.session.pending.is_empty());
+    assert!(words(&rt).contains("Not sent: a commit is pending"));
+    assert_eq!(rt.state.draft.text, "Are you there?");
+    assert!(words(&rt).contains("Are you there?"));
+    assert!(rt.state.leaving.is_empty() && rt.state.can_send());
+
+    enter(&mut rt);
+    let again = ticket(&rt);
+    sent(&mut rt, again, Ok("new1"));
+    assert_eq!(rt.state.draft.text, "");
+    assert_eq!(rt.state.session.pending[0].body, "Are you there?");
+}
+
+const GRACE: &str = "01890000-0000-7000-8000-00000000d001";
+const ALAN: &str = "01890000-0000-7000-8000-00000000d002";
+
+/// Home with two personal conversations whose ids the core's store takes, so that what is
+/// typed in each is kept as it is in a real one.
+fn kept_home() -> Runtime<State> {
+    let mut snapshot = snapshot();
+    snapshot.channels.push(dm(GRACE, "", &["grace"]));
+    snapshot.channels.push(dm(ALAN, "", &["alan"]));
+    let mut rt = runtime(at_home(true, snapshot));
+    receive(&mut rt, channels(&[(GRACE, true), (ALAN, true)]));
+    rt
+}
+
+/// Opens a conversation and lets the window look at the composer, as it does every frame.
+fn open_dm(rt: &mut Runtime<State>, id: &str) {
+    press(rt, &format!("dm-{id}"));
+    rt.update(|s, _| {
+        s.tick(now());
+    });
+    settle(rt);
+}
+
+#[test]
+fn a_send_that_fails_after_its_conversation_left_is_kept_as_that_conversations_draft() {
+    let mut rt = kept_home();
+    open_dm(&mut rt, GRACE);
+    press(&mut rt, "composer");
+    type_text(&mut rt, "Are you there?");
+    enter(&mut rt);
+    let placeholder = ticket(&rt);
+
+    // Another conversation comes under the composer before the engine answers.
+    open_dm(&mut rt, ALAN);
+    assert_eq!(rt.state.draft.text, "", "Alan's field is his own");
+    sent(
+        &mut rt,
+        placeholder,
+        Err(failure("", "a commit is pending")),
+    );
+    // The words are not handed to the conversation on screen. They are the draft of the
+    // one they were written in, and what is said of the failure says so.
+    assert_eq!(rt.state.draft.text, "");
+    assert_eq!(
+        rt.state.session.draft(GRACE).map(|draft| draft.body),
+        Some("Are you there?".to_string())
+    );
+    let shown = words(&rt);
+    assert!(
+        shown.contains(
+            "Not sent: a commit is pending. Your message is kept in your conversation with Grace Hopper."
+        ),
+        "{shown}"
+    );
+    open_dm(&mut rt, GRACE);
+    assert_eq!(rt.state.draft.text, "Are you there?");
+
+    // Sent from there, and Grace's conversation left again before the engine answers:
+    // queued, the words go from what was kept of it, and do not come back.
+    press(&mut rt, "composer");
+    enter(&mut rt);
+    let again = ticket(&rt);
+    open_dm(&mut rt, ALAN);
+    assert!(
+        rt.state.session.draft(GRACE).is_some(),
+        "kept while it is out"
+    );
+    sent(&mut rt, again, Ok("new1"));
+    assert!(rt.state.session.draft(GRACE).is_none());
+    open_dm(&mut rt, GRACE);
+    assert_eq!(rt.state.draft.text, "");
+    assert_eq!(rt.state.session.pending[0].body, "Are you there?");
+}
+
+#[test]
+fn the_words_of_a_failed_send_that_is_elsewhere_say_where_it_is_kept() {
+    use lumia_shell::app::drafts::kept_elsewhere;
+    assert_eq!(
+        kept_elsewhere("Not sent: offline", "your conversation with Ada"),
+        "Not sent: offline. Your message is kept in your conversation with Ada."
+    );
+    assert_eq!(
+        kept_elsewhere(" The instance is away. ", "#general"),
+        "The instance is away. Your message is kept in #general."
+    );
 }
 
 #[test]
