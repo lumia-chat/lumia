@@ -1301,6 +1301,21 @@ async function rolesStep(which: string, stamp: number) {
     const roleRow = (name: string) => page.locator(".lu-role", { has: page.locator(".lu-role__name", { hasText: new RegExp(`^${name}$`) }) });
     // The member's message as each browser draws it, and the tag beside its author's name.
     const tagIn = (p: Page) => p.locator(".lu-msg", { hasText: "Reporting for duty." }).locator(".lu-tag");
+    // Another session of the owner's, over HTTP: someone else at work on the same server while a screen is open here.
+    let elsewhereToken: string | undefined;
+    const elsewhere = async (method: string, path: string, body?: unknown): Promise<unknown> => {
+      const json = { "content-type": "application/json", accept: "application/json" };
+      if (!elsewhereToken) {
+        const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: owner, password }) })).json()) as { accessToken?: string };
+        if (!pair.accessToken) throw new Error("the suite could not sign in as the owner");
+        elsewhereToken = pair.accessToken;
+      }
+      const answer = await fetch(`${instance}/api/v1${path}`, { method, headers: { ...json, authorization: `Bearer ${elsewhereToken}` }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const text = await answer.text();
+      if (!answer.ok) throw new Error(`${method} ${path} with ${JSON.stringify(body)}: ${answer.status} ${text}`);
+      return text ? JSON.parse(text) : undefined;
+    };
+    const rolesNow = async () => ((await elsewhere("GET", `/servers/${server}/roles`)) as { roles: { roleId: string; name: string; color?: string; permissions?: string[] }[] }).roles;
 
     phase("the sections");
     await page.getByRole("button", { name: /server menu/ }).click();
@@ -1430,13 +1445,7 @@ async function rolesStep(which: string, stamp: number) {
     // instance, back to none; the eleventh, from their own card, is refused in the sheet's words, in the title's pop.
     phase("their title too often");
     {
-      const json = { "content-type": "application/json", accept: "application/json" };
-      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: owner, password }) })).json()) as { accessToken?: string };
-      if (!pair.accessToken) throw new Error("the suite could not sign in as the owner");
-      for (const title of ["1", "2", "3", "4", "5", "6", "7", "8", "9", ""]) {
-        const set = await fetch(`${instance}/api/v1/servers/${server}/membership`, { method: "PATCH", headers: { ...json, authorization: `Bearer ${pair.accessToken}` }, body: JSON.stringify({ title }) });
-        if (!set.ok) throw new Error(`the owner's title was not set to ${JSON.stringify(title)}: ${set.status} ${await set.text()}`);
-      }
+      for (const title of ["1", "2", "3", "4", "5", "6", "7", "8", "9", ""]) await elsewhere("PATCH", `/servers/${server}/membership`, { title });
       await toGeneral();
       await page.locator(".lu-shell__aside .lu-member", { hasText: owner }).click();
       await page.locator(".lu-pcard").getByRole("button", { name: "Add a title" }).click({ timeout: 20_000 });
@@ -1508,11 +1517,52 @@ async function rolesStep(which: string, stamp: number) {
       live.page = page;
     }
 
-    phase("deleted");
+    // An editor saves what it changed, against the role as it opened on it, and nothing else of the role. Helpers
+    // grants Administrator. Untouched, its editor follows the role: a colour given elsewhere is the one it shows, and
+    // that lights no Save. Touched (a new name typed), it keeps its drafts: Administrator is switched off elsewhere,
+    // the owner saves, and the save is the name alone, so Administrator is still off.
+    phase("saved as changed");
+    const helpers = (await rolesNow()).find((r) => r.name === "Helpers");
+    if (!helpers?.permissions?.includes("ADMINISTRATOR")) throw new Error(`Helpers does not grant Administrator before the check: ${JSON.stringify(helpers)}`);
     await roleRow("Helpers").locator(".lu-role__open").click();
+    if ((await administrator.getAttribute("aria-checked")) !== "true") throw new Error("Helpers' editor opened with Administrator off");
+    await elsewhere("PATCH", `/servers/${server}/roles/${helpers.roleId}`, { color: "mint" });
+    await page.getByRole("radio", { name: /^mint$/i }).and(page.locator('[aria-checked="true"]')).waitFor({ timeout: 20_000 });
+    if (!(await save.isDisabled())) throw new Error("a change made elsewhere lit Save in an editor nobody had touched");
+    await page.getByLabel("Name").fill("Hands");
+    await elsewhere("PATCH", `/servers/${server}/roles/${helpers.roleId}`, { revoke: ["ADMINISTRATOR"] });
+    await save.click();
+    await page.getByText("Saved.").waitFor();
+    const hands = (await rolesNow()).find((r) => r.roleId === helpers.roleId);
+    if (hands?.name !== "Hands" || hands.color !== "mint" || (hands.permissions ?? []).includes("ADMINISTRATOR")) throw new Error(`a rename saved more than the name: the role is now ${JSON.stringify(hands)}`);
+    // Saved, the editor holds the role as the answer has it: Administrator off, and nothing left to save.
+    if ((await administrator.getAttribute("aria-checked")) !== "false") throw new Error("the editor still shows Administrator on after the save");
+    if (!(await save.isDisabled())) throw new Error("Save is still lit after the save");
+    await page.getByRole("button", { name: "Back to roles" }).click();
+    await ordered(["Crew", "Hands", "Everyone"]);
+
+    // A member's form saves what it changed, against the member as it opened on them. The member's row is open and
+    // Crew unticked in it when Hands is given to them elsewhere; the owner saves, which takes Crew and nothing else.
+    phase("a role kept");
+    await section("Members").click();
+    await row.locator(".lu-roster__row").click();
+    await row.getByRole("checkbox", { name: "Crew" }).click();
+    type Listed = { members: { accountId: string; roleIds?: string[] }[]; accounts: { accountId: string; handle: string }[] };
+    const memberId = ((await elsewhere("GET", `/servers/${server}/members`)) as Listed).accounts.find((a) => a.handle === member)?.accountId;
+    if (!memberId) throw new Error("the instance does not list the member");
+    await elsewhere("PATCH", `/servers/${server}/members/${memberId}`, { addRoleIds: [helpers.roleId] });
+    await row.getByRole("button", { name: "Save", exact: true }).click();
+    await row.locator(".lu-roster__roles .lu-tag", { hasText: "Hands" }).waitFor({ timeout: 20_000 });
+    const holds = ((await elsewhere("GET", `/servers/${server}/members`)) as Listed).members.find((m) => m.accountId === memberId)?.roleIds ?? [];
+    if (holds.join() !== helpers.roleId) throw new Error(`taking Crew in a row opened before Hands was given left the member with ${JSON.stringify(holds)}, not Hands alone (${helpers.roleId})`);
+    if ((await row.locator(".lu-roster__roles .lu-tag", { hasText: "Crew" }).count()) !== 0) throw new Error("the member's row still lists Crew");
+
+    phase("deleted");
+    await section("Roles").click();
+    await roleRow("Hands").locator(".lu-role__open").click();
     await page.getByRole("button", { name: "Delete role" }).click();
-    const asked = page.getByRole("dialog", { name: "Delete Helpers?" });
-    await asked.getByText("Nobody holds this role.").waitFor();
+    const asked = page.getByRole("dialog", { name: "Delete Hands?" });
+    await asked.getByText("1 member holds this role. They lose what it allowed.").waitFor();
     await asked.getByText("This can’t be undone.").waitFor();
     await asked.getByRole("button", { name: "Delete role" }).click();
     await ordered(["Crew", "Everyone"]);
@@ -1528,7 +1578,7 @@ async function rolesStep(which: string, stamp: number) {
     await mine.ctx.close();
     await theirs?.ctx.close();
   }
-  console.log(`  ${which}: made roles, found the one just made in its editor as saved, gave it from there and saw its tag${theirs ? " in two browsers" : ""}, read “You” and “Owner” on the owner's own card, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken and a name and a title with a hidden character, set titles, was refused the owner's eleventh change of their own in an hour, saw titles as tags once the server showed them, ${theirs ? "let the member's role manage members and found the row of someone below them opening in their browser with no reload, " : ""}deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made roles, found the one just made in its editor as saved, gave it from there and saw its tag${theirs ? " in two browsers" : ""}, read “You” and “Owner” on the owner's own card, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken and a name and a title with a hidden character, set titles, was refused the owner's eleventh change of their own in an hour, saw titles as tags once the server showed them, ${theirs ? "let the member's role manage members and found the row of someone below them opening in their browser with no reload, " : ""}saw an untouched editor follow a change made elsewhere and a rename leave Administrator off as another session had just switched it, took one role in a row opened before another was given elsewhere and found that one kept, deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
 }
 
 // The middle button held over a pane and moved up from where it came down

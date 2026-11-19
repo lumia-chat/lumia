@@ -3,11 +3,16 @@ import { ClientError, type RoleSummary } from "./bridge";
 import {
   administratorQuestion,
   cardMarks,
+  changesAny,
   deleteQuestion,
   draftOf,
+  followed,
+  formOf,
   holders,
   landsBefore,
   lockedRole,
+  memberChanges,
+  memberFollowed,
   memberMark,
   memberOffers,
   memberRefusal,
@@ -112,20 +117,52 @@ describe("the editor", () => {
     expect(savable({ ...draftOf(), name: "  " })).toBe(false);
     expect(savable({ ...draftOf(), name: "Design" })).toBe(true);
   });
-  test("a role saves once something differs", () => {
-    expect(savable(draftOf(mod), mod)).toBe(false);
-    expect(savable({ ...draftOf(mod), name: " Moderator " }, mod)).toBe(false);
-    expect(savable({ ...draftOf(mod), name: "Mods" }, mod)).toBe(true);
-    expect(savable({ ...draftOf(mod), name: "" }, mod)).toBe(false);
-    expect(savable({ ...draftOf(mod), color: "" }, mod)).toBe(true);
-    expect(savable({ ...draftOf(mod), hideTag: true }, mod)).toBe(true);
-    expect(savable({ ...draftOf(mod), permissions: ["SEND_IN_THREADS", "MANAGE_ROLES"] }, mod)).toBe(false);
-    expect(savable({ ...draftOf(mod), permissions: ["MANAGE_ROLES"] }, mod)).toBe(true);
+  test("a role saves once something differs from what the editor opened on", () => {
+    const opened = draftOf(mod);
+    expect(savable(draftOf(mod), opened)).toBe(false);
+    expect(savable({ ...opened, name: " Moderator " }, opened)).toBe(false);
+    expect(savable({ ...opened, name: "Mods" }, opened)).toBe(true);
+    expect(savable({ ...opened, name: "" }, opened)).toBe(false);
+    expect(savable({ ...opened, color: "" }, opened)).toBe(true);
+    expect(savable({ ...opened, hideTag: true }, opened)).toBe(true);
+    expect(savable({ ...opened, permissions: ["SEND_IN_THREADS", "MANAGE_ROLES"] }, opened)).toBe(false);
+    expect(savable({ ...opened, permissions: ["MANAGE_ROLES"] }, opened)).toBe(true);
   });
-  test("of Everyone only the permissions count", () => {
-    const everyone = role("everyone", { name: "Everyone", isEveryone: true, permissions: ["VIEW_CHANNEL"] });
-    expect(savable(draftOf(everyone), everyone)).toBe(false);
-    expect(savable({ ...draftOf(everyone), permissions: [] }, everyone)).toBe(true);
+  test("of Everyone only the permissions change", () => {
+    const everyone = draftOf(role("everyone", { name: "Everyone", isEveryone: true, permissions: ["VIEW_CHANNEL"] }));
+    expect(savable({ ...everyone }, everyone)).toBe(false);
+    expect(savable({ ...everyone, permissions: [] }, everyone)).toBe(true);
+  });
+  test("what someone else changed of the role does not light Save, and is not this editor's to send", () => {
+    const opened = draftOf(mod);
+    // Another admin switched a permission off and renamed it; this editor, touched or not, is compared with what it opened on.
+    const now = draftOf({ ...mod, name: "Mods", permissions: ["MANAGE_ROLES"] });
+    expect(savable(draftOf(mod), opened)).toBe(false);
+    const touched = { ...opened, color: "sky" };
+    expect(savable(touched, opened)).toBe(true);
+    // Touched, it keeps both drafts: the save is the colour and nothing else.
+    expect(followed(opened, touched, now)).toEqual({ opened, draft: touched });
+    expect(followed(opened, touched, now).opened).toBe(opened);
+  });
+  test("an editor nobody has touched follows the role as it changes underneath", () => {
+    const opened = draftOf(mod);
+    const now = draftOf({ ...mod, name: "Mods", permissions: ["MANAGE_ROLES"] });
+    const next = followed(opened, draftOf(mod), now);
+    expect(next).toEqual({ opened: now, draft: now });
+    expect(savable(next.draft, next.opened)).toBe(false);
+    // The role read again as it was is no change: the drafts handed in are handed back.
+    const same = draftOf(mod);
+    const untouched = draftOf(mod);
+    expect(followed(opened, untouched, same).opened).toBe(opened);
+    expect(followed(opened, untouched, same).draft).toBe(untouched);
+    // A space typed after the name is a touch, though nothing to save yet: it is not typed over.
+    const typing = { ...opened, name: "Moderator " };
+    expect(savable(typing, opened)).toBe(false);
+    expect(followed(opened, typing, now).draft).toBe(typing);
+    // Changed and changed back, it is untouched again, and follows.
+    expect(followed(opened, { ...opened, permissions: ["SEND_IN_THREADS", "MANAGE_ROLES"] }, now).draft).toBe(now);
+    // A role just made: its editor opens on nothing, before the snapshot with the role, and takes it when it comes.
+    expect(followed(draftOf(), draftOf(), opened)).toEqual({ opened, draft: opened });
   });
   test("a permission not held is withheld", () => {
     expect(withheld({ grantable: ["MANAGE_ROLES"] }, "ADMINISTRATOR")).toBe(true);
@@ -179,6 +216,40 @@ describe("a member", () => {
     expect(memberOffers(none, { guest: false, canManage: false }, true)).toEqual({ roles: false, rolesNote: undefined, title: true, kick: false });
     expect(offersAny(memberOffers(none, { guest: false, canManage: false }, false))).toBe(false);
     expect(offersAny(memberOffers(roles, { guest: true, canManage: false }, false))).toBe(true);
+  });
+  test("a save of a member's form asks for what the form changed, against the form as it opened", () => {
+    const opened = formOf({ roleIds: ["eng", "design"], title: "Staff Engineer" });
+    expect(memberChanges(opened, { roleIds: ["design", "eng"], title: " Staff Engineer " })).toEqual({ give: [], take: [], title: null });
+    expect(changesAny(memberChanges(opened, formOf({ roleIds: ["design", "eng"], title: "Staff Engineer" })))).toBe(false);
+    // One ticked, one unticked, the title retyped: one request with all three.
+    const changes = memberChanges(opened, { roleIds: ["eng", "invite"], title: " Principal " });
+    expect(changes).toEqual({ give: ["invite"], take: ["design"], title: "Principal" });
+    expect(changesAny(changes)).toBe(true);
+    // A title cleared is a title to set: empty, not left alone.
+    expect(memberChanges(opened, { ...opened, title: "  " })).toEqual({ give: [], take: [], title: "" });
+    expect(changesAny(memberChanges(opened, { ...opened, title: "" }))).toBe(true);
+    expect(changesAny(memberChanges(opened, { ...opened, roleIds: ["eng"] }))).toBe(true);
+  });
+  test("a role someone else gave the member meanwhile is not taken by a save from a form opened before it", () => {
+    // The row was open on [design]; Mod was given elsewhere; here Design is unticked.
+    const opened = formOf({ roleIds: ["design"], title: "" });
+    const form = { roleIds: [], title: "" };
+    expect(memberChanges(opened, form)).toEqual({ give: [], take: ["design"], title: null });
+    // Touched, the form keeps what it opened with, so Mod is in neither list whenever the save is made.
+    const now = formOf({ roleIds: ["design", "mod"], title: "" });
+    expect(memberFollowed(opened, form, now)).toEqual({ opened, form });
+    expect(memberChanges(memberFollowed(opened, form, now).opened, form).take).toEqual(["design"]);
+  });
+  test("a member's form nobody has touched follows the member", () => {
+    const opened = formOf({ roleIds: ["design"], title: "" });
+    const now = formOf({ roleIds: ["design", "mod"], title: "Lead" });
+    expect(memberFollowed(opened, formOf({ roleIds: ["design"], title: "" }), now)).toEqual({ opened: now, form: now });
+    // Read again as they were: the forms handed in are handed back.
+    const untouched = formOf({ roleIds: ["design"], title: "" });
+    expect(memberFollowed(opened, untouched, formOf({ roleIds: ["design"], title: "" })).form).toBe(untouched);
+    // A title being typed is a touch.
+    const typing = { roleIds: ["design"], title: "L" };
+    expect(memberFollowed(opened, typing, now).form).toBe(typing);
   });
   test("the owner and a guest are marked", () => {
     expect(memberMark({ owner: true, guest: false })).toBe("Owner");

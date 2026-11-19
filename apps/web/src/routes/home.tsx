@@ -33,7 +33,7 @@ import { preferences } from "../client/preferences";
 import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
-import { keepDrafts, keptElsewhere } from "../client/drafts";
+import { afterSend, inTurn, keepDrafts, keptElsewhere } from "../client/drafts";
 import type { MenuPoint } from "../client/menus";
 import { Compose, Timeline, createMarkRead, keptItems, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
@@ -421,36 +421,47 @@ function Conversation(props: HomeProps) {
   const uploadLimits = uploadLimitsQuery();
   const [mediaNote, setMediaNote] = createSignal<string>();
   createEffect(on(() => props.channelId, () => setMediaNote(undefined)));
-  const send = async () => {
+  // One send at a time in a conversation (`inTurn`), of what the field held at Return: the words stay in the field
+  // until theirs has gone, so a second Return while it is on its way must not send them again.
+  const turns = inTurn();
+  const send = () => {
     const id = props.channelId;
-    const body = draft().trim();
-    if (!id || (!body && !hasFiles(id))) return;
+    if (id) void turns(id, draft(), (typed) => sendIn(id, typed));
+  };
+  /** Sends `typed` in conversation `id`; answers whether it went. */
+  const sendIn = async (id: string, typed: string): Promise<boolean> => {
+    // Its turn can come after the conversation has left the composer: the field is another's by then.
+    if (!drafts.here(id)) return false;
+    const body = typed.trim();
+    if (!body && !hasFiles(id)) return false;
     const reply = replying();
     const where = title();
-    setDraft("");
     setError("");
-    setReplying(null);
-    drafts.sent(id);
     setMediaNote(undefined);
     try {
-      if (hasFiles(id)) setMediaNote("Sending when the files are uploaded…");
-      const files = await filesForSend(id);
-      setMediaNote(undefined);
-      if ("error" in files) throw new Error(files.error);
-      await client().dmSendWithMedia(id, body, reply ? quoteOf(reply) : null, files.ids, []);
+      // The words and the reply stay in the field, and in the draft, until the core's send has answered without
+      // error (`drafts.sending`); only then are they let go. Nothing but this clears a personal conversation's draft.
+      const files = await drafts.sending(id, typed, async () => {
+        if (hasFiles(id) && drafts.here(id)) setMediaNote("Sending when the files are uploaded…");
+        const files = await filesForSend(id);
+        if (drafts.here(id)) setMediaNote(undefined);
+        if ("error" in files) throw new Error(files.error);
+        await client().dmSendWithMedia(id, body, reply ? quoteOf(reply) : null, files.ids, []);
+        return files;
+      });
       filesSent(files.keys);
+      if (!drafts.here(id)) return true;
+      // Gone: the field and the reply bar let go of what went, and only of that.
+      setDraft((now) => afterSend(typed, now));
+      setReplying((now) => (now && now.messageId === reply?.messageId ? null : now));
+      return true;
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      // A send can wait on an upload while another conversation comes under the composer: the words are then the
-      // draft of the one they were written in, and the one on screen is told where they are, not handed them.
-      if (drafts.unsent(id, { body, reply: reply ? quoteOf(reply) : null })) {
-        setError(keptElsewhere(why, `your conversation with ${where}`));
-        return;
-      }
-      // The text comes back to the composer unless something new was typed meanwhile.
-      setDraft((d) => d || body);
-      if (reply) setReplying((r) => r ?? reply);
-      setError(why);
+      // Not sent: the words are where they were typed, in the field and in the draft. With another conversation
+      // under the composer by now they are the draft of their own, kept as it left, and this one is told where.
+      if (drafts.here(id)) setMediaNote(undefined);
+      setError(drafts.here(id) ? why : keptElsewhere(why, `your conversation with ${where}`));
+      return false;
     }
   };
   const react = (item: TimelineItem, emoji: string, remove: boolean) => {

@@ -553,8 +553,9 @@ function MemberPop(props: OverlayProps & { server: ServerSummary; kind: "memberR
   // Read once: the card opens against the control after this has gone.
   const anchor = props.over.anchor;
   const accountId = props.accountId;
-  // The member as they were when the list was first in hand: what is being typed is not written over by a list read again.
-  const member = createMemo<MemberSummary | undefined>((had) => had ?? members.data?.find((m) => m.accountId === accountId));
+  // The member as the list now has them: the pop's form follows them until it is touched and keeps what was changed
+  // after (`memberForm` in `roles.tsx`). One who has left the list stays as last seen, and a save says they are gone.
+  const member = createMemo<MemberSummary | undefined>((had) => members.data?.find((m) => m.accountId === accountId) ?? had);
   const card = () => props.open({ kind: "person", anchor, accountId });
   return (
     <Show when={member()}>

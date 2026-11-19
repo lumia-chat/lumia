@@ -910,7 +910,7 @@ export function Compose(props: ComposeProps) {
   const room = createRoom(() => props.value.trim());
   const over = () => (room()?.left ?? 0) < 0;
   // A counter answered for an earlier text can let one over the limit through: the core
-  // refuses it then, and the send puts the draft back with why.
+  // refuses it then, and the send leaves the draft in the field with why.
   const send = () => {
     if (!over()) props.onSend();
   };

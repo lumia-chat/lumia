@@ -4937,7 +4937,7 @@ export interface MemberEditProps {
   onSave?: () => void;
   /** Kick, where the viewer may: they hold Manage members and the member is below them. */
   onKick?: () => void;
-  /** A save or a kick is on its way: nothing is pressed twice. */
+  /** A save or a kick is on its way: nothing is pressed twice, the title is not typed in, and Cancel waits, since leaving then would hide what came of it. */
   busy?: boolean;
   /** Why it was not saved. */
   error?: string;
@@ -4968,7 +4968,7 @@ export function MemberEdit(props: MemberEditProps) {
         </Show>
         <Show when={props.title !== undefined}>
           <div class="lu-memberedit__part">
-            <TextField label="Title" value={props.title} maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" onInput={(e) => props.onTitle?.(e.currentTarget.value)} />
+            <TextField label="Title" value={props.title} maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" readOnly={props.busy} onInput={(e) => props.onTitle?.(e.currentTarget.value)} />
             <p class="lu-memberedit__hint">{TITLE_HINT}</p>
           </div>
         </Show>
@@ -4984,7 +4984,7 @@ export function MemberEdit(props: MemberEditProps) {
             Kick
           </Button>
         </Show>
-        <Button size="md" class="lu-memberedit__cancel" onClick={() => props.onCancel?.()}>
+        <Button size="md" class="lu-memberedit__cancel" disabled={props.busy} onClick={() => props.onCancel?.()}>
           Cancel
         </Button>
         <Button variant="primary" size="md" type="submit" disabled={props.busy}>

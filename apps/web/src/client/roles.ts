@@ -111,16 +111,39 @@ function sameSet(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((x) => b.includes(x));
 }
 
+/** Whether two drafts hold the same thing, the permissions in any order; `saved` compares the names as a save would keep them, trimmed. */
+function sameDraft(a: RoleDraft, b: RoleDraft, saved = false): boolean {
+  const name = (d: RoleDraft) => (saved ? d.name.trim() : d.name);
+  return name(a) === name(b) && a.color === b.color && a.hideTag === b.hideTag && sameSet(a.permissions, b.permissions);
+}
+
 /**
- * Whether Save is offered: a new role once it has a name, a role once
- * something of it differs and it still has one. Of Everyone only the
- * permissions are compared, since nothing else of it changes.
+ * Whether Save is offered. An editor holds two drafts: the role as the
+ * editor opened on it (`opened`) and the one being edited. A new role,
+ * which has no `opened`, is saved once it has a name; a role once the
+ * draft differs from `opened` and still has a name. The draft is never
+ * compared with the role as it now is: what someone else changed of it
+ * meanwhile is not this editor's to save, and does not light Save. A save
+ * sends the difference between the two (`changeRole`) and nothing else.
+ * Everyone's editor offers only its permissions, so only they can differ,
+ * and its name, the role's own, is never empty.
  */
-export function savable(draft: RoleDraft, role?: Pick<RoleSummary, "name" | "color" | "hideTag" | "permissions" | "isEveryone">): boolean {
-  if (!role) return draft.name.trim() !== "";
-  if (role.isEveryone) return !sameSet(draft.permissions, role.permissions);
+export function savable(draft: RoleDraft, opened?: RoleDraft): boolean {
   if (draft.name.trim() === "") return false;
-  return draft.name.trim() !== role.name || draft.color !== role.color || draft.hideTag !== role.hideTag || !sameSet(draft.permissions, role.permissions);
+  return !opened || !sameDraft(draft, opened, true);
+}
+
+/**
+ * An editor's two drafts once the role under it is `now`. An editor nobody
+ * has touched follows: while the draft still holds what it opened on, both
+ * become the role as it now is. Once something was changed they stay as
+ * they are, so the save sends that change and nothing else, whatever
+ * became of the rest of the role meanwhile. The drafts handed in are
+ * handed back where nothing is to change.
+ */
+export function followed(opened: RoleDraft, draft: RoleDraft, now: RoleDraft): { opened: RoleDraft; draft: RoleDraft } {
+  if (!sameDraft(draft, opened) || sameDraft(now, opened)) return { opened, draft };
+  return { opened: now, draft: now };
 }
 
 /** A permission this account does not hold, and so cannot give or take: its switch is shown and not turned. */
@@ -153,6 +176,57 @@ export function toggledRole(roles: RoleSummary[], held: string[], roleId: string
   const role = roles.find((r) => r.roleId === roleId);
   if (!role || role.isEveryone || !role.canManage) return held;
   return held.includes(roleId) ? held.filter((id) => id !== roleId) : [...held, roleId];
+}
+
+/** What a member's form holds, in their row in Members and in a card's two pops: the roles ticked and the title typed. */
+export interface MemberForm {
+  roleIds: string[];
+  title: string;
+}
+
+export function formOf(member: Pick<MemberSummary, "roleIds" | "title">): MemberForm {
+  return { roleIds: [...member.roleIds], title: member.title };
+}
+
+function sameForm(a: MemberForm, b: MemberForm): boolean {
+  return a.title === b.title && sameSet(a.roleIds, b.roleIds);
+}
+
+/** What a save of a member's form asks, in one request (`changeMember`). */
+export interface MemberChanges {
+  /** The roles ticked that the form did not open with. */
+  give: string[];
+  /** The roles it opened with that are no longer ticked. */
+  take: string[];
+  /** The title as it would be kept, where it differs from the one the form opened with; null leaves it as it is. */
+  title: string | null;
+}
+
+/**
+ * What a member's form changed, against the form as it opened (`opened`),
+ * never against the member as the list now has them: a role someone else
+ * gave them meanwhile is in neither list and so is not taken, and one this
+ * form did not touch is not named. Roles and title go in the one request,
+ * which the instance does whole or not at all.
+ */
+export function memberChanges(opened: MemberForm, form: MemberForm): MemberChanges {
+  const title = form.title.trim();
+  return {
+    give: form.roleIds.filter((id) => !opened.roleIds.includes(id)),
+    take: opened.roleIds.filter((id) => !form.roleIds.includes(id)),
+    title: title !== opened.title.trim() ? title : null,
+  };
+}
+
+/** Whether there is anything to ask: a form saved as it opened asks nothing. */
+export function changesAny(changes: MemberChanges): boolean {
+  return changes.give.length > 0 || changes.take.length > 0 || changes.title !== null;
+}
+
+/** A member's form once the list has them as `now`: one nobody has touched follows, as a role's editor does (`followed`). */
+export function memberFollowed(opened: MemberForm, form: MemberForm, now: MemberForm): { opened: MemberForm; form: MemberForm } {
+  if (!sameForm(form, opened) || sameForm(now, opened)) return { opened, form };
+  return { opened: now, form: now };
 }
 
 /** What this account may change of a member, on their row in Members and on their card. */

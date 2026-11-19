@@ -4,6 +4,7 @@
 // the same OPFS store.
 
 import { plain } from "./live";
+import type { RoleDraft } from "./roles";
 
 export interface InstanceSummary {
   host: string;
@@ -845,9 +846,18 @@ export class Bridge {
   createRole(serverId: string, name: string, color: string, hideTag: boolean, permissions: string[]): Promise<SnapshotSummary> {
     return this.call("createRole", serverId, name, color, hideTag, permissions);
   }
-  /** A role's name, colour, tag switch and permissions, whole; what no editor offers is kept, and of Everyone only the permissions change. */
-  updateRole(serverId: string, roleId: string, name: string, color: string, hideTag: boolean, permissions: string[]): Promise<SnapshotSummary> {
-    return this.call("updateRole", serverId, roleId, name, color, hideTag, permissions);
+  /**
+   * What an editor changed of a role, and nothing else of it: `was` is the
+   * role as the editor opened on it and `now` what it holds at Save. The
+   * core sends the difference (the name when it differs once trimmed, the
+   * colour, the tag switch, the offered permissions switched on and off),
+   * so what the editor did not touch stays as the instance has it,
+   * whatever someone else changed meanwhile; an editor saved as it opened
+   * asks nothing. Of Everyone only the permissions change. Refused as
+   * `createRole` is, and `NOT_FOUND` for a role the server no longer has.
+   */
+  changeRole(serverId: string, roleId: string, was: RoleDraft, now: RoleDraft): Promise<SnapshotSummary> {
+    return this.call("changeRole", serverId, roleId, was, now);
   }
   deleteRole(serverId: string, roleId: string): Promise<SnapshotSummary> {
     return this.call("deleteRole", serverId, roleId);
@@ -856,13 +866,18 @@ export class Bridge {
   reorderRoles(serverId: string, roleIds: string[]): Promise<SnapshotSummary> {
     return this.call("reorderRoles", serverId, roleIds);
   }
-  /** The roles a member is to hold, the whole set; the member as the server now shows them. */
-  setMemberRoles(serverId: string, accountId: string, roleIds: string[]): Promise<MemberSummary> {
-    return this.call("setMemberRoles", serverId, accountId, roleIds);
-  }
-  /** A member's title, up to 32 characters; empty clears it. This account's own is its own to set. */
-  setMemberTitle(serverId: string, accountId: string, title: string): Promise<MemberSummary> {
-    return this.call("setMemberTitle", serverId, accountId, title);
+  /**
+   * What was changed of a member, in one request the instance does whole
+   * or not at all: the roles to give them and to take away, by id, their
+   * other roles left as the instance has them, and their title when it is
+   * a string (empty clears it; null leaves it). This account's own title
+   * is its own to set this way. The member as the server now shows them.
+   * `PERMISSION_DENIED`; `INVALID_ARGUMENT` with `details.field` `roles`
+   * or `title`; `RATE_LIMITED` for this account's own title changed too
+   * often; `NOT_FOUND` for someone who is not a member.
+   */
+  changeMember(serverId: string, accountId: string, give: string[], take: string[], title: string | null): Promise<MemberSummary> {
+    return this.call("changeMember", serverId, accountId, give, take, title);
   }
   /** Removes a member from a server (`MANAGE_MEMBERS`, and a member below this account). */
   removeMember(serverId: string, accountId: string): Promise<void> {

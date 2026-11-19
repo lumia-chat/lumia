@@ -50,10 +50,15 @@ import {
   TITLE_HINT,
   administratorQuestion,
   deleteQuestion,
+  changesAny,
   draftOf,
+  followed,
+  formOf,
   holders,
   landsBefore,
   lockedRole,
+  memberChanges,
+  memberFollowed,
   memberMark,
   memberOffers,
   memberRefusal,
@@ -71,6 +76,7 @@ import {
   toneOf,
   withheld,
   withheldCaption,
+  type MemberForm,
   type RoleDraft,
 } from "../client/roles";
 import { avatarSrc, client, membersKept, tookMember, tookSnapshot } from "../client/state";
@@ -281,40 +287,57 @@ export function RolesSection(props: { server: ServerSummary; members: MemberSumm
  */
 function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefined; members: MemberSummary[] | undefined; me: MemberSummary | undefined; back: () => void; opened: (roleId: string) => void }) {
   const everyone = () => !!props.role?.isEveryone;
+  // Two drafts (`client/roles.ts`): the role as the editor opened on it, and the one being edited. Save is offered
+  // on their difference and sends it, so what someone else changed of the role meanwhile is neither lit nor undone.
+  const [opened, setOpened] = createSignal<RoleDraft>(draftOf(props.role));
   const [draft, setDraft] = createSignal<RoleDraft>(draftOf(props.role));
-  const change = (part: Partial<RoleDraft>) => {
-    setSaved(false);
-    setDraft({ ...draft(), ...part });
-  };
-  // A role just made is opened before the snapshot with it has been drawn, so its editor begins with no role to
-  // read and takes the role's fields when it comes: otherwise it held a new role's empty ones, and a save from it
-  // wrote those over what was just made. A new role's own editor never has one; making it opens another.
-  createEffect(
-    on(
-      () => !!props.role,
-      (has, had) => {
-        if (has && had === false) setDraft(draftOf(props.role));
-      },
-    ),
-  );
   const [groups] = createResource(offeredPermissions);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal(false);
+  // Nothing of the form changes while its save is on its way: the answer is what both drafts become.
+  const change = (part: Partial<RoleDraft>) => {
+    if (busy()) return;
+    setSaved(false);
+    setDraft({ ...draft(), ...part });
+  };
+  // An editor nobody has touched follows the role as it changes underneath; one that was touched keeps its drafts.
+  // A role just made is opened before the snapshot with it has been drawn, so its editor begins with a new role's
+  // empty fields, untouched, and takes the role's this way when it comes.
+  // The role's fields are read here, not only the role: a role read again can be the object it was, changed in place.
+  createEffect(
+    on(
+      () => (props.role ? draftOf(props.role) : undefined),
+      (now) => {
+        if (!now) return;
+        const next = followed(opened(), draft(), now);
+        setOpened(next.opened);
+        setDraft(next.draft);
+      },
+      { defer: true },
+    ),
+  );
+  const savableNow = () => savable(draft(), props.role ? opened() : undefined);
   const held = createMemo(() => (props.role ? holders(props.role, props.members) : undefined));
   const holding = createMemo(() => (props.role && !everyone() ? (props.members ?? []).filter((m) => m.roleIds.includes(props.role!.roleId)) : []));
   const shownName = () => (props.role ? (everyone() ? props.role.name : draft().name.trim() || props.role.name) : "New role");
 
   const save = async () => {
-    if (busy() || !savable(draft(), props.role)) return;
+    if (busy() || !savableNow()) return;
     setBusy(true);
     setError("");
     setSaved(false);
     const d = draft();
     try {
       if (props.role) {
-        tookRoles(await client().updateRole(props.server.serverId, props.role.roleId, d.name.trim(), d.color, d.hideTag, d.permissions), props.server.serverId);
-        setDraft({ ...d, name: d.name.trim() });
+        const roleId = props.role.roleId;
+        const snapshot = await client().changeRole(props.server.serverId, roleId, opened(), d);
+        tookRoles(snapshot, props.server.serverId);
+        // Both drafts are the role as the answer has it: what was saved, and whatever else it has become.
+        const now = snapshot.servers.find((s) => s.serverId === props.server.serverId)?.roles.find((r) => r.roleId === roleId);
+        const kept = now ? draftOf(now) : { ...d, name: d.name.trim() };
+        setOpened(kept);
+        setDraft(kept);
         setSaved(true);
       } else {
         const snapshot = await client().createRole(props.server.serverId, d.name.trim(), d.color, d.hideTag, d.permissions);
@@ -364,7 +387,8 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
     if (!role) return;
     setHoldersError("");
     try {
-      tookMember(props.server.serverId, m.accountId, await client().setMemberRoles(props.server.serverId, m.accountId, m.roleIds.filter((id) => id !== role.roleId)));
+      // This role taken and nothing else said of their roles: never a whole set built from the list.
+      tookMember(props.server.serverId, m.accountId, await client().changeMember(props.server.serverId, m.accountId, [], [role.roleId], null));
     } catch (err) {
       setHoldersError(memberRefusal(err));
     }
@@ -398,7 +422,8 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
       }}
     >
       <div class="lu-settings__head">
-        <IconButton icon="back" label="Back to roles" onClick={props.back} />
+        {/* Not left while a save is on its way: what came of it is said here. */}
+        <IconButton icon="back" label="Back to roles" disabled={busy()} onClick={props.back} />
         <div class="lu-settings__headtext">
           <h2 class="lu-settings__title">
             <RoleDot tone={toneOf(draft().color)} />
@@ -408,7 +433,7 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
             <p class="lu-settings__subtitle">{EVERYONE_SUBTITLE}</p>
           </Show>
         </div>
-        <Button variant="primary" size="md" type="submit" disabled={busy() || !savable(draft(), props.role)}>
+        <Button variant="primary" size="md" type="submit" disabled={busy() || !savableNow()}>
           Save
         </Button>
       </div>
@@ -425,7 +450,7 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
       <Show when={!everyone()}>
         <div class="lu-roleedit__part">
           <div class="lu-roleedit__field">
-            <TextField label="Name" value={draft().name} maxLength={LABEL_MAX} placeholder="Moderator" autocomplete="off" onInput={(e) => change({ name: e.currentTarget.value })} />
+            <TextField label="Name" value={draft().name} maxLength={LABEL_MAX} placeholder="Moderator" autocomplete="off" readOnly={busy()} onInput={(e) => change({ name: e.currentTarget.value })} />
             <p class="lu-roleedit__hint">{roleNameHint(props.server.name)}</p>
           </div>
           <div class="lu-roleedit__field">
@@ -583,7 +608,8 @@ function AddHolders(props: { server: ServerSummary; role: RoleSummary; members: 
       for (const accountId of chosen()) {
         const member = props.members.find((m) => m.accountId === accountId);
         if (!member) continue;
-        tookMember(props.server.serverId, accountId, await client().setMemberRoles(props.server.serverId, accountId, [...member.roleIds, props.role.roleId]));
+        // This role given and nothing else said of their roles.
+        tookMember(props.server.serverId, accountId, await client().changeMember(props.server.serverId, accountId, [props.role.roleId], [], null));
         setChosen((now) => now.filter((id) => id !== accountId));
       }
       props.close();
@@ -695,87 +721,112 @@ export function MembersSection(props: { server: ServerSummary; members: MemberSu
   );
 }
 
-/** What a save of a member's roles and title sends: each only where it changed, the roles first. */
-async function saveMember(server: ServerSummary, member: MemberSummary, roleIds: string[] | undefined, title: string | undefined): Promise<void> {
-  const rolesChanged = roleIds && (roleIds.length !== member.roleIds.length || roleIds.some((id) => !member.roleIds.includes(id)));
-  if (rolesChanged) tookMember(server.serverId, member.accountId, await client().setMemberRoles(server.serverId, member.accountId, roleIds));
-  if (title !== undefined && title.trim() !== member.title) tookMember(server.serverId, member.accountId, await client().setMemberTitle(server.serverId, member.accountId, title.trim()));
-}
-
-// A member's editing state under their row: the roles to tick, the title,
-// and Kick, each where `memberOffers` says. Save keeps the roles and the
-// title together; Kick asks nothing first.
-function MemberEditor(props: { server: ServerSummary; member: MemberSummary; me: boolean; close: () => void }) {
-  const offers = () => memberOffers(props.server, props.member, props.me);
-  const [held, setHeld] = createSignal(props.member.roleIds);
-  const [title, setTitle] = createSignal(props.member.title);
+/**
+ * A member's form, in their row in Members and in a card's two pops
+ * (`client/roles.ts`): the roles and the title as the form opened, and as it
+ * now stands. One nobody has touched follows the member as the list comes to
+ * have them; one that was touched keeps both, and Save asks for what it
+ * changed in one request (`changeMember`): the roles ticked since given, the
+ * ones unticked taken, the title if it differs, and nothing of what the form
+ * did not touch, whatever someone else has made of the member meanwhile.
+ * Nothing changed, nothing is asked. While a save or a kick is on its way
+ * the form does not change.
+ */
+function memberForm(server: () => ServerSummary, member: () => MemberSummary) {
+  const [opened, setOpened] = createSignal<MemberForm>(formOf(member()));
+  const [form, setForm] = createSignal<MemberForm>(formOf(member()));
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
-  const act = async (what: () => Promise<void>) => {
+  // Their roles and title are read here, not only the member, who can be the object they were, changed in place.
+  createEffect(
+    on(
+      () => formOf(member()),
+      (now) => {
+        const next = memberFollowed(opened(), form(), now);
+        setOpened(next.opened);
+        setForm(next.form);
+      },
+      { defer: true },
+    ),
+  );
+  const change = (part: Partial<MemberForm>) => {
+    if (!busy()) setForm({ ...form(), ...part });
+  };
+  /** Does `what` and then `after`; a refusal is said and the form stays as it is. */
+  const act = async (what: () => Promise<void>, after: () => void) => {
     if (busy()) return;
     setBusy(true);
     setError("");
     try {
       await what();
-      props.close();
+      after();
     } catch (err) {
       setError(memberRefusal(err));
       setBusy(false);
     }
   };
+  const save = (after: () => void) =>
+    act(async () => {
+      const changes = memberChanges(opened(), form());
+      if (!changesAny(changes)) return;
+      const [serverId, accountId] = [server().serverId, member().accountId];
+      tookMember(serverId, accountId, await client().changeMember(serverId, accountId, changes.give, changes.take, changes.title));
+    }, after);
+  return { form, busy, error, act, save, title: (title: string) => change({ title }), toggle: (roleId: string) => change({ roleIds: toggledRole(server().roles, form().roleIds, roleId) }) };
+}
+
+// A member's editing state under their row: the roles to tick, the title,
+// and Kick, each where `memberOffers` says. Save keeps the roles and the
+// title together, in one request; Kick asks nothing first.
+function MemberEditor(props: { server: ServerSummary; member: MemberSummary; me: boolean; close: () => void }) {
+  const offers = () => memberOffers(props.server, props.member, props.me);
+  const edit = memberForm(
+    () => props.server,
+    () => props.member,
+  );
   return (
     <MemberEdit
       name={memberName(props.member)}
-      roles={offers().roles ? roleChoices(props.server.roles, held()) : undefined}
+      roles={offers().roles ? roleChoices(props.server.roles, edit.form().roleIds) : undefined}
       rolesNote={offers().rolesNote}
-      title={offers().title ? title() : undefined}
-      onToggleRole={(id) => setHeld(toggledRole(props.server.roles, held(), id))}
-      onTitle={setTitle}
+      title={offers().title ? edit.form().title : undefined}
+      onToggleRole={edit.toggle}
+      onTitle={edit.title}
       onCancel={props.close}
-      onSave={() => void act(() => saveMember(props.server, props.member, offers().roles ? held() : undefined, offers().title ? title() : undefined))}
+      onSave={() => void edit.save(props.close)}
       onKick={
         offers().kick
           ? () =>
-              void act(async () => {
+              void edit.act(async () => {
                 await client().removeMember(props.server.serverId, props.member.accountId);
                 tookMember(props.server.serverId, props.member.accountId, null);
-              })
+              }, props.close)
           : undefined
       }
-      busy={busy()}
-      error={error() || undefined}
+      busy={edit.busy()}
+      error={edit.error() || undefined}
     />
   );
 }
 
 /** What a card's Edit beside Roles opens, against it (the "Profile card" board): the roles to tick, those not this account's to change with a lock. */
 export function MemberRolesPop(props: { server: ServerSummary; member: MemberSummary; anchor: HTMLElement; close: () => void; done: () => void }) {
-  const [held, setHeld] = createSignal(props.member.roleIds);
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
-  const save = async () => {
-    if (busy()) return;
-    setBusy(true);
-    setError("");
-    try {
-      await saveMember(props.server, props.member, held(), undefined);
-      props.done();
-    } catch (err) {
-      setError(memberRefusal(err));
-      setBusy(false);
-    }
-  };
+  const edit = memberForm(
+    () => props.server,
+    () => props.member,
+  );
   return (
-    <Popover anchor={props.anchor} onClose={props.close}>
+    // Not closed by a press outside while its save is on its way: what came of it is said here.
+    <Popover anchor={props.anchor} onClose={() => !edit.busy() && props.close()}>
       <Pop title="Roles" subtitle={`${memberName(props.member)} in ${props.server.name}`}>
         <div class="lu-pop__form">
-          <RoleChoices label={`${memberName(props.member)}’s roles`} roles={roleChoices(props.server.roles, held())} onToggle={(id) => setHeld(toggledRole(props.server.roles, held(), id))} />
-          <Show when={error()}>
+          <RoleChoices label={`${memberName(props.member)}’s roles`} roles={roleChoices(props.server.roles, edit.form().roleIds)} onToggle={edit.toggle} />
+          <Show when={edit.error()}>
             <p class="lu-pop__error" role="alert">
-              {error()}
+              {edit.error()}
             </p>
           </Show>
-          <PopActions busy={busy()} onCancel={props.done} onSave={() => void save()} />
+          <PopActions busy={edit.busy()} onCancel={props.done} onSave={() => void edit.save(props.done)} />
         </div>
       </Pop>
     </Popover>
@@ -784,44 +835,39 @@ export function MemberRolesPop(props: { server: ServerSummary; member: MemberSum
 
 /** What a card's Edit beside the title opens: the title, up to 32 characters, cleared to have none. */
 export function MemberTitlePop(props: { server: ServerSummary; member: MemberSummary; anchor: HTMLElement; close: () => void; done: () => void }) {
-  const [title, setTitle] = createSignal(props.member.title);
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
-  const save = async (e: Event) => {
-    e.preventDefault();
-    if (busy()) return;
-    setBusy(true);
-    setError("");
-    try {
-      await saveMember(props.server, props.member, undefined, title());
-      props.done();
-    } catch (err) {
-      setError(memberRefusal(err));
-      setBusy(false);
-    }
-  };
+  const edit = memberForm(
+    () => props.server,
+    () => props.member,
+  );
   return (
-    <Popover anchor={props.anchor} onClose={props.close}>
+    <Popover anchor={props.anchor} onClose={() => !edit.busy() && props.close()}>
       <Pop title="Title" subtitle={`${memberName(props.member)} in ${props.server.name}`}>
-        <form class="lu-pop__form" onSubmit={(e) => void save(e)}>
-          <TextField label="Title" value={title()} maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" onInput={(e) => setTitle(e.currentTarget.value)} />
+        <form
+          class="lu-pop__form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void edit.save(props.done);
+          }}
+        >
+          <TextField label="Title" value={edit.form().title} maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" readOnly={edit.busy()} onInput={(e) => edit.title(e.currentTarget.value)} />
           <p class="lu-pop__note">{TITLE_HINT}</p>
-          <Show when={error()}>
+          <Show when={edit.error()}>
             <p class="lu-pop__error" role="alert">
-              {error()}
+              {edit.error()}
             </p>
           </Show>
-          <PopActions busy={busy()} onCancel={props.done} submit />
+          <PopActions busy={edit.busy()} onCancel={props.done} submit />
         </form>
       </Pop>
     </Popover>
   );
 }
 
+// A pop's two buttons. Neither is pressed while its save is on its way: Cancel then would hide what came of it.
 function PopActions(props: { busy: boolean; onCancel: () => void; onSave?: () => void; submit?: boolean }): JSX.Element {
   return (
     <div class="lu-pop__actions">
-      <Button size="md" onClick={props.onCancel}>
+      <Button size="md" disabled={props.busy} onClick={props.onCancel}>
         Cancel
       </Button>
       <Button variant="primary" size="md" type={props.submit ? "submit" : "button"} disabled={props.busy} onClick={() => props.onSave?.()}>

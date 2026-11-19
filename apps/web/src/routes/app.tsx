@@ -46,7 +46,7 @@ import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connec
 import { useNames } from "../client/names";
 import { tagOf } from "../client/roles";
 import { preferences, setAsideHidden } from "../client/preferences";
-import { keepDrafts, keptElsewhere } from "../client/drafts";
+import { afterSend, inTurn, keepDrafts, keptElsewhere } from "../client/drafts";
 import type { MenuPoint } from "../client/menus";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
@@ -406,51 +406,63 @@ function Frame() {
     }),
   );
 
-  const send = async () => {
+  // One send at a time in a conversation (`inTurn`), of what the field held at Return: the words stay in the field
+  // until theirs has gone, so a second Return while it is on its way must not send them again.
+  const turns = inTurn();
+  const send = () => {
     const id = channelId();
+    if (id) void turns(id, draft(), (typed) => sendIn(id, typed));
+  };
+  /** Sends `typed` in conversation `id`; answers whether it went. */
+  const sendIn = async (id: string, typed: string): Promise<boolean> => {
+    // Its turn can come after the conversation has left the composer: the field is another's by then.
+    if (!drafts.here(id)) return false;
     const ch = current();
-    const body = draft().trim();
-    if (!id || !ch || (!body && !hasFiles(id))) return;
+    const body = typed.trim();
+    if (!ch || (!body && !hasFiles(id))) return false;
     const reply = replying();
-    setDraft("");
     setError("");
-    setReplying(null);
-    drafts.sent(id);
     setNote(null);
     setNoteError("");
     setMediaNote(undefined);
+    const isChannel = ch.kind === "TEXT";
     try {
-      const srv = server();
-      const isChannel = ch.kind === "TEXT";
-      // Typed or picked, every @handle of a member is a mention; a DM has none.
-      const mentions = isChannel && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
-      const cardUrls = body ? await previews.urlsFor(body) : [];
-      // The files go when they are made and uploaded; the message waits for them.
-      if (hasFiles(id)) setMediaNote("Sending when the files are uploaded…");
-      const files = await filesForSend(id);
-      setMediaNote(undefined);
-      if ("error" in files) throw new Error(files.error);
-      sent.add(await client().sendMessageWithMedia(id, body, mentions, reply ? quoteOf(reply) : null, files.ids, cardUrls));
+      // The words and the reply stay in the field, and in the draft, until the core's send has answered without
+      // error (`drafts.sending`); only then are they let go.
+      const { mentions, files } = await drafts.sending(id, typed, async () => {
+        const srv = server();
+        // Typed or picked, every @handle of a member is a mention; a DM has none.
+        const mentions = isChannel && srv ? await client().findMentions(body, serverMembers.data ?? [], srv.canMentionEveryone) : [];
+        const cardUrls = body ? await previews.urlsFor(body) : [];
+        // The files go when they are made and uploaded; the message waits for them.
+        if (hasFiles(id) && drafts.here(id)) setMediaNote("Sending when the files are uploaded…");
+        const files = await filesForSend(id);
+        if (drafts.here(id)) setMediaNote(undefined);
+        if ("error" in files) throw new Error(files.error);
+        sent.add(await client().sendMessageWithMedia(id, body, mentions, reply ? quoteOf(reply) : null, files.ids, cardUrls));
+        return { mentions, files };
+      });
       filesSent(files.keys);
-      previews.reset();
       void queryClient.invalidateQueries({ queryKey: ["messages", id] });
+      // What follows is the composer's, if the conversation is still under it.
+      if (!drafts.here(id)) return true;
+      // Gone: the field and the reply bar let go of what went, and only of that.
+      setDraft((now) => afterSend(typed, now));
+      setReplying((now) => (now && now.messageId === reply?.messageId ? null : now));
+      previews.reset();
       const inChannel = channelMembers.data;
       if (isChannel && inChannel) {
         const outside = [...new Set(mentions.filter((m) => !m.everyone && m.accountId && !inChannel.includes(m.accountId)).map((m) => m.accountId))];
         if (outside.length) setNote({ kind: "outside", channelId: id, channel: ch.name, ids: outside });
       }
+      return true;
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      // A send can wait on an upload while another conversation comes under the composer: the words are then the
-      // draft of the one they were written in, and the one on screen is told where they are, not handed them.
-      if (drafts.unsent(id, { body, reply: reply ? quoteOf(reply) : null })) {
-        setError(keptElsewhere(why, ch.kind === "TEXT" ? "#" + ch.name : `your conversation with ${nameOf(partnerOf(ch))}`));
-        return;
-      }
-      // The text comes back to the composer unless something new was typed meanwhile.
-      setDraft((d) => d || body);
-      if (reply) setReplying((r) => r ?? reply);
-      setError(why);
+      // Not sent: the words are where they were typed, in the field and in the draft. With another conversation
+      // under the composer by now they are the draft of their own, kept as it left, and this one is told where.
+      if (drafts.here(id)) setMediaNote(undefined);
+      setError(drafts.here(id) ? why : keptElsewhere(why, isChannel ? "#" + ch.name : `your conversation with ${nameOf(partnerOf(ch))}`));
+      return false;
     }
   };
   /** Adds those a send mentioned to the channel; those who take adds as invitations are invited. */

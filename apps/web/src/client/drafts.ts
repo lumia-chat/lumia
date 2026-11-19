@@ -7,18 +7,25 @@
 //
 // A draft is read when its conversation comes under the composer. It is
 // kept once what the composer holds has rested, and at once when the
-// conversation leaves and when the page is hidden or goes. A send keeps
-// nothing, which clears what was kept, and so does an emptied field. The
-// files waiting over the composer are not kept, and nothing here is sent
-// to the instance.
+// conversation leaves and when the page is hidden or goes. An emptied
+// field keeps nothing, which clears what was kept. The files waiting over
+// the composer are not kept, and nothing here is sent to the instance.
+//
+// A send lets go of nothing until it has gone (`sending`): the words stay
+// in the field and in the draft while the core's send is asked, which can
+// wait on an upload, and only once that has answered without error are
+// the draft cleared and the field emptied of what went (`afterSend`). One
+// that throws leaves both as they are. If another conversation came under
+// the composer meanwhile, the words were kept as their own conversation's
+// draft when it left, so they are never put in the field on screen. One
+// send goes at a time in a conversation, of what the field held at Return
+// (`inTurn`).
 //
 // The store answers later, and may not answer. Until it has, the field is
 // empty because nothing was put in it, which is no change to keep; words
 // typed meanwhile are the conversation's, kept like any others, and an
 // answer that comes after they were kept or sent is of a draft they took
-// the place of. A read that fails leaves what is kept alone. Words whose
-// send failed after their conversation left the composer go back to that
-// conversation's draft (`unsent`), never into the field on screen.
+// the place of. A read that fails leaves what is kept alone.
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
 import type { QuoteSummary } from "./bridge";
 
@@ -47,14 +54,64 @@ export function keptElsewhere(why: string, where: string): string {
   return `${/[.!?…]$/.test(said) ? said : said + "."} Your message is kept in ${where}.`;
 }
 
+/**
+ * What a composer's field holds once the words it held as `sent` have
+ * gone, `now` being what it holds as the send answers: nothing, or
+ * whatever was typed after them while they were on their way. A field
+ * changed in some other way meanwhile is left as it is. The same on every
+ * shell.
+ */
+export function afterSend(sent: string, now: string): string {
+  if (now === sent) return "";
+  return now.startsWith(sent) ? now.slice(sent.length).trimStart() : now;
+}
+
+/**
+ * One send at a time in each conversation, each of what the field held
+ * when it was asked for (`typed`). The next waits for the one before it,
+ * whatever came of that, and then sends its words less those of every send
+ * that went meanwhile (`afterSend`): the words on their way stay in the
+ * field, so Return pressed twice sends once (the second has nothing left),
+ * words typed after them and sent while they wait go after them, in order,
+ * and words put in the field in place of them go as they were when Return
+ * was pressed, whatever the field holds by their turn. `send` answers
+ * whether its words went. Another conversation's sends do not wait behind
+ * this one's.
+ */
+export function inTurn(): (conversationId: string, typed: string, send: (words: string) => Promise<boolean>) => Promise<void> {
+  const last = new Map<string, Promise<void>>();
+  /** The sends asked for in each conversation whose turn has not come, each with its words as they now stand. */
+  const asked = new Map<string, Set<{ words: string }>>();
+  return (id, typed, send) => {
+    const mine = { words: typed };
+    const waiting = asked.get(id) ?? new Set();
+    asked.set(id, waiting);
+    waiting.add(mine);
+    const go = async () => {
+      waiting.delete(mine);
+      if (!waiting.size && asked.get(id) === waiting) asked.delete(id);
+      const words = mine.words;
+      if ((await send(words)) && words.trim()) for (const next of asked.get(id) ?? []) next.words = afterSend(words, next.words);
+    };
+    const turn = (last.get(id) ?? Promise.resolve()).then(go, go);
+    last.set(id, turn);
+    const done = () => {
+      if (last.get(id) === turn) last.delete(id);
+    };
+    turn.then(done, done);
+    return turn;
+  };
+}
+
 const NOTHING: Held = { body: "", reply: null };
 /** What the store makes of a composer's words: blank ones keep nothing, the reply neither. */
 const kept = (held: Held): string => (held.body.trim() ? JSON.stringify([held.body, held.reply]) : "");
 
 /**
  * Keeps what composers hold. `changed` is told of every change and keeps it
- * once it has rested for `ms`; `flush` keeps what waits now; `sent` forgets
- * what waits for a conversation and keeps nothing of it. A write that
+ * once it has rested for `ms`; `flush` keeps what waits now; `sent` lets
+ * go of the words that went, in what waits and in the store, and `went`
+ * does so for a conversation that has left the composer. A write that
  * would change nothing in the store is not made.
  */
 export class DraftKeeper {
@@ -62,8 +119,12 @@ export class DraftKeeper {
   private timer: unknown;
   /** What the store holds of each conversation, as last read or kept. */
   private stored = new Map<string, string>();
+  /** The same as the words and the reply they were, for the conversations that hold some. */
+  private drafts = new Map<string, Held>();
   /** The read of each conversation's kept draft that has not answered. */
   private reading = new Map<string, object>();
+  /** Each conversation's writes to the store that have not all answered, as one promise. */
+  private writing = new Map<string, Promise<void>>();
 
   constructor(
     private store: DraftStore,
@@ -88,8 +149,16 @@ export class DraftKeeper {
     }
     if (this.reading.get(id) !== asked) return null;
     this.reading.delete(id);
-    this.stored.set(id, held ? kept(held) : "");
+    this.holds(id, held ?? NOTHING);
     return held;
+  }
+
+  /** The store holds `held` of conversation `id`, as far as is known. */
+  private holds(id: string, held: Held) {
+    const next = kept(held);
+    this.stored.set(id, next);
+    if (next) this.drafts.set(id, held);
+    else this.drafts.delete(id);
   }
 
   /** The composer of conversation `id` holds `held` now. */
@@ -115,25 +184,48 @@ export class DraftKeeper {
     if (w) this.write(w.id, w.held);
   }
 
-  /** Conversation `id`'s words were sent: nothing of them is kept, now and not once the field has rested. */
-  sent(id: string) {
-    if (this.waiting?.id === id) {
-      this.stop();
-      this.waiting = null;
+  /**
+   * Conversation `id`'s words `sent` have gone, and it is the one under the
+   * composer: nothing is kept of them, now or once the field has rested,
+   * so a save that was waiting cannot bring them back after the core let
+   * them go. What was typed after them, or in their place, while they were
+   * on their way is the field's still (`afterSend`), and is kept: a save of
+   * it that waits goes on waiting, less the words that went, and one made
+   * already stays.
+   */
+  sent(id: string, sent: string) {
+    const w = this.waiting;
+    if (w?.id === id) {
+      const left = afterSend(sent, w.held.body);
+      if (!left.trim()) {
+        this.stop();
+        this.waiting = null;
+      } else if (left !== w.held.body) this.waiting = { id, held: { body: left, reply: null } };
     }
     // A kept draft still being read was never in the field: what was sent took its place.
     this.reading.delete(id);
-    this.write(id, NOTHING);
+    const draft = this.drafts.get(id);
+    if (!draft) return;
+    // What the store holds was kept before the send went or while it was on its way: words the sent ones begin
+    // with are an older state of them, and go; words typed after them stay, and so do words put in their place.
+    const left = sent.trim().startsWith(draft.body.trim()) ? "" : afterSend(sent, draft.body);
+    // The reply went with the message.
+    if (left !== draft.body) this.write(id, { body: left, reply: null });
   }
 
   /**
-   * Conversation `id`'s words did not go after all, and it is no longer
-   * under the composer: they are its draft again, unless words typed
-   * there since are.
+   * Conversation `id`'s words `sent` have gone after it left the composer,
+   * where what its field held was kept as its draft: the draft lets go of
+   * what went and only of that (`afterSend`), so words typed after them
+   * before it left are still its draft, and a draft of other words is left
+   * alone.
    */
-  unsent(id: string, held: Held) {
-    if (this.stored.get(id)) return;
-    this.write(id, held);
+  went(id: string, sent: string) {
+    const draft = this.drafts.get(id);
+    if (!draft) return;
+    const left = afterSend(sent, draft.body);
+    // The reply went with the message.
+    if (left !== draft.body) this.write(id, { body: left, reply: null });
   }
 
   private stop() {
@@ -146,24 +238,52 @@ export class DraftKeeper {
     if (this.stored.get(id) === next) return;
     // A read still out answers with what these words take the place of.
     this.reading.delete(id);
-    this.stored.set(id, next);
+    this.holds(id, held);
     // A store that refuses costs the draft and nothing else.
-    void this.store.keep(id, held.body, held.reply).catch(() => this.stored.delete(id));
+    const done = this.store.keep(id, held.body, held.reply).then(
+      () => {},
+      () => {
+        this.stored.delete(id);
+        this.drafts.delete(id);
+      },
+    );
+    // Answered once this write and every one before it has: the worker answers calls as each finishes.
+    const all = Promise.all([this.writing.get(id), done]).then(() => {});
+    this.writing.set(id, all);
+    void all.then(() => {
+      if (this.writing.get(id) === all) this.writing.delete(id);
+    });
+  }
+
+  /**
+   * Once the writes asked of conversation `id` have answered, whatever came
+   * of them. A send waits for this before it is asked: the core clears the
+   * draft in the same write that puts the message in the outbox, and a keep
+   * still on its way could land after that and put the sent words back.
+   */
+  async settled(id: string): Promise<void> {
+    for (let w = this.writing.get(id); w; w = this.writing.get(id)) await w;
   }
 }
 
 /**
  * Gives a composer its conversation's draft and keeps what is typed in it.
  * `held` is what the composer holds; `restore` puts a kept draft in it and
- * `empty` clears it for another conversation. Answers `sent`, to call when
- * the conversation's words go, and `unsent`, to call when they did not go
- * after all: true when it kept them as the draft of their conversation,
- * which has left the composer, and false when that conversation is still
- * under it, where the field takes them back.
+ * `empty` clears it for another conversation. Answers two things a send
+ * uses. `sending` wraps the core's send of the words `sent` typed in a
+ * conversation: what waits is kept first, so the store has the words while
+ * they are on their way; then, once the store has answered every keep of
+ * that conversation (`settled`), the send is asked; and only once it has
+ * answered without error does the draft let go of what went, and of that
+ * only (`sent` where the conversation is still under the composer, the
+ * caller then emptying the field of it with `afterSend`, and `went` where
+ * it has left). A send that
+ * throws leaves the draft as it is, and throws on. `here` says whether a
+ * conversation is the one under the composer, its words in the field.
  */
 export function keepDrafts(opts: { store: DraftStore; conversation: Accessor<string | undefined>; held: Accessor<Held>; restore: (held: Held) => void; empty: () => void }): {
-  sent: (conversationId: string) => void;
-  unsent: (conversationId: string, held: Held) => boolean;
+  here: (conversationId: string) => boolean;
+  sending: <T>(conversationId: string, sent: string, send: () => Promise<T>) => Promise<T>;
 } {
   const keeper = new DraftKeeper(opts.store);
   // The conversation the field's words belong to: the one under the composer, from when the field was emptied for
@@ -203,12 +323,19 @@ export function keepDrafts(opts: { store: DraftStore; conversation: Accessor<str
     keeper.flush();
     gone = true;
   });
+  const here = (id: string) => !gone && under() === id && opts.conversation() === id;
   return {
-    sent: (id) => keeper.sent(id),
-    unsent: (id, held) => {
-      if (!gone && under() === id && opts.conversation() === id) return false;
-      keeper.unsent(id, held);
-      return true;
+    here,
+    sending: async (id, sent, send) => {
+      // What waits is kept now, and the send is asked once the store has answered every keep of this conversation:
+      // one landing after the core's send cleared the draft would put the sent words back.
+      keeper.flush();
+      await keeper.settled(id);
+      const answer = await send();
+      // Not cut short by the composer going away: a draft left behind for words that went would send them twice.
+      if (here(id)) keeper.sent(id, sent);
+      else keeper.went(id, sent);
+      return answer;
     },
   };
 }
