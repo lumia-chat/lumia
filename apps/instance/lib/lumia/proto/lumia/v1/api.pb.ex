@@ -603,6 +603,8 @@ defmodule Lumia.V1.UpdateMemberRequest do
   field :expires_at, 6, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
   field :roles, 7, type: Lumia.V1.RoleIds
   field :title, 8, proto3_optional: true, type: :string
+  field :add_role_ids, 9, repeated: true, type: :bytes, json_name: "addRoleIds"
+  field :remove_role_ids, 10, repeated: true, type: :bytes, json_name: "removeRoleIds"
 end
 
 defmodule Lumia.V1.RoleIds do
@@ -647,6 +649,21 @@ defmodule Lumia.V1.UpsertRoleRequest do
     syntax: :proto3
 
   field :role, 1, type: Lumia.V1.Role
+end
+
+defmodule Lumia.V1.UpdateRoleRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UpdateRoleRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :name, 1, proto3_optional: true, type: :string
+  field :color, 2, proto3_optional: true, type: :string
+  field :hide_tag, 3, proto3_optional: true, type: :bool, json_name: "hideTag"
+  field :grant, 4, repeated: true, type: Lumia.V1.Permission, enum: true
+  field :revoke, 5, repeated: true, type: Lumia.V1.Permission, enum: true
 end
 
 defmodule Lumia.V1.ListEventsRequest do

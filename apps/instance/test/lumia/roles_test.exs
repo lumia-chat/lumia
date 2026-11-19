@@ -13,12 +13,15 @@ defmodule Lumia.RolesTest do
 
   alias Lumia.Accounts
   alias Lumia.Audit.Entry
+  alias Lumia.Authz.Permission
   alias Lumia.Servers
   alias Lumia.Servers.MemberAnnouncement
+  alias Lumia.Servers.MemberRole
   alias Lumia.Servers.Role
   alias Lumia.V1
   alias Lumia.Workers.MembersUpdated
   alias Lumia.Workers.RolesUpdated
+  alias Lumia.Workers.ServerUpdated
 
   setup do
     owner = account("owner")
@@ -46,6 +49,15 @@ defmodule Lumia.RolesTest do
   end
 
   defp names(ctx), do: Enum.map(order(ctx), &elem(&1, 0))
+
+  # The roles a member holds.
+  defp held(ctx, account) do
+    Repo.all(
+      from mr in MemberRole,
+        where: mr.server_id == ^ctx.server.id and mr.account_id == ^account.id,
+        select: mr.role_id
+    )
+  end
 
   defp audited(ctx, action) do
     Repo.aggregate(
@@ -222,6 +234,20 @@ defmodule Lumia.RolesTest do
       assert {:ok, _} = Servers.create_role(elsewhere.id, ctx.owner.id, %{name: "Design"})
     end
 
+    @tag failure_injection: [authorization: 17]
+    test "its name is what it looks like", ctx do
+      # A line separator, a space of no width, a mark that turns the text
+      # round, and a name of nothing but a joiner.
+      for name <- ["Admin\u2028Owner", "mods\u200B", "\u202Enimda", "\u200B", "\u200D"] do
+        assert {:error, {:invalid_argument, "name"}} ==
+                 Servers.create_role(ctx.server.id, ctx.owner.id, %{name: name})
+      end
+
+      # A joiner inside an emoji is how the emoji is written.
+      assert {:ok, %Role{name: "Family 👨‍👩‍👧"}} =
+               Servers.create_role(ctx.server.id, ctx.owner.id, %{name: "Family 👨‍👩‍👧"})
+    end
+
     test "everyone's name is no role's", ctx do
       for name <- ["everyone", "@everyone", "@Everyone"] do
         assert {:error, {:invalid_argument, "name"}} ==
@@ -262,7 +288,7 @@ defmodule Lumia.RolesTest do
                })
 
       assert %Role{name: "@everyone", color: nil, hide_tag: false, position: 1_000_000} = updated
-      assert Lumia.Authz.Permission.from_bits(updated.permissions) == [:view_channel]
+      assert Permission.from_bits(updated.permissions) == [:view_channel]
     end
 
     test "@everyone is nobody's to give", ctx do
@@ -271,6 +297,148 @@ defmodule Lumia.RolesTest do
 
       assert {:error, {:invalid_argument, "roles"}} ==
                Servers.set_roles(ctx.server.id, alice.id, [everyone.id], ctx.owner.id)
+    end
+  end
+
+  describe "a role's permissions" do
+    test "are switched on and off, the rest as they are", ctx do
+      mods = role(ctx, "mods", [:manage_messages, :create_invites])
+
+      assert {:ok, updated} =
+               Servers.update_role(ctx.server.id, mods.id, ctx.owner.id, %{
+                 grant: [:manage_channels],
+                 revoke: [:create_invites]
+               })
+
+      assert Enum.sort(Permission.from_bits(updated.permissions)) ==
+               [:manage_channels, :manage_messages]
+
+      # A name alone leaves them alone.
+      assert {:ok, renamed} =
+               Servers.update_role(ctx.server.id, mods.id, ctx.owner.id, %{name: "Mods"})
+
+      assert renamed.permissions == updated.permissions
+    end
+
+    test "one switched both on and off is refused", ctx do
+      mods = role(ctx, "mods")
+
+      assert {:error, {:invalid_argument, "permissions"}} ==
+               Servers.update_role(ctx.server.id, mods.id, ctx.owner.id, %{
+                 grant: [:manage_channels],
+                 revoke: [:manage_channels]
+               })
+    end
+
+    @tag failure_injection: [authorization: 18]
+    test "a change another made is not undone by one that does not name it", ctx do
+      # Two editors opened on the role as it was: one takes Administrator
+      # away, the other then saves a new name and one more permission.
+      admins = role(ctx, "admins", [:administrator])
+
+      {:ok, _} =
+        Servers.update_role(ctx.server.id, admins.id, ctx.owner.id, %{revoke: [:administrator]})
+
+      {:ok, saved} =
+        Servers.update_role(ctx.server.id, admins.id, ctx.owner.id, %{
+          name: "Leads",
+          grant: [:create_invites]
+        })
+
+      assert Permission.from_bits(saved.permissions) == [:create_invites]
+    end
+
+    test "nobody switches on what they do not hold", ctx do
+      mods = role(ctx, "mods", [:manage_roles])
+      low = role(ctx, "low")
+      mod = member(ctx, "mod", [mods])
+
+      assert {:error, :permission_denied} ==
+               Servers.update_role(ctx.server.id, low.id, mod.id, %{grant: [:manage_server]})
+
+      assert {:ok, _} =
+               Servers.update_role(ctx.server.id, low.id, mod.id, %{grant: [:manage_roles]})
+    end
+  end
+
+  describe "giving and taking a member's roles" do
+    test "leaves the member's other roles as they are", ctx do
+      mods = role(ctx, "mods")
+      events = role(ctx, "events")
+      design = role(ctx, "design")
+      alice = member(ctx, "alice", [mods, events])
+
+      assert {:ok, _} =
+               Servers.give_and_take_roles(
+                 ctx.server.id,
+                 alice.id,
+                 [design.id],
+                 [mods.id],
+                 ctx.owner.id
+               )
+
+      assert Enum.sort(held(ctx, alice)) ==
+               Enum.sort([events.id, design.id])
+    end
+
+    @tag failure_injection: [authorization: 18]
+    test "a role given by another since the list was read stays", ctx do
+      # One admin gives Events while another, whose list still shows Mods
+      # alone, takes Mods away: the member is left with Events.
+      mods = role(ctx, "mods")
+      events = role(ctx, "events")
+      alice = member(ctx, "alice", [mods])
+
+      {:ok, _} =
+        Servers.give_and_take_roles(ctx.server.id, alice.id, [events.id], [], ctx.owner.id)
+
+      {:ok, _} = Servers.give_and_take_roles(ctx.server.id, alice.id, [], [mods.id], ctx.owner.id)
+
+      assert held(ctx, alice) == [events.id]
+    end
+
+    test "one held is not given again, and one not held is not taken", ctx do
+      mods = role(ctx, "mods")
+      gone = role(ctx, "gone")
+      alice = member(ctx, "alice", [mods])
+      :ok = Servers.delete_role(ctx.server.id, gone.id, ctx.owner.id)
+      before = length(told(alice, :membership_updated))
+
+      assert {:ok, _} =
+               Servers.give_and_take_roles(
+                 ctx.server.id,
+                 alice.id,
+                 [mods.id],
+                 [gone.id],
+                 ctx.owner.id
+               )
+
+      assert length(told(alice, :membership_updated)) == before
+      assert held(ctx, alice) == [mods.id]
+    end
+
+    test "a role in both, one the actor does not manage, and one that is gone are refused",
+         ctx do
+      top = role(ctx, "top")
+      mods = role(ctx, "mods", [:manage_roles])
+      low = role(ctx, "low")
+      gone = role(ctx, "gone")
+      mod = member(ctx, "mod", [mods])
+      alice = member(ctx, "alice", [top])
+      :ok = Servers.delete_role(ctx.server.id, gone.id, ctx.owner.id)
+
+      assert {:error, {:invalid_argument, "roles"}} ==
+               Servers.give_and_take_roles(ctx.server.id, alice.id, [low.id], [low.id], mod.id)
+
+      assert {:error, :permission_denied} ==
+               Servers.give_and_take_roles(ctx.server.id, alice.id, [low.id], [top.id], mod.id)
+
+      assert {:error, :not_found} ==
+               Servers.give_and_take_roles(ctx.server.id, alice.id, [gone.id], [], mod.id)
+
+      # Refused whole: the role it could have given was not.
+      assert held(ctx, alice) == [top.id]
+      assert {:ok, _} = Servers.give_and_take_roles(ctx.server.id, alice.id, [low.id], [], mod.id)
     end
   end
 
@@ -343,6 +511,50 @@ defmodule Lumia.RolesTest do
       # The member whose title someone else set hears of it on its own log.
       assert %V1.MembershipUpdated{member: %V1.Member{title: "Helper"}} =
                List.last(told(below, :membership_updated))
+    end
+
+    @tag failure_injection: [authorization: 17]
+    test "is what it looks like", ctx do
+      alice = member(ctx, "alice")
+
+      for title <- ["Staff\u2028Engineer", "\u202EreenignE", "\u200B"] do
+        assert {:error, {:invalid_argument, "title"}} ==
+                 Servers.update_membership(ctx.server.id, alice.id, %{title: title})
+      end
+    end
+
+    @tag failure_injection: [authorization: 19]
+    test "a member changes its own only so often, a manager's change aside", ctx do
+      alice = member(ctx, "alice")
+
+      # Ten in an hour (authorization 10), by either route.
+      for n <- 1..9 do
+        {:ok, _} = Servers.update_membership(ctx.server.id, alice.id, %{title: "Title #{n}"})
+      end
+
+      {:ok, _} = Servers.set_title(ctx.server.id, alice.id, alice.id, "Title 10")
+
+      assert {:error, :rate_limited} ==
+               Servers.update_membership(ctx.server.id, alice.id, %{title: "One more"})
+
+      assert {:error, :rate_limited} ==
+               Servers.set_title(ctx.server.id, alice.id, alice.id, "One more")
+
+      # The title held, and a switch, are no change of title.
+      assert {:ok, %{title: "Title 10", server_dms_off: true}} =
+               Servers.update_membership(ctx.server.id, alice.id, %{
+                 title: "Title 10",
+                 server_dms_off: true
+               })
+
+      # The owner's change of it is the owner's, and is not counted.
+      assert {:ok, %{title: "Four"}} =
+               Servers.set_title(ctx.server.id, alice.id, ctx.owner.id, "Four")
+
+      # Nor is what alice did in another server.
+      {:ok, elsewhere} = Servers.create_server(ctx.owner.id, "Elsewhere")
+      {:ok, _} = Servers.add_member(elsewhere.id, alice.id, ctx.owner.id)
+      assert {:ok, _} = Servers.update_membership(elsewhere.id, alice.id, %{title: "One"})
     end
 
     test "a guest has one too", ctx do
@@ -427,6 +639,14 @@ defmodule Lumia.RolesTest do
       assert [%V1.MembersUpdated{members: members}] = told(ctx.owner, :members_updated)
 
       assert members |> Enum.map(& &1.title) |> Enum.sort() == ["Designer", "Engineer"]
+    end
+
+    test "a server that is gone is told nothing, by any of the jobs" do
+      gone = Ecto.UUID.generate()
+
+      for worker <- [RolesUpdated, MembersUpdated, ServerUpdated] do
+        assert :ok = perform_job(worker, %{"server_id" => gone})
+      end
     end
 
     test "one who left before the job ran is left out", ctx do

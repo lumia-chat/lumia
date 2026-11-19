@@ -55,7 +55,7 @@ defmodule Lumia.FailureInjectionTest do
 
   test "every listed case has a tagged test, or is named as pending with its reason" do
     cases = FailureInjection.cases()
-    assert length(cases) == 45, "the three lists hold 45 cases"
+    assert length(cases) == 48, "the three lists hold 48 cases"
 
     assert_whole_suite_loaded()
 
@@ -109,7 +109,7 @@ defmodule Lumia.FailureInjectionTest do
     assert {:identity, 17, "Create an identity on a native device and leave the phrase " <> _} =
              List.last(cases)
 
-    assert Enum.count(cases, &match?({:authorization, _, _}, &1)) == 16
+    assert Enum.count(cases, &match?({:authorization, _, _}, &1)) == 19
   end
 
   defp assert_whole_suite_loaded do

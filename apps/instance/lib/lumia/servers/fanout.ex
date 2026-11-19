@@ -11,6 +11,7 @@ defmodule Lumia.Servers.Fanout do
   alias Lumia.Accounts
   alias Lumia.Repo
   alias Lumia.Servers.Member
+  alias Lumia.Servers.Server
   alias Lumia.Tx
 
   @batch 500
@@ -30,6 +31,56 @@ defmodule Lumia.Servers.Fanout do
     |> Repo.all()
     |> Enum.chunk_every(@batch)
     |> Enum.each(&tell(&1, events))
+  end
+
+  @doc """
+  Runs `fun`, a job's reading and telling for a server, while no other
+  job does so for that server on any node, and returns what it returns. A
+  large server's telling can outlast the second between two jobs; were
+  they to overlap, a member could be told what the later one read and
+  then what the earlier one did, and keep the older.
+
+  The connection is this job's until `fun` returns, and the lock is the
+  session's: a job that dies gives up both.
+  """
+  def one_at_a_time(server_id, fun) when is_function(fun, 0) do
+    key = :erlang.phash2({__MODULE__, server_id})
+
+    Repo.checkout(
+      fn ->
+        Repo.query!("SELECT pg_advisory_lock($1)", [key], timeout: :infinity)
+
+        try do
+          fun.()
+        after
+          Repo.query!("SELECT pg_advisory_unlock($1)", [key])
+        end
+      end,
+      timeout: :infinity
+    )
+  end
+
+  @doc """
+  What `read` answers once every change to the server now in flight has
+  committed; nil, and `read` not run, when the server is gone.
+
+  A change that is told to the members holds the server's row from before
+  it schedules its job until it commits (`Lumia.Servers`). A job is made
+  one with a change only while it has not begun, so it begins after that
+  change took the row, waits here for the commit, and reads the change.
+  Without the wait, a job beginning in that moment read what was there
+  before, and nothing told the members of the change until the next one.
+  """
+  def settled(server_id, read) when is_function(read, 0) do
+    {:ok, value} =
+      Tx.transact(fn ->
+        held =
+          Repo.one(from s in Server, where: s.id == ^server_id, select: s.id, lock: "FOR SHARE")
+
+        {:ok, held && read.()}
+      end)
+
+    value
   end
 
   # One batch of members, in one transaction.

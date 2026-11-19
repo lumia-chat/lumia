@@ -6,9 +6,11 @@ defmodule Lumia.Repo.Migrations.RolesAndTitles do
 
   A role's position becomes the instance's own and one role's alone in its
   server, and its name one role's alone whatever its capitals, so what is
-  kept is brought to that first: roles are numbered 1, 2, 3 in the order
-  they had, names are trimmed to 32 characters and a name held twice is
-  numbered, and a colour that is not a tone is let go.
+  kept is brought to that first: `@everyone` is put last again, wherever
+  an older release let a request put it; the other roles are numbered 1,
+  2, 3 in the order they had; names are trimmed to 32 characters and a
+  name held twice is numbered, with a number no other role's name ends up
+  with; and a colour that is not a tone is let go.
   """
 
   use Ecto.Migration
@@ -37,6 +39,8 @@ defmodule Lumia.Repo.Migrations.RolesAndTitles do
 
     create index(:member_announcements, [:server_id])
 
+    execute "UPDATE roles SET position = 1000000 WHERE is_everyone"
+
     execute """
     UPDATE roles r SET position = t.n
     FROM (SELECT id, row_number() OVER (PARTITION BY server_id ORDER BY position, inserted_at, id) AS n
@@ -47,11 +51,38 @@ defmodule Lumia.Repo.Migrations.RolesAndTitles do
     execute "UPDATE roles SET name = left(btrim(name), 32) WHERE NOT is_everyone"
     execute "UPDATE roles SET name = 'Role' WHERE NOT is_everyone AND name = ''"
 
+    # The first to hold a name keeps it, `@everyone` before any other; each
+    # later one takes the first number that leaves its name nobody's, read
+    # again after every rename, so "Mod", "mod" and "Mod 2" end as three
+    # names.
     execute """
-    UPDATE roles r SET name = left(r.name, 28) || ' ' || t.n
-    FROM (SELECT id, row_number() OVER (PARTITION BY server_id, lower(name) ORDER BY position) AS n
-          FROM roles) t
-    WHERE t.id = r.id AND t.n > 1
+    DO $$
+    DECLARE
+      doubled record;
+      n integer;
+      numbered text;
+    BEGIN
+      FOR doubled IN
+        SELECT id, server_id, name
+        FROM (SELECT id, server_id, name, position,
+                     row_number() OVER (PARTITION BY server_id, lower(name)
+                                        ORDER BY is_everyone DESC, position, id) AS place
+              FROM roles) held
+        WHERE place > 1
+        ORDER BY server_id, position, id
+      LOOP
+        n := 2;
+        LOOP
+          numbered := left(doubled.name, 31 - length(n::text)) || ' ' || n;
+          EXIT WHEN NOT EXISTS (
+            SELECT 1 FROM roles
+            WHERE server_id = doubled.server_id AND lower(name) = lower(numbered)
+          );
+          n := n + 1;
+        END LOOP;
+        UPDATE roles SET name = numbered WHERE id = doubled.id;
+      END LOOP;
+    END $$
     """
 
     execute "UPDATE roles SET color = NULL WHERE color IS NOT NULL AND color NOT IN (#{Enum.map_join(@tones, ", ", &"'#{&1}'")})"

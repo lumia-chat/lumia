@@ -10,6 +10,11 @@ defmodule Lumia.Workers.MembersUpdated do
   rows it read: a change made while it runs has a row of its own and
   schedules a job of its own. Run twice it tells twice, which costs
   nothing, since each event says how a member is and not what changed.
+
+  A change made one with this job, because the job had not begun, has
+  committed before the rows are read (`Fanout.settled/2`), and a server's
+  jobs run one at a time (`Fanout.one_at_a_time/2`), so no row is left
+  without a job and no member is told an older state after a newer.
   """
 
   use Oban.Worker,
@@ -37,12 +42,18 @@ defmodule Lumia.Workers.MembersUpdated do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"server_id" => server_id}}) do
+    Fanout.one_at_a_time(server_id, fn -> tell(server_id) end)
+  end
+
+  defp tell(server_id) do
     rows =
-      Repo.all(
-        from a in MemberAnnouncement,
-          where: a.server_id == ^server_id,
-          select: {a.id, a.account_id}
-      )
+      Fanout.settled(server_id, fn ->
+        Repo.all(
+          from a in MemberAnnouncement,
+            where: a.server_id == ^server_id,
+            select: {a.id, a.account_id}
+        )
+      end) || []
 
     account_ids = rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
     Fanout.to_members(server_id, events(server_id, account_ids))

@@ -30,7 +30,13 @@ defmodule Lumia.Workers.ServerUpdated do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"server_id" => server_id}}) do
-    case Repo.get(Server, server_id) do
+    Fanout.one_at_a_time(server_id, fn -> tell(server_id) end)
+  end
+
+  # Read once a change in flight has committed, and one job at a time for
+  # a server, as the roles' job is (`Lumia.Workers.RolesUpdated`).
+  defp tell(server_id) do
+    case Fanout.settled(server_id, fn -> Repo.get(Server, server_id) end) do
       nil ->
         :ok
 

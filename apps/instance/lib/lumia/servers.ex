@@ -54,6 +54,10 @@ defmodule Lumia.Servers do
   # A role's name and a member's title (authorization 3.5 and 10).
   @label_max 32
 
+  # How often a member may change its own title in a server (authorization
+  # 10).
+  @own_title_changes_per_hour 10
+
   # A role's colour is one of the design system's tones, as a rail folder's
   # is: each has a ground and an ink in both themes.
   @tones Lumia.Rails.tones()
@@ -250,7 +254,8 @@ defmodule Lumia.Servers do
   end
 
   defp change_membership(server_id, account_id, switches, title) do
-    with {:ok, member} <- fetch_member(server_id, account_id),
+    with :ok <- hold_for_title(server_id, title),
+         {:ok, member} <- fetch_member(server_id, account_id),
          {:ok, updated} <- member |> Ecto.Changeset.change(switches) |> Repo.update(),
          {:ok, updated} <- retitle(updated, title, account_id),
          {:ok, _} <-
@@ -290,7 +295,7 @@ defmodule Lumia.Servers do
   end
 
   defp change_title(server_id, account_id, actor_id, title) do
-    with {:ok, server} <- fetch_server(server_id),
+    with {:ok, server} <- lock_server(server_id),
          {:ok, member} <- fetch_member(server_id, account_id),
          :ok <- may_title(server, account_id, actor_id),
          {:ok, updated} <- retitle(member, title, actor_id),
@@ -301,6 +306,12 @@ defmodule Lumia.Servers do
 
   defp wanted_title(:unchanged), do: {:ok, :unchanged}
   defp wanted_title(title), do: member_title(title)
+
+  # A title is told to the server's members, so its change holds the
+  # server's row as any change that is told does (`lock_server/1`); a
+  # switch is the member's own business and holds nothing.
+  defp hold_for_title(_server_id, :unchanged), do: :ok
+  defp hold_for_title(server_id, _title), do: with({:ok, _} <- lock_server(server_id), do: :ok)
 
   defp may_title(_server, account_id, account_id), do: :ok
 
@@ -321,7 +332,8 @@ defmodule Lumia.Servers do
   defp retitle(%Member{title: title} = member, title, _actor_id), do: {:ok, member}
 
   defp retitle(member, title, actor_id) do
-    with {:ok, updated} <- member |> Ecto.Changeset.change(title: title) |> Repo.update(),
+    with :ok <- within_title_limit(member, actor_id),
+         {:ok, updated} <- member |> Ecto.Changeset.change(title: title) |> Repo.update(),
          {:ok, _} <-
            Audit.record({:server, member.server_id}, actor_id, "member.title",
              target: {:account, member.account_id},
@@ -332,6 +344,28 @@ defmodule Lumia.Servers do
       {:ok, updated}
     end
   end
+
+  # A member's own title is theirs to change, and each change is told to
+  # every member of the server (authorization 6.4), so how often is held
+  # to a limit (authorization 10), counted from the audit log, where every
+  # node's changes are. A manager's change of someone else's is not
+  # counted: it took a permission to make.
+  defp within_title_limit(%Member{account_id: actor_id} = member, actor_id) do
+    since = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+    changes =
+      Repo.one(
+        from e in Lumia.Audit.Entry,
+          where:
+            e.scope_id == ^member.server_id and e.actor_account_id == ^actor_id and
+              e.target_id == ^actor_id and e.action == "member.title" and e.created_at > ^since,
+          select: count()
+      )
+
+    if changes < @own_title_changes_per_hour, do: :ok, else: {:error, :rate_limited}
+  end
+
+  defp within_title_limit(_member, _actor_id), do: :ok
 
   defp tell_of_title(%Member{title: title}, %Member{title: title}), do: :ok
 
@@ -354,14 +388,25 @@ defmodule Lumia.Servers do
     end
   end
 
-  # Trimmed, within the limit and free of control characters, line breaks
-  # among them.
+  # Trimmed, within the limit, on one line, and what it looks like: no
+  # control character, no line or paragraph separator, none of the marks
+  # that turn the direction text is read in, and none of the spaces of no
+  # width, with which a name could be drawn as another's, backwards, or as
+  # nothing. The joiners (U+200C, U+200D) stay, which emoji and several
+  # scripts are written with, but a name of nothing else is refused.
   defp label(text) do
     text = String.trim(text)
 
-    if String.length(text) <= @label_max and not String.match?(text, ~r/\p{Cc}/u),
-      do: {:ok, text},
-      else: :error
+    cond do
+      String.length(text) > @label_max -> :error
+      String.match?(text, hidden()) -> :error
+      text != "" and not String.match?(text, ~r/[^\p{Z}\p{M}\p{Cf}]/u) -> :error
+      true -> {:ok, text}
+    end
+  end
+
+  defp hidden do
+    ~r/[\p{Cc}\p{Zl}\p{Zp}\x{00AD}\x{061C}\x{180E}\x{200B}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/u
   end
 
   @doc "Assigns a role. Member-level: MembershipUpdated on the account log, no acl bump."
@@ -376,7 +421,8 @@ defmodule Lumia.Servers do
 
   defp change_roles(server_id, account_id, role_id, actor_id, op) do
     Tx.transact(fn ->
-      with {:ok, actor} <- actor(server_id, actor_id),
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, actor} <- actor(server_id, actor_id),
            :ok <- manageable(server_id, actor, role_id),
            {:ok, _} <- apply_role_change(server_id, account_id, role_id, op),
            {:ok, member} <- fetch_member(server_id, account_id),
@@ -406,12 +452,38 @@ defmodule Lumia.Servers do
   `roles_per_member` limit (section 10). Returns the member.
   """
   def set_roles(server_id, account_id, role_ids, actor_id) when is_list(role_ids) do
-    wanted = Enum.uniq(role_ids)
+    change_member_roles(server_id, account_id, actor_id, fn _held -> Enum.uniq(role_ids) end)
+  end
 
+  @doc """
+  Gives a member the roles of `add` and takes away those of `remove`,
+  whatever else it holds, as `set_roles/4` sets them all: what a client
+  sends, so that a change made from a list a moment old undoes nobody
+  else's. A role to give that is already held, or one to take that is
+  not, changes nothing; a role named in both is
+  `{:error, {:invalid_argument, "roles"}}`. Returns the member.
+  """
+  def give_and_take_roles(server_id, account_id, add, remove, actor_id)
+      when is_list(add) and is_list(remove) do
+    if Enum.any?(add, &(&1 in remove)) do
+      {:error, {:invalid_argument, "roles"}}
+    else
+      change_member_roles(server_id, account_id, actor_id, fn held ->
+        Enum.uniq(held ++ add) -- remove
+      end)
+    end
+  end
+
+  # `wanted` is asked what the member is to hold, of what it holds, once
+  # the server's row is held: the roles are read and written with no other
+  # change to the server's roles or members between.
+  defp change_member_roles(server_id, account_id, actor_id, wanted) do
     Tx.transact(fn ->
-      with {:ok, member} <- fetch_member(server_id, account_id),
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, member} <- fetch_member(server_id, account_id),
            {:ok, actor} <- actor(server_id, actor_id),
            current = role_ids(server_id, account_id),
+           wanted = wanted.(current),
            changes = (wanted -- current) ++ (current -- wanted),
            :ok <- check_manageable(server_id, actor, changes),
            :ok <- check_member_role_limit(length(wanted)),
@@ -552,9 +624,12 @@ defmodule Lumia.Servers do
 
   @doc """
   Updates a role's name, colour, tag switch or permissions, whichever
-  `attrs` has; its position is never changed here (`reorder_roles/3`). Of
-  `@everyone` only the permissions change. Bumps every channel in the
-  server, and every member is told (`RolesUpdated`).
+  `attrs` has; its position is never changed here (`reorder_roles/3`). Its
+  permissions are `:permissions`, the whole set, or `:grant` and `:revoke`,
+  the ones switched on and off with the rest as they are; one in both is
+  `{:error, {:invalid_argument, "permissions"}}`. Of `@everyone` only the
+  permissions change. Bumps every channel in the server, and every member
+  is told (`RolesUpdated`).
   """
   def update_role(server_id, role_id, actor_id, attrs) do
     Tx.transact(fn ->
@@ -565,7 +640,7 @@ defmodule Lumia.Servers do
              (role.is_everyone or Authz.can_manage_role?(actor, role)) ||
                {:error, :permission_denied},
            :ok <- require_permission(actor, :manage_roles),
-           new_perms = new_permissions(role, attrs),
+           {:ok, new_perms} <- new_permissions(role, attrs),
            true <-
              Authz.can_grant?(actor, new_perms &&& bnot(role.permissions)) ||
                {:error, :permission_denied},
@@ -756,10 +831,15 @@ defmodule Lumia.Servers do
     end
   end
 
-  # A server's roles are changed one request at a time: the order and the
-  # names are held to rules that span its roles.
+  # A server's roles, and its members' roles and titles, are changed one
+  # request at a time. The order and the names are held to rules that span
+  # its roles; who manages whom is read from an order no reorder is moving;
+  # and the job that tells the members (`Lumia.Servers.Fanout.settled/2`)
+  # reads only once this is let go, so a change made one with a job that
+  # had not begun is in what that job reads. The key is not changed, so
+  # rows that refer to the server (someone joining) do not wait.
   defp lock_server(server_id) do
-    case Repo.one(from s in Server, where: s.id == ^server_id, lock: "FOR UPDATE") do
+    case Repo.one(from s in Server, where: s.id == ^server_id, lock: "FOR NO KEY UPDATE") do
       nil -> {:error, :not_found}
       server -> {:ok, server}
     end
@@ -1323,10 +1403,20 @@ defmodule Lumia.Servers do
     )
   end
 
+  # The whole set where `attrs` has one; otherwise the role's own with
+  # `:grant` switched on and `:revoke` off, each as it is where neither
+  # names it.
   defp new_permissions(_role, %{permissions: names}) when is_list(names),
-    do: Permission.to_bits(names)
+    do: {:ok, Permission.to_bits(names)}
 
-  defp new_permissions(role, _attrs), do: role.permissions
+  defp new_permissions(role, attrs) do
+    grant = Permission.to_bits(Map.get(attrs, :grant, []))
+    revoke = Permission.to_bits(Map.get(attrs, :revoke, []))
+
+    if (grant &&& revoke) == 0,
+      do: {:ok, (role.permissions ||| grant) &&& bnot(revoke)},
+      else: {:error, {:invalid_argument, "permissions"}}
+  end
 
   defp deletable(%Role{is_everyone: true}), do: {:error, :permission_denied}
   defp deletable(%Role{}), do: :ok

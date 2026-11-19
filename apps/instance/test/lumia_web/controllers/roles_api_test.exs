@@ -111,6 +111,57 @@ defmodule LumiaWeb.RolesApiTest do
     end
   end
 
+  describe "PATCH /servers/{id}/roles/{role_id}" do
+    test "changes what it names and nothing else of the role", ctx do
+      design = role(ctx, "Design", [:manage_messages, :create_invites])
+      path = "/servers/#{ctx.server.id}/roles/#{design.id}"
+
+      conn =
+        send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateRoleRequest{
+          color: "sky",
+          grant: [:MANAGE_CHANNELS],
+          revoke: [:CREATE_INVITES]
+        })
+
+      assert %V1.Role{name: "Design", color: "sky", hide_tag: false, permissions: permissions} =
+               V1.Role.decode(conn.resp_body)
+
+      assert Enum.sort(permissions) == [:MANAGE_CHANNELS, :MANAGE_MESSAGES]
+
+      # A colour named and empty is none; a name alone leaves it.
+      conn = send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateRoleRequest{color: ""})
+      assert %V1.Role{color: ""} = V1.Role.decode(conn.resp_body)
+
+      conn =
+        send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateRoleRequest{
+          name: "Designers",
+          hide_tag: true
+        })
+
+      assert %V1.Role{name: "Designers", color: "", hide_tag: true, permissions: ^permissions} =
+               V1.Role.decode(conn.resp_body)
+    end
+
+    test "refuses a permission switched both ways, and a member without MANAGE_ROLES", ctx do
+      design = role(ctx, "Design")
+      path = "/servers/#{ctx.server.id}/roles/#{design.id}"
+
+      conn =
+        send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateRoleRequest{
+          grant: [:CREATE_INVITES],
+          revoke: [:CREATE_INVITES]
+        })
+
+      assert conn.status == 400
+      assert %V1.Error{details: %{"field" => "permissions"}} = error(conn)
+
+      conn =
+        send_proto(build_conn(), ctx.member, :patch, path, %V1.UpdateRoleRequest{name: "Mine"})
+
+      assert conn.status == 403
+    end
+  end
+
   describe "PUT /servers/{id}/role-order" do
     test "answers the roles in their new order, @everyone last", ctx do
       [a, b] = for name <- ~w(a b), do: role(ctx, name)
@@ -188,6 +239,43 @@ defmodule LumiaWeb.RolesApiTest do
 
       conn = send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateMemberRequest{title: ""})
       assert %V1.Member{title: ""} = V1.Member.decode(conn.resp_body)
+    end
+
+    test "roles to give and to take leave the member's others as they are", ctx do
+      mods = role(ctx, "mods")
+      events = role(ctx, "events")
+      design = role(ctx, "design")
+
+      {:ok, _} =
+        Servers.set_roles(ctx.server.id, ctx.member.id, [mods.id, events.id], ctx.owner.id)
+
+      path = "/servers/#{ctx.server.id}/members/#{ctx.member.id}"
+
+      conn =
+        send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateMemberRequest{
+          add_role_ids: [Proto.uuid(design.id)],
+          remove_role_ids: [Proto.uuid(mods.id)],
+          title: "Designer"
+        })
+
+      assert %V1.Member{role_ids: role_ids, title: "Designer"} = V1.Member.decode(conn.resp_body)
+
+      assert role_ids |> Enum.map(&Proto.from_uuid/1) |> Enum.sort() ==
+               Enum.sort([events.id, design.id])
+    end
+
+    test "the whole set and roles to give or take are not sent together", ctx do
+      mods = role(ctx, "mods")
+      path = "/servers/#{ctx.server.id}/members/#{ctx.member.id}"
+
+      conn =
+        send_proto(build_conn(), ctx.owner, :patch, path, %V1.UpdateMemberRequest{
+          roles: %V1.RoleIds{role_ids: []},
+          add_role_ids: [Proto.uuid(mods.id)]
+        })
+
+      assert conn.status == 400
+      assert %V1.Error{details: %{"field" => "roles"}} = error(conn)
     end
 
     test "a title refused undoes the roles sent with it", ctx do

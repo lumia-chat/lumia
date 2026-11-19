@@ -110,6 +110,7 @@ defmodule LumiaWeb.Router do
     get "/servers/:server_id/roles", ServerController, :roles
     post "/servers/:server_id/roles", ServerController, :create_role
     put "/servers/:server_id/roles/:role_id", ServerController, :update_role
+    patch "/servers/:server_id/roles/:role_id", ServerController, :patch_role
     delete "/servers/:server_id/roles/:role_id", ServerController, :delete_role
     put "/servers/:server_id/role-order", ServerController, :reorder_roles
 

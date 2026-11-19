@@ -361,10 +361,15 @@ message UpdateMemberRequest {
   MembershipKind kind = 5;
   google.protobuf.Timestamp expires_at = 6;
   // The whole set of roles the member is to hold, @everyone never among
-  // them.
+  // them. Not with add_role_ids or remove_role_ids.
   RoleIds roles = 7;
   // Up to 32 characters once trimmed; empty for none.
   optional string title = 8;
+  // Roles to give and roles to take away, whatever else the member holds:
+  // what a client sends, so that two changes made at once both stand. One
+  // already held, or not held, changes nothing; a role in both is refused.
+  repeated bytes add_role_ids = 9;
+  repeated bytes remove_role_ids = 10;
 }
 
 message RoleIds { repeated bytes role_ids = 1; }
@@ -377,6 +382,19 @@ message ListRolesResponse { repeated Role roles = 1; }
 message ReorderRolesRequest { repeated bytes role_ids = 1; }
 
 message UpsertRoleRequest { Role role = 1; }
+
+// PATCH /servers/{server_id}/roles/{role_id}: what is named of a role and
+// nothing else of it (specs/authorization.md 3.5), so that an editor
+// saves what it changed and not what it was showing. Answers Role.
+message UpdateRoleRequest {
+  optional string name = 1;
+  optional string color = 2;
+  optional bool hide_tag = 3;
+  // Permissions switched on and switched off; one named in neither stays
+  // as it is, and one named in both is refused.
+  repeated Permission grant = 4;
+  repeated Permission revoke = 5;
+}
 
 // ---- Events, messages, snapshots -------------------------------------------
 

@@ -7,7 +7,9 @@ defmodule Lumia.Workers.RolesUpdated do
 
   Scheduled when a change commits. Edits made while a job waits are one
   job, which carries the roles as they are when it runs; an edit made
-  while one runs schedules another.
+  while one runs schedules another. The roles are read once the edits in
+  flight have committed (`Fanout.settled/2`), and a server's jobs run one
+  at a time (`Fanout.one_at_a_time/2`).
   """
 
   use Oban.Worker,
@@ -29,9 +31,13 @@ defmodule Lumia.Workers.RolesUpdated do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"server_id" => server_id}}) do
-    case Servers.roles(server_id) do
+    Fanout.one_at_a_time(server_id, fn -> tell(server_id) end)
+  end
+
+  defp tell(server_id) do
+    case Fanout.settled(server_id, fn -> Servers.roles(server_id) end) do
       # The server is gone, and its members with it.
-      [] ->
+      nil ->
         :ok
 
       roles ->

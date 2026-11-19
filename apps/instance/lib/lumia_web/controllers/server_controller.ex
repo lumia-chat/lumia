@@ -279,7 +279,8 @@ defmodule LumiaWeb.ServerController do
   @doc """
   `PATCH /servers/{server_id}/members/{account_id}`: the member's roles,
   its title, or both (authorization 3.3 and 3.5); what the request leaves
-  out is left as it is.
+  out is left as it is. The roles are the whole set (`roles`), or those
+  to give and to take away (`add_role_ids`, `remove_role_ids`), not both.
   """
   def update_member(conn, %{"server_id" => server_id, "account_id" => account_id}) do
     actor = conn.assigns.current_account_id
@@ -294,24 +295,49 @@ defmodule LumiaWeb.ServerController do
 
   # Both or neither: a title refused undoes the roles given with it.
   defp change_member(server_id, account_id, actor, %V1.UpdateMemberRequest{} = req) do
-    with {:ok, member} <- set_roles(server_id, account_id, actor, req.roles) do
+    with {:ok, member} <- set_roles(server_id, account_id, actor, req) do
       set_title(server_id, account_id, actor, req.title, member)
     end
   end
 
-  defp set_roles(server_id, account_id, _actor, nil) do
+  defp set_roles(server_id, account_id, _actor, %V1.UpdateMemberRequest{
+         roles: nil,
+         add_role_ids: [],
+         remove_role_ids: []
+       }) do
     case Repo.get_by(Member, server_id: server_id, account_id: account_id) do
       nil -> {:error, :not_found}
       member -> {:ok, member}
     end
   end
 
-  defp set_roles(server_id, account_id, actor, %V1.RoleIds{role_ids: ids}) do
-    wanted = Enum.map(ids, &Proto.from_uuid/1)
+  defp set_roles(server_id, account_id, actor, %V1.UpdateMemberRequest{
+         roles: %V1.RoleIds{role_ids: ids},
+         add_role_ids: [],
+         remove_role_ids: []
+       }) do
+    with {:ok, wanted} <- role_ids(ids),
+         do: Servers.set_roles(server_id, account_id, wanted, actor)
+  end
 
-    if Enum.all?(wanted, &is_binary/1),
-      do: Servers.set_roles(server_id, account_id, wanted, actor),
-      else: {:error, {:invalid_argument, "roles"}}
+  defp set_roles(server_id, account_id, actor, %V1.UpdateMemberRequest{
+         roles: nil,
+         add_role_ids: add,
+         remove_role_ids: remove
+       }) do
+    with {:ok, add} <- role_ids(add),
+         {:ok, remove} <- role_ids(remove),
+         do: Servers.give_and_take_roles(server_id, account_id, add, remove, actor)
+  end
+
+  # The whole set and what to give or take are two ways to say it; a
+  # request says one.
+  defp set_roles(_server_id, _account_id, _actor, _req),
+    do: {:error, {:invalid_argument, "roles"}}
+
+  defp role_ids(ids) do
+    ids = Enum.map(ids, &Proto.from_uuid/1)
+    if Enum.all?(ids, &is_binary/1), do: {:ok, ids}, else: {:error, {:invalid_argument, "roles"}}
   end
 
   defp set_title(_server_id, _account_id, _actor, nil, member), do: {:ok, member}
@@ -376,6 +402,34 @@ defmodule LumiaWeb.ServerController do
            ) do
       ProtoConn.render(conn, Proto.role(updated))
     end
+  end
+
+  @doc """
+  `PATCH /servers/{server_id}/roles/{role_id}`: what the request names of
+  the role, and nothing else of it (authorization 3.5).
+  """
+  def patch_role(conn, %{"server_id" => server_id, "role_id" => role_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, req} <- ProtoConn.decode(conn, V1.UpdateRoleRequest),
+         {:ok, updated} <-
+           Servers.update_role(
+             server_id,
+             role_id,
+             conn.assigns.current_account_id,
+             role_changes(req)
+           ) do
+      ProtoConn.render(conn, Proto.role(updated))
+    end
+  end
+
+  defp role_changes(%V1.UpdateRoleRequest{} = req) do
+    req
+    |> Map.take([:name, :color, :hide_tag])
+    |> Map.reject(fn {_, v} -> is_nil(v) end)
+    |> Map.merge(%{
+      grant: Enum.map(req.grant, &Proto.from_permission/1),
+      revoke: Enum.map(req.revoke, &Proto.from_permission/1)
+    })
   end
 
   def delete_role(conn, %{"server_id" => server_id, "role_id" => role_id}) do
