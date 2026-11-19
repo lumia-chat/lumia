@@ -7,6 +7,7 @@
 // as the launch's preset says (`LUMIA_DEV_PRESET=minimal` hides them), and
 // `reactions-preferences` the Preferences page where they are chosen.
 // `profile-updated` is a changed name drawn at once (issue #15).
+// `tags` is a tag on every tone and at its longest (architecture 7.5).
 // `linking-…` and `linkprompt-…` are linking by a prompt's stages.
 // `restore-ask` is Restore's first question, `restore-keep` its devices to
 // keep with none ticked and `restore-keep-1` with one; `removed` is the
@@ -122,14 +123,55 @@ struct ReactionsScene: View {
     }
 }
 
+/// `tags`: the "Tags" board's figures with no instance (architecture 7.5):
+/// a tag on each of the nine tones and on the plain chip, at a message's
+/// size and at a member row's, a title's, and the accent's; then the
+/// longest a tag can be, 32 characters, beside a name in a message and in a
+/// member's row, where it gives way before the name does.
+struct TagsScene: View {
+    private let title = "Principal Reliability Engineer I"
+    private let role = TagLook(label: "Community and Events Coordinator", tone: .green)
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                VStack(alignment: .leading, spacing: LumiaTokens.space8) {
+                    ForEach([LumiaTag.Size.md, .sm], id: \.self) { size in
+                        LumiaFlow(spacing: LumiaTokens.space6) {
+                            ForEach(Roles.tones, id: \.self) { tone in LumiaTag(TagLook(label: tone.rawValue.capitalized, tone: tone), size: size) }
+                            LumiaTag("No colour", size: size)
+                            LumiaTag("Staff Engineer", size: size)
+                            LumiaTag("You", tone: .accent, size: size)
+                        }
+                    }
+                }
+                .padding(.horizontal, LumiaTokens.space16)
+                VStack(alignment: .leading, spacing: 0) {
+                    LumiaMessageRow(author: "Devon Park", tone: .purple, time: "9:11 AM", text: "Looks great.", tag: TagLook(label: title, tone: nil))
+                    LumiaMessageRow(author: "Devon Park", tone: .purple, time: "9:12 AM", text: "A role’s name can be as long.", tag: role)
+                    LumiaMessageRow(author: "Maximiliana Featherstonehaugh", tone: .sky, time: "9:13 AM", text: "And a long name keeps its letters before the tag does.", tag: role)
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    LumiaMemberRow(name: "Devon Park", tone: .purple, role: TagLook(label: title, tone: nil), status: "ONLINE")
+                    LumiaMemberRow(name: "Priya Natarajan", tone: .amber, role: role, status: "ONLINE")
+                    LumiaMemberRow(name: "Maximiliana Featherstonehaugh", tone: .sky, tag: "You", role: role, status: "ONLINE")
+                    LumiaMemberRow(name: "Leo Martins", tone: .sky, role: TagLook(label: "Mobile Lead", tone: nil), status: "ONLINE")
+                }
+            }
+            .padding(.vertical, LumiaTokens.space16)
+        }
+        .background(LumiaTokens.surface.color)
+    }
+}
+
 /// `profile-updated`: a server's members and a few messages, and two
 /// seconds in, Ada's `ProfileUpdate` (issue #15) written over the list as
 /// the session writes it: her rows draw her new name and handle at once,
 /// her server nickname stays, and Grace is as she was.
 struct ProfileUpdatedScene: View {
     @State private var members = [
-        MemberSummary(accountId: "ada", handle: "ada", displayName: "Ada", nickname: "Countess", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false),
-        MemberSummary(accountId: "grace", handle: "grace", displayName: "Grace Hopper", nickname: "", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false),
+        MemberSummary(accountId: "ada", handle: "ada", displayName: "Ada", nickname: "Countess", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false, roleIds: [], title: "", guest: false, owner: false, tag: nil, canManage: false),
+        MemberSummary(accountId: "grace", handle: "grace", displayName: "Grace Hopper", nickname: "", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false, roleIds: [], title: "", guest: false, owner: false, tag: nil, canManage: false),
     ]
 
     private func name(_ id: String) -> String {

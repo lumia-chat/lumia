@@ -6,7 +6,7 @@ import XCTest
 
 final class ProfilesTests: XCTestCase {
     private func member(_ id: String, name: String, nickname: String = "", avatar: String = "", invitesOnly: Bool = false, dmsOff: Bool = false) -> MemberSummary {
-        MemberSummary(accountId: id, handle: id, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: avatar, channelAddsByInvitation: invitesOnly, serverDmsOff: dmsOff)
+        MemberSummary(accountId: id, handle: id, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: avatar, channelAddsByInvitation: invitesOnly, serverDmsOff: dmsOff, roleIds: [], title: "", guest: false, owner: false, tag: nil, canManage: false)
     }
 
     private func snapshot(_ id: String, name: String, avatar: String = "") -> SnapshotSummary {

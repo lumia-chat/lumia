@@ -11,7 +11,7 @@ final class MembershipTests: XCTestCase {
     }
 
     private func member(_ id: String, name: String, handle: String = "", nickname: String = "", invitesOnly: Bool = false, dmsOff: Bool = false) -> MemberSummary {
-        MemberSummary(accountId: id, handle: handle.isEmpty ? id : handle, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: invitesOnly, serverDmsOff: dmsOff)
+        MemberSummary(accountId: id, handle: handle.isEmpty ? id : handle, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: invitesOnly, serverDmsOff: dmsOff, roleIds: [], title: "", guest: false, owner: false, tag: nil, canManage: false)
     }
 
     private func message(_ id: String, author: String, at: Int64, notice: String = "", about: String = "") -> MessageSummary {

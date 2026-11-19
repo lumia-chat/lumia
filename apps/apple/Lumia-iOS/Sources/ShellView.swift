@@ -55,7 +55,12 @@ struct ShellView: View {
                 case .addServer: AddServerScreen(session: session) { id in path = []; place = .server(id: id) }
                 case let .newChannel(serverID): NewChannelScreen(session: session, server: servers.first { $0.serverId == serverID }) { id in path = [.channel(id: id)] }
                 case let .invite(serverID): InviteScreen(session: session, server: servers.first { $0.serverId == serverID })
-                case let .serverSettings(serverID): ServerSettingsScreen(session: session, serverID: serverID)
+                case let .serverSettings(serverID): ServerSettingsSectionsScreen(session: session, serverID: serverID, path: $path)
+                case let .serverOverview(serverID): ServerOverviewScreen(session: session, serverID: serverID)
+                case let .roles(serverID): RolesScreen(session: session, serverID: serverID, path: $path)
+                case let .role(serverID, roleID): RoleEditorScreen(session: session, serverID: serverID, roleID: roleID, path: $path)
+                case let .roleMembers(serverID, roleID): RoleMembersScreen(session: session, serverID: serverID, roleID: roleID)
+                case let .serverMembers(serverID): ServerMembersScreen(session: session, serverID: serverID)
                 case let .browse(serverID): BrowseScreen(session: session, serverID: serverID, path: $path)
                 case let .channelMembers(channelID): ChannelMembersScreen(session: session, channelID: channelID, path: $path)
                 case let .addPeople(channelID): AddPeopleScreen(session: session, channelID: channelID)
@@ -163,6 +168,23 @@ struct ShellView: View {
                 case "newchannel": place = .server(id: first); path = [.newChannel(serverID: first)]
                 case "invite": place = .server(id: first); path = [.invite(serverID: first)]
                 case "serversettings": place = .server(id: first); path = [.serverSettings(serverID: first)]
+                // Server settings' sections (architecture 7.5): Overview (LUMIA_DEV_SCROLL `tag` or `defaults`
+                // shows it further down), Roles, a role's editor (LUMIA_DEV_ROLE names it, else the first;
+                // LUMIA_DEV_SCROLL `permissions` or `end`, LUMIA_DEV_ASK `delete` or `administrator` its questions),
+                // a new role's, the members to give a role to, and Members (LUMIA_DEV_PERSON opens that row).
+                case "overview": place = .server(id: first); path = [.serverSettings(serverID: first), .serverOverview(serverID: first)]
+                case "roles": place = .server(id: first); path = [.serverSettings(serverID: first), .roles(serverID: first)]
+                case "role", "rolemembers":
+                    let roles = servers.first { $0.serverId == first }?.roles ?? []
+                    let role = ProcessInfo.processInfo.environment["LUMIA_DEV_ROLE"].flatMap { name in roles.first { $0.name == name } } ?? roles.first
+                    place = .server(id: first)
+                    path = [.serverSettings(serverID: first), .roles(serverID: first)]
+                    if let role {
+                        path.append(.role(serverID: first, roleID: role.roleId))
+                        if screen == "rolemembers" { path.append(.roleMembers(serverID: first, roleID: role.roleId)) }
+                    }
+                case "newrole": place = .server(id: first); path = [.serverSettings(serverID: first), .roles(serverID: first), .role(serverID: first, roleID: nil)]
+                case "servermembers": place = .server(id: first); path = [.serverSettings(serverID: first), .serverMembers(serverID: first)]
                 case "mentions": place = .server(id: first); path = [.mentions(serverID: first)]
                 case "homementions": place = .home; path = [.mentions(serverID: nil)]
                 // Setting up private messages (issue #20): the phrase (after the

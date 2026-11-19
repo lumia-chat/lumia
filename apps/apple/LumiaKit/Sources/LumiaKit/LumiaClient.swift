@@ -108,6 +108,29 @@ public actor LumiaClient {
     public func setDefaultChannels(serverID: String, channelIDs: [String]) throws -> SnapshotSummary {
         try inner.setDefaultChannels(serverId: serverID, channelIds: channelIDs)
     }
+    /// Roles and titles (architecture 7.5): a server's roles made, changed,
+    /// deleted and put in order, and which of the two its tags show, each
+    /// returning the snapshot as it then is; a member's roles and title,
+    /// each returning the member as the server now shows them; a member
+    /// removed; and the members the core keeps of a server, each with its
+    /// tag as the server now shows it, read from the local store with no request.
+    public func createRole(serverID: String, name: String, color: String, hideTag: Bool, permissions: [String]) throws -> SnapshotSummary {
+        try inner.createRole(serverId: serverID, name: name, color: color, hideTag: hideTag, permissions: permissions)
+    }
+    public func updateRole(serverID: String, roleID: String, name: String, color: String, hideTag: Bool, permissions: [String]) throws -> SnapshotSummary {
+        try inner.updateRole(serverId: serverID, roleId: roleID, name: name, color: color, hideTag: hideTag, permissions: permissions)
+    }
+    public func deleteRole(serverID: String, roleID: String) throws -> SnapshotSummary { try inner.deleteRole(serverId: serverID, roleId: roleID) }
+    public func reorderRoles(serverID: String, roleIDs: [String]) throws -> SnapshotSummary { try inner.reorderRoles(serverId: serverID, roleIds: roleIDs) }
+    public func setTagTitles(serverID: String, titles: Bool) throws -> SnapshotSummary { try inner.setTagTitles(serverId: serverID, titles: titles) }
+    public func setMemberRoles(serverID: String, accountID: String, roleIDs: [String]) throws -> MemberSummary {
+        try inner.setMemberRoles(serverId: serverID, accountId: accountID, roleIds: roleIDs)
+    }
+    public func setMemberTitle(serverID: String, accountID: String, title: String) throws -> MemberSummary {
+        try inner.setMemberTitle(serverId: serverID, accountId: accountID, title: title)
+    }
+    public func removeMember(serverID: String, accountID: String) throws { try inner.removeMember(serverId: serverID, accountId: accountID) }
+    public func keptMembers(serverID: String) throws -> [MemberSummary] { try inner.keptMembers(serverId: serverID) }
     /// The server DM with a member of the server, started if there is none (architecture 6.4).
     public func openServerDM(serverID: String, accountID: String) throws -> ChannelSummary {
         try inner.openServerDm(serverId: serverID, accountId: accountID)

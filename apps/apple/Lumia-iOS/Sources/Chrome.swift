@@ -23,7 +23,16 @@ enum Screen: Hashable {
     case addServer
     case newChannel(serverID: String)
     case invite(serverID: String)
+    /// A server's settings (architecture 6.7 and 7.5, `RolesScreens.swift`):
+    /// its sections as a screen of their own, then each pushed over it:
+    /// Overview, Roles with a role's editor (nil for a new role) and the
+    /// members to give it to, and Members.
     case serverSettings(serverID: String)
+    case serverOverview(serverID: String)
+    case roles(serverID: String)
+    case role(serverID: String, roleID: String?)
+    case roleMembers(serverID: String, roleID: String)
+    case serverMembers(serverID: String)
     case browse(serverID: String)
     case channelMembers(channelID: String)
     case addPeople(channelID: String)
@@ -135,13 +144,16 @@ struct PanelScreen<Lead: View, Content: View>: View {
     var subtitle: String?
     @ViewBuilder let lead: () -> Lead
     var actions: [(icon: String, label: String, run: () -> Void)] = []
+    /// The actions, by label, that do nothing as things stand (a Save with
+    /// nothing to save): drawn faint, and not pressed.
+    var inactive: Set<String> = []
     /// What the back button does where the panel is not pushed (Restore
     /// from the sign-in screen); popping it otherwise.
     var close: (() -> Void)?
     @ViewBuilder let content: () -> Content
 
-    init(back: String, title: String, subtitle: String? = nil, actions: [(icon: String, label: String, run: () -> Void)] = [], close: (() -> Void)? = nil, @ViewBuilder lead: @escaping () -> Lead = { EmptyView() }, @ViewBuilder content: @escaping () -> Content) {
-        self.back = back; self.title = title; self.subtitle = subtitle; self.actions = actions; self.close = close; self.lead = lead; self.content = content
+    init(back: String, title: String, subtitle: String? = nil, actions: [(icon: String, label: String, run: () -> Void)] = [], inactive: Set<String> = [], close: (() -> Void)? = nil, @ViewBuilder lead: @escaping () -> Lead = { EmptyView() }, @ViewBuilder content: @escaping () -> Content) {
+        self.back = back; self.title = title; self.subtitle = subtitle; self.actions = actions; self.inactive = inactive; self.close = close; self.lead = lead; self.content = content
     }
 
     var body: some View {
@@ -161,12 +173,14 @@ struct PanelScreen<Lead: View, Content: View>: View {
                 }
                 Spacer(minLength: 0)
                 ForEach(Array(actions.enumerated()), id: \.offset) { _, a in
+                    let off = inactive.contains(a.label)
                     Button(action: a.run) {
                         Image(systemName: a.icon).font(.system(size: 17))
-                            .foregroundStyle(LumiaTokens.iconStrong.color)
+                            .foregroundStyle(off ? LumiaTokens.inkFaint.color : LumiaTokens.iconStrong.color)
                             .frame(width: LumiaTokens.controlHeight, height: LumiaTokens.controlHeight)
                     }
                     .buttonStyle(.plain)
+                    .disabled(off)
                     .accessibilityLabel(a.label)
                 }
             }

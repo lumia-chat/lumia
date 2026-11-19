@@ -90,10 +90,11 @@ struct ServerScreen: View {
                     Button("Your settings in \(server.name)") { path.append(.yourSettings(serverID: server.serverId)) }
                         .buttonStyle(.lumiaLink)
                         .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
-                    // Offered to whoever may change them (architecture 6.7): the
-                    // account's own permission there, from the snapshot.
-                    if server.canManage {
-                        Button("Server settings") { path.append(.serverSettings(serverID: server.serverId)) }
+                    // Offered to whoever may use one of its sections (architecture
+                    // 6.7 and 7.5): the account's own permissions there, from the
+                    // snapshot. With one section it opens on that one.
+                    if !Roles.sections(server).isEmpty {
+                        Button("Server settings") { path.append(Screen.settings(of: server)) }
                             .buttonStyle(.lumiaLink)
                             .padding(.horizontal, LumiaTokens.space10).padding(.top, LumiaTokens.space4)
                     }

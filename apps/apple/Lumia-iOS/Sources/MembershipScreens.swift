@@ -147,9 +147,12 @@ struct ChannelMembersScreen: View {
                 if !error.isEmpty { LumiaErrorText(error).plainRow() }
                 ForEach(ids ?? [], id: \.self) { id in
                     let line = memberLine(session, id)
+                    // Their tag in the server, a role on its tone or a title on the plain chip
+                    // (architecture 7.5); this account with none is "You", as on the web.
+                    let role = channel.flatMap { session.tag(of: id, in: $0.serverId) }
                     HStack(spacing: 2) {
                         Button { if let s = channel?.serverId { openPerson(PersonInServer(accountID: id, serverID: s)) } } label: {
-                            LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), picture: session.picture(of: id), tag: id == session.me ? "You" : nil, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
+                            LumiaMemberRow(name: line.name, subtitle: line.handle, tone: .of(id), picture: session.picture(of: id), tag: role == nil && id == session.me ? "You" : nil, role: role, status: channel.flatMap { session.presence(of: id, in: $0.serverId) })
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -450,21 +453,121 @@ struct ProfileCard: View {
     }
     private var me: Bool { person.accountID == session.me }
     private var name: String { session.name(of: person.accountID) }
+    /// Them as this server's list has them: their roles, title and marks are the server's.
+    private var listed: MemberSummary? { session.member(person.accountID, in: person.serverID) }
+    /// What this account may change of them, from the card as from their row in Members.
+    private var offers: MemberOffers? {
+        guard let server, let listed else { return nil }
+        return Roles.offers(server, member: listed, me: me)
+    }
+    /// Their roles or their title being changed, in the card's place.
+    @State private var editing: MemberEditor.Part?
 
     var body: some View {
+        Group {
+            if let editing, let server, let listed {
+                editor(editing, server, listed)
+            } else {
+                card
+            }
+        }
+        .padding(LumiaTokens.space24)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(LumiaTokens.surface.color)
+        #if DEBUG
+        // The smoke run's pictures of what each Edit opens (`LUMIA_DEV_EDIT` `roles` or `title`).
+        .task {
+            switch ProcessInfo.processInfo.environment["LUMIA_DEV_EDIT"] {
+            case "roles": editing = .roles
+            case "title": editing = .title
+            default: break
+            }
+        }
+        #endif
+    }
+
+    /// What an Edit opens, in the card's place (the "Profile card" board's
+    /// two): the roles to tick, or the title, with Cancel and Save.
+    private func editor(_ part: MemberEditor.Part, _ server: ServerSummary, _ listed: MemberSummary) -> some View {
+        VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space4) {
+                Text(part == .roles ? "Roles" : "Title").font(LumiaTokens.titleChannel.font).foregroundStyle(LumiaTokens.ink.color)
+                    .accessibilityAddTraits(.isHeader)
+                Text("\(name) in \(server.name)").font(LumiaTokens.textSubtitle.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+            }
+            ScrollView {
+                MemberEditor(session: session, server: server, member: listed, me: me, parts: [part], kicks: false) { editing = nil }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
+
+    /// Their title under their name, with Edit for whoever may change it; "Add a title" on one's own card with none.
+    @ViewBuilder private var titleLine: some View {
+        let title = listed?.title ?? ""
+        let may = offers?.title ?? false
+        if !title.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
+                Text(title).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.inkBody.color)
+                if may {
+                    Button("Edit") { editing = .title }.buttonStyle(CardEditStyle())
+                        .accessibilityLabel("Edit title")
+                }
+            }
+        } else if may {
+            Button("Add a title") { editing = .title }.buttonStyle(CardEditStyle())
+        }
+    }
+
+    /// Every role they hold, in the server's order, with Edit for whoever manages roles.
+    @ViewBuilder private var rolesPart: some View {
+        let held = Roles.held(server?.roles ?? [], roleIDs: listed?.roleIds ?? [])
+        let may = offers?.roles ?? false
+        if !held.isEmpty || may {
+            VStack(alignment: .leading, spacing: LumiaTokens.space6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Roles").font(LumiaTokens.textSection.font).foregroundStyle(LumiaTokens.inkMuted.color)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: LumiaTokens.space8)
+                    if may {
+                        Button("Edit") { editing = .roles }.buttonStyle(CardEditStyle())
+                            .accessibilityLabel("Edit roles")
+                    }
+                }
+                if held.isEmpty {
+                    Text(RoleWords.noRoles).font(LumiaTokens.textLabel.font.weight(.regular)).foregroundStyle(LumiaTokens.inkQuiet.color)
+                } else {
+                    LumiaFlow(spacing: LumiaTokens.space6) {
+                        ForEach(held) { r in LumiaTag(TagLook(label: r.label, tone: r.tone)) }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(held.map(\.label).joined(separator: ", "))
+                }
+            }
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: LumiaTokens.space16) {
             HStack(spacing: LumiaTokens.space14) {
                 LumiaAvatar(initials: initials(of: name), tone: .of(person.accountID), size: LumiaTokens.avatarLg, picture: session.picture(of: person.accountID))
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
-                    HStack(spacing: LumiaTokens.space6) {
-                        Text(name).font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color)
-                        if me { LumiaTag("You") }
+                    NameWithTag(gap: LumiaTokens.space8) {
+                        Text(name).font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                        // This account, the server's owner, or a guest.
+                        if let mark = me ? "You" : listed.flatMap({ Roles.mark(owner: $0.owner, guest: $0.guest) }) {
+                            LumiaTag(mark, tone: .accent)
+                        }
                     }
+                    titleLine
                     if let handle = member?.handle, !handle.isEmpty {
                         Text("@\(handle)").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                     }
                 }
             }
+            rolesPart
             let custom = session.customStatus(of: person.accountID, in: person.serverID)
             ForEach([("Status", custom), ("Pronouns", member?.pronouns ?? ""), ("About", member?.bio ?? "")].filter { !$0.1.isEmpty }, id: \.0) { label, text in
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
@@ -489,10 +592,6 @@ struct ProfileCard: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(LumiaTokens.space24)
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-        .presentationBackground(LumiaTokens.surface.color)
     }
 
     /// A server DM, kept by the server.
@@ -526,10 +625,25 @@ struct ProfileCard: View {
     }
 }
 
+/// "Edit" beside a card's title and its Roles, and "Add a title": the
+/// boards' text button, the words in the body's ink over a rule.
+struct CardEditStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(LumiaTokens.textLinkSm.font)
+            .underline(color: LumiaTokens.underline.color)
+            .foregroundStyle(configuration.isPressed ? LumiaTokens.ink.color : LumiaTokens.inkBody.color)
+            // A finger's room round a word that small.
+            .padding(.vertical, LumiaTokens.space6)
+            .contentShape(Rectangle())
+            .padding(.vertical, -LumiaTokens.space6)
+    }
+}
+
 /// A member row's Remove, as the dark Quiet Split draws it: `row-height` square (32) at radius 8,
 /// the glyph in the faint ink, and while pressed (a phone has no pointer to hover) the danger ink
 /// on its soft fill and border. The target reaches 44 (`tile-size`), the least a finger needs.
-private struct MemberRemoveStyle: ButtonStyle {
+struct MemberRemoveStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: LumiaTokens.space16, weight: .medium))

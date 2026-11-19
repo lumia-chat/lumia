@@ -594,7 +594,7 @@ struct ChannelScreen: View {
                                         .id(m.messageId)
                                 }
                             } else {
-                                LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), picture: session.picture(of: m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, openAuthor: openAuthor(m.authorAccountId), extras: extras(m))
+                                LumiaMessageRow(author: session.name(of: m.authorAccountId), tone: .of(m.authorAccountId), picture: session.picture(of: m.authorAccountId), time: time(ofMicros: m.createdAtMicros), text: m.body, deleted: m.deleted, place: place, measures: measures, openAuthor: openAuthor(m.authorAccountId), tag: tag(of: m.authorAccountId), extras: extras(m))
                                     .id(m.messageId)
                             }
                         }
@@ -778,6 +778,13 @@ struct ChannelScreen: View {
     }
 
     /// Opens who wrote a message, in this server.
+    /// The tag beside an author's name (architecture 7.5): theirs in the
+    /// server's member list, as the core worked it out; a message carries none.
+    private func tag(of accountID: String) -> TagLook? {
+        guard let serverID = channel?.serverId, !serverID.isEmpty else { return nil }
+        return session.tag(of: accountID, in: serverID)
+    }
+
     private func openAuthor(_ accountID: String) -> (() -> Void)? {
         guard let serverID = channel?.serverId, !serverID.isEmpty, !accountID.isEmpty else { return nil }
         return { openPerson(PersonInServer(accountID: accountID, serverID: serverID)) }

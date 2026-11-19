@@ -1282,6 +1282,11 @@ public final class LumiaSession {
             await refreshReads()
             await refreshSnapshot()
             await refreshDmChannels()
+        case let .tagsChanged(serverId):
+            // After the `accountApplied` it came in, which took the snapshot
+            // again: what the core keeps has the change, so the server's
+            // members are read from it, with their tags, and nothing is asked.
+            await rereadMembers(serverID: serverId)
         case let .profileUpdated(accountId, handle, displayName, avatarUrl, pronouns, bio):
             apply(ProfileUpdate(accountID: accountId, handle: handle, displayName: displayName, avatarURL: avatarUrl, pronouns: pronouns, bio: bio))
         case let .error(_, message, commandId):

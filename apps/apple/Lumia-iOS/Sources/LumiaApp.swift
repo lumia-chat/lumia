@@ -52,6 +52,9 @@ struct RootView: View {
                 PreferencesScreen()
             } else if devScreen == "profile-updated" {
                 ProfileUpdatedScene()
+            } else if devScreen == "tags" {
+                // The "Tags" board's figures: every tone, and the longest a tag can be.
+                TagsScene()
             } else if let devScreen, devScreen.hasPrefix("linking-") || devScreen.hasPrefix("linkprompt-") {
                 // Linking by a prompt's every stage, drawn from values.
                 LinkStagesScene(part: devScreen)

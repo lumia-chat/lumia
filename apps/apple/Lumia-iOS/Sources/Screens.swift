@@ -407,14 +407,18 @@ struct InviteScreen: View {
 
 // MARK: Server settings
 
-/// A server's name, picture, how long it keeps messages and its files
-/// (architecture 6.7, specs/media.md 4.5), for whoever may change them: offered under the server's channels
-/// when the snapshot says this account may. The words, states and errors
+/// Overview, the first of a server's settings' sections: its name, picture,
+/// what the tag beside a name shows, how long it keeps messages and its files
+/// (architecture 6.7 and 7.5, specs/media.md 4.5), for whoever may change them
+/// (`canManage`). The words, states and errors
 /// are the web's and the desktop shell's; the Profile screen's cards, and
 /// the photo's picker and refusals.
-struct ServerSettingsScreen: View {
+struct ServerOverviewScreen: View {
     let session: LumiaSession
     let serverID: String
+    // What the tag beside a name shows: saved as it is chosen, the choice drawn from the server.
+    @State private var tagBusy = false
+    @State private var tagError = ""
     @State private var name = ""
     @State private var nameBusy = false
     @State private var nameError = ""
@@ -455,12 +459,13 @@ struct ServerSettingsScreen: View {
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == serverID } }
 
     var body: some View {
-        PanelScreen(back: server?.name ?? "Server", title: "Server settings", subtitle: server?.name) {
+        PanelScreen(back: settingsBack(server), title: "Overview", subtitle: server?.name) {
             ScrollViewReader { proxy in
                 ScrollView {
                     if let server, loaded {
                         VStack(alignment: .leading, spacing: LumiaTokens.space12) {
                             overview(server)
+                            tagBesideNames(server).id("tag")
                             history(server)
                             files(server)
                             defaultChannels(server).id("defaults")
@@ -470,9 +475,10 @@ struct ServerSettingsScreen: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 #if DEBUG
-                // The smoke run's picture of the last card (`LUMIA_DEV_SCROLL=defaults`).
+                // The smoke run's picture of the last card (`LUMIA_DEV_SCROLL=defaults`), or of "Tag beside names" (`tag`).
                 .onChange(of: publicChannels?.count) { _, _ in
                     if ProcessInfo.processInfo.environment["LUMIA_DEV_SCROLL"] == "defaults" { proxy.scrollTo("defaults", anchor: .bottom) }
+                    if ProcessInfo.processInfo.environment["LUMIA_DEV_SCROLL"] == "tag" { proxy.scrollTo("tag", anchor: .top) }
                 }
                 #endif
             }
@@ -548,6 +554,43 @@ struct ServerSettingsScreen: View {
             Button { Task { await removePicture() } } label: { Text("Remove").lineLimit(1).fixedSize() }
                 .buttonStyle(.lumiaSecondary).disabled(pictureBusy)
                 .accessibilityHint("Takes the server's picture away")
+        }
+    }
+
+    /// "Tag beside names" (architecture 7.5): the member's role or their
+    /// title, as two pictured choices, saved as one is chosen. A refusal is
+    /// said in the note's place and the choice stays as the server has it.
+    private func tagBesideNames(_ server: ServerSummary) -> some View {
+        LumiaCard(title: RoleWords.tagTitle, subtitle: RoleWords.tagSubtitle, width: nil) {
+            VStack(alignment: .leading, spacing: LumiaTokens.space16) {
+                ChoiceTiles(label: RoleWords.tagTitle) {
+                    ChoiceTile(name: RoleWords.tagRoles.label, caption: RoleWords.tagRoles.caption, chosen: !server.tagTitles, choose: { Task { await chooseTag(titles: false, server) } }, height: TagSketch.height) {
+                        TagSketch(titles: false)
+                    }
+                    ChoiceTile(name: RoleWords.tagTitles.label, caption: RoleWords.tagTitles.caption, chosen: server.tagTitles, choose: { Task { await chooseTag(titles: true, server) } }, height: TagSketch.height) {
+                        TagSketch(titles: true)
+                    }
+                }
+                .disabled(tagBusy)
+                if !tagError.isEmpty {
+                    LumiaErrorText(tagError)
+                } else {
+                    Text(RoleWords.tagNote).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func chooseTag(titles: Bool, _ server: ServerSummary) async {
+        guard !tagBusy, titles != server.tagTitles else { return }
+        tagBusy = true
+        tagError = ""
+        defer { tagBusy = false }
+        do {
+            try await session.setTagTitles(serverID: serverID, titles: titles)
+        } catch {
+            tagError = ServerSettingsRefusal.settings(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
         }
     }
 

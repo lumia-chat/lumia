@@ -93,7 +93,7 @@ final class ServerSettingsTests: XCTestCase {
     }
 
     func testSaveIsOfferedForAFileSettingThatChanged() {
-        let server = ServerSummary(serverId: "s", name: "S", iconUrl: "", retentionDays: 0, showDeleted: false, attachmentRetentionDays: 90, deleteOldestWhenFull: false, canManage: true, canManageChannels: true, canStartDms: true, canMentionEveryone: true, canManageMessages: true, channelAddsByInvitation: false, serverDmsOff: false)
+        let server = ServerSummary(serverId: "s", name: "S", iconUrl: "", retentionDays: 0, showDeleted: false, attachmentRetentionDays: 90, deleteOldestWhenFull: false, canManage: true, canManageChannels: true, canStartDms: true, canMentionEveryone: true, canManageMessages: true, channelAddsByInvitation: false, serverDmsOff: false, ownerAccountId: "", isOwner: false, canManageRoles: false, canManageMembers: false, tagTitles: false, roles: [], grantable: [], roleIds: [], title: "", guest: false)
         XCTAssertFalse(ServerFiles.canSave(retention: 90, deleteOldest: false, server: server))
         XCTAssertTrue(ServerFiles.canSave(retention: 30, deleteOldest: false, server: server))
         XCTAssertTrue(ServerFiles.canSave(retention: 90, deleteOldest: true, server: server))

@@ -191,6 +191,10 @@ public struct LumiaMessageRow: View {
     public var measures = MessageMeasures.standard
     /// Opens who wrote it (their profile card), from the avatar or the name; nil where there is none to open.
     public var openAuthor: (() -> Void)?
+    /// The author's tag in the server, beside their name where a block
+    /// opens (architecture 7.5): their role on its tone or their title on
+    /// the plain chip, cut before the name is. None in one line.
+    public var tag: TagLook?
     /// What architecture 6.6 adds: whom the body mentions (drawn as pills,
     /// each opening its person through `openPerson`), the reply's reference
     /// line above it, the reactions under it, a wash when it is for this
@@ -202,12 +206,18 @@ public struct LumiaMessageRow: View {
     /// The body is taller than a collapsed one, as drawn.
     @State private var tall = false
 
-    public init(author: String, tone: AvatarTone, picture: URL? = nil, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .standard, openAuthor: (() -> Void)? = nil, extras: MessageExtras = MessageExtras()) {
-        self.author = author; self.tone = tone; self.picture = picture; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.extras = extras
+    public init(author: String, tone: AvatarTone, picture: URL? = nil, time: String, text: String, deleted: Bool = false, place: MessagePlace = MessagePlace(), measures: MessageMeasures = .standard, openAuthor: (() -> Void)? = nil, tag: TagLook? = nil, extras: MessageExtras = MessageExtras()) {
+        self.author = author; self.tone = tone; self.picture = picture; self.time = time; self.text = text; self.deleted = deleted; self.place = place; self.measures = measures; self.openAuthor = openAuthor; self.tag = tag; self.extras = extras
     }
 
-    /// Whose a row is and when, as assistive technology hears it before the message.
-    public static func heading(author: String, time: String) -> String { "\(author), \(time)" }
+    /// Whose a row is and when, as assistive technology hears it before the
+    /// message, with their tag between where the row draws one.
+    public static func heading(author: String, time: String, tag: String? = nil) -> String {
+        tag.map { "\(author), \($0), \(time)" } ?? "\(author), \(time)"
+    }
+
+    /// The row's heading as heard: the tag only where it is drawn, in the grouped layout.
+    private var heard: String { Self.heading(author: author, time: time, tag: oneLine ? nil : tag?.label) }
 
     /// What was said, as drawn: the core's blocks, each mention by name.
     private func said(_ blocks: [BodyBlock]) -> String {
@@ -261,7 +271,7 @@ public struct LumiaMessageRow: View {
                     .padding(.leading, max(0, measures.avatar / 2 - 1))
             }
             VStack(alignment: .leading, spacing: LumiaTokens.space4) {
-                if editing { main(blocks) } else { main(blocks).modifier(RowElement(label: Self.heading(author: author, time: time), value: said(blocks), actions: actions(blocks))) }
+                if editing { main(blocks) } else { main(blocks).modifier(RowElement(label: heard, value: said(blocks), actions: actions(blocks))) }
                 if collapsible, let expand = extras.expand {
                     LumiaShowMore(expanded: extras.expanded, scale: scale, toggle: expand)
                         .padding(.leading, measures.gutter)
@@ -298,7 +308,7 @@ public struct LumiaMessageRow: View {
                 LumiaOneLineReference(quote: quote, scale: scale)
             }
             Group {
-                if editing { words(blocks) } else { words(blocks).modifier(RowElement(label: Self.heading(author: author, time: time), value: said(blocks), actions: actions(blocks))) }
+                if editing { words(blocks) } else { words(blocks).modifier(RowElement(label: heard, value: said(blocks), actions: actions(blocks))) }
             }
             .layoutValue(key: OneLineLayout.Words.self, value: true)
             if collapsible, let expand = extras.expand {
@@ -377,9 +387,19 @@ public struct LumiaMessageRow: View {
                 if place.opens {
                     HStack(alignment: .firstTextBaseline, spacing: LumiaTokens.space8) {
                         // The boards' inks, as the desktop shell's row has them.
-                        Text(author).font(LumiaTokens.textAuthor.font(scale: scale)).foregroundStyle(LumiaTokens.ink.color)
-                            .onTapGesture { openAuthor?() }
-                        Text(time).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
+                        if let tag {
+                            NameWithTag(gap: LumiaTokens.space8) {
+                                Text(author).font(LumiaTokens.textAuthor.font(scale: scale)).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                                    .onTapGesture { openAuthor?() }
+                                LumiaTag(tag, scale: scale).givesWay()
+                            }
+                            Text(time).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
+                                .lineLimit(1).fixedSize()
+                        } else {
+                            Text(author).font(LumiaTokens.textAuthor.font(scale: scale)).foregroundStyle(LumiaTokens.ink.color)
+                                .onTapGesture { openAuthor?() }
+                            Text(time).font(LumiaTokens.textMeta.font(scale: scale)).foregroundStyle(LumiaTokens.inkMuted.color)
+                        }
                     }
                 }
                 words(blocks)
@@ -860,18 +880,22 @@ public struct LumiaPaneHeader<Glyph: View, Actions: View>: View {
     }
 }
 
-/// A member in the aside: avatar, name, a line under it.
+/// A member in the aside: avatar, name, a line under it. Beside the name,
+/// a mark in the accent ("You") and the member's tag in the server, their
+/// role on its tone or their title on the plain chip (architecture 7.5),
+/// which is cut before the name is.
 public struct LumiaMemberRow: View {
     let name: String
     let subtitle: String?
     let tone: AvatarTone
     let picture: URL?
     let tag: String?
+    let role: TagLook?
     /// `ONLINE`, `AWAY` or `DO_NOT_DISTURB`, shown as a dot; nil for not here.
     let status: String?
 
-    public init(name: String, subtitle: String? = nil, tone: AvatarTone, picture: URL? = nil, tag: String? = nil, status: String? = nil) {
-        self.name = name; self.subtitle = subtitle; self.tone = tone; self.picture = picture; self.tag = tag; self.status = status
+    public init(name: String, subtitle: String? = nil, tone: AvatarTone, picture: URL? = nil, tag: String? = nil, role: TagLook? = nil, status: String? = nil) {
+        self.name = name; self.subtitle = subtitle; self.tone = tone; self.picture = picture; self.tag = tag; self.role = role; self.status = status
     }
 
     private var dot: Color? {
@@ -895,9 +919,10 @@ public struct LumiaMemberRow: View {
                 }
                 .opacity(status == nil ? 0.6 : 1)
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: LumiaTokens.space6) {
+                NameWithTag {
                     Text(name).font(LumiaTokens.textMember.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
-                    if let tag { LumiaTag(tag) }
+                    if let tag { LumiaTag(tag, tone: .accent, size: .sm) }
+                    if let role { LumiaTag(role, size: .sm).givesWay() }
                 }
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkSecondary.color).lineLimit(1)
@@ -1035,17 +1060,152 @@ public struct LumiaDeviceRow: View {
     }
 }
 
+/// The design's tag (`lu-tag`): a word or two on a chip. Plain, in the
+/// accent ("You", "Owner", "Guest"), or on a role's tone, its ground and
+/// ink as an avatar's initials are (architecture 7.5). A tag's words may be
+/// a server's own, a role's name or a title of up to 32 characters: one
+/// line, cut with an ellipsis at the width of what holds it.
 public struct LumiaTag: View {
+    public enum Tone: Equatable, Sendable {
+        case neutral, accent
+        case role(AvatarTone)
+    }
+
+    /// As a message draws it, or smaller, as a member's row does.
+    public enum Size: Sendable { case md, sm }
+
     let text: String
-    public init(_ text: String) { self.text = text }
+    let tone: Tone
+    let size: Size
+    /// A message row's text scale.
+    var scale: CGFloat = 1
+
+    public init(_ text: String, tone: Tone = .neutral, size: Size = .md, scale: CGFloat = 1) {
+        self.text = text; self.tone = tone; self.size = size; self.scale = scale
+    }
+
+    /// A member's tag: a role on its tone, or a title (and a role with no colour) on the plain chip.
+    public init(_ look: TagLook, size: Size = .md, scale: CGFloat = 1) {
+        self.init(look.label, tone: look.tone.map(Tone.role) ?? .neutral, size: size, scale: scale)
+    }
+
+    /// The small tag's type: 10.5 at 700, a point under the tag's.
+    private static var smallSize: CGFloat { LumiaTokens.textTag.size - 1 }
+    /// The tag's padding at its sides: 7, and 6 for the small one.
+    private static var sidePadding: CGFloat { LumiaTokens.space6 + 1 }
+
+    private var ground: Color {
+        switch tone {
+        case .neutral: LumiaTokens.chip.color
+        case .accent: LumiaTokens.accentSoft.color
+        case let .role(t): t.fill.color
+        }
+    }
+
+    private var ink: Color {
+        switch tone {
+        case .neutral: LumiaTokens.inkSecondary.color
+        case .accent: LumiaTokens.accentInk.color
+        case let .role(t): t.ink.color
+        }
+    }
+
     public var body: some View {
         Text(text)
-            .font(LumiaTokens.textTag.font)
-            .foregroundStyle(LumiaTokens.inkSecondary.color)
-            .padding(.horizontal, LumiaTokens.space6)
-            .padding(.vertical, LumiaTokens.space2)
-            .background(LumiaTokens.chip.color, in: Capsule())
+            .font(size == .md ? LumiaTokens.textTag.font(scale: scale) : .system(size: Self.smallSize * scale, weight: .bold))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundStyle(ink)
+            .padding(.horizontal, size == .md ? Self.sidePadding : LumiaTokens.space6)
+            .padding(.vertical, size == .md ? LumiaTokens.space2 : LumiaTokens.space2 / 2)
+            .background(ground, in: RoundedRectangle(cornerRadius: size == .md ? LumiaTokens.radius6 : LumiaTokens.radius5))
     }
+}
+
+/// A role's colour as a dot (`lu-roledot`), in the ink its tag's words are
+/// written in; a ring with nothing in it for a role with no colour.
+public struct LumiaRoleDot: View {
+    let tone: AvatarTone?
+    public init(tone: AvatarTone?) { self.tone = tone }
+
+    /// The dot: 10 across, and the empty one's ring 1.5 wide.
+    private static var size: CGFloat { LumiaTokens.space10 }
+    private static var ring: CGFloat { LumiaTokens.space6 / 4 }
+
+    public var body: some View {
+        Group {
+            if let tone {
+                Circle().fill(tone.ink.color)
+            } else {
+                Circle().strokeBorder(LumiaTokens.inkFaint.color, lineWidth: Self.ring)
+            }
+        }
+        .frame(width: Self.size, height: Self.size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A name and what stands beside it on one line (`lu-member__name`): the
+/// name first, then marks that are never cut ("You"), then a tag that may
+/// be a server's own words. Where the line has no room the tag gives way
+/// before the name does: the tag is cut to what the name leaves, and the
+/// name is cut only once the tag is down to a few letters (the design's
+/// rule since the web's step 11). Everything sits on the line's middle.
+public struct NameWithTag: Layout {
+    /// A view that gives way: the tag.
+    public struct GivesWay: LayoutValueKey { public static let defaultValue = false }
+
+    let gap: CGFloat
+    /// The room a tag and the gap before it keep however long the name is: the design's 52.
+    static let least = LumiaTokens.space40 + LumiaTokens.space12
+
+    public init(gap: CGFloat = LumiaTokens.space6) { self.gap = gap }
+
+    private func widths(_ subviews: Subviews, in width: CGFloat?) -> [CGFloat] {
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        guard let width else { return ideal }
+        return Self.fitted(ideal, tag: subviews.indices.last { subviews[$0][GivesWay.self] }, width: width, gap: gap)
+    }
+
+    /// How wide each is drawn in a line `width` wide: the name first, the
+    /// one at `tag` the tag that gives way, any other as wide as it is.
+    static func fitted(_ ideal: [CGFloat], tag: Int?, width: CGFloat, gap: CGFloat) -> [CGFloat] {
+        guard !ideal.isEmpty else { return ideal }
+        let gaps = gap * CGFloat(ideal.count - 1)
+        guard ideal.reduce(0, +) + gaps > width else { return ideal }
+        var out = ideal
+        let fixed = ideal.indices.filter { $0 != 0 && $0 != tag }.map { ideal[$0] }.reduce(0, +)
+        let room = max(0, width - gaps - fixed)
+        guard let tag, tag != 0 else {
+            out[0] = min(ideal[0], room)
+            return out
+        }
+        // The name whole while the tag keeps its few letters, or all of a tag shorter than that.
+        let kept = min(ideal[tag], max(0, Self.least - gap))
+        let shown = min(ideal[0], max(0, room - kept))
+        out[0] = shown
+        out[tag] = min(ideal[tag], max(0, room - shown))
+        return out
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let w = widths(subviews, in: proposal.width)
+        let height = zip(subviews, w).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }.max() ?? 0
+        return CGSize(width: w.reduce(0, +) + gap * CGFloat(max(0, subviews.count - 1)), height: height)
+    }
+
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (view, width) in zip(subviews, widths(subviews, in: bounds.width)) {
+            view.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(width: width, height: nil))
+            x += width + gap
+        }
+    }
+}
+
+public extension View {
+    /// Marks the tag of a `NameWithTag` line: the one that gives way.
+    func givesWay() -> some View { layoutValue(key: NameWithTag.GivesWay.self, value: true) }
 }
 
 /// The auth card: title, subtitle, a form. The desktop's fixed width, or

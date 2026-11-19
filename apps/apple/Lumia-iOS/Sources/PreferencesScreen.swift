@@ -323,7 +323,7 @@ private struct SwitchRow: View {
 }
 
 /// Three choices side by side, a group named for what is chosen.
-private struct ChoiceTiles<Content: View>: View {
+struct ChoiceTiles<Content: View>: View {
     let label: String
     @ViewBuilder let content: () -> Content
 
@@ -336,11 +336,13 @@ private struct ChoiceTiles<Content: View>: View {
 
 /// A picture over a name (and a caption): the chosen one ringed in the
 /// accent 2 points out with a tick after its name, the others outlined.
-private struct ChoiceTile<Sketch: View>: View {
+struct ChoiceTile<Sketch: View>: View {
     let name: String
     var caption: String?
     let chosen: Bool
     let choose: () -> Void
+    /// The picture's height where it is not a third of a phone's column (the two tiles of "Tag beside names").
+    var height: CGFloat?
     @ViewBuilder let sketch: () -> Sketch
 
     /// The picture's height on a phone, where a tile is a third of the column.
@@ -356,7 +358,7 @@ private struct ChoiceTile<Sketch: View>: View {
         Button(action: choose) {
             VStack(alignment: .leading, spacing: LumiaTokens.space10) {
                 sketch()
-                    .frame(maxWidth: .infinity, minHeight: Self.pictureHeight, maxHeight: Self.pictureHeight, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, minHeight: height ?? Self.pictureHeight, maxHeight: height ?? Self.pictureHeight, alignment: .topLeading)
                     .clipShape(RoundedRectangle(cornerRadius: LumiaTokens.radius12))
                     .overlay {
                         if chosen {

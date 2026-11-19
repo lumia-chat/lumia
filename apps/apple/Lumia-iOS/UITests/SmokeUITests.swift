@@ -398,8 +398,13 @@ final class SmokeUITests: XCTestCase {
         let settings = app.buttons["Server settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: 90), "no Server settings for the server's owner")
         settings.tap()
+        // Its sections are a screen of their own (architecture 7.5); Overview is the first.
+        XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", "Server settings")).firstMatch.waitForExistence(timeout: 10), "the screen does not say \"Server settings\"")
+        let overview = app.buttons["section-overview"]
+        XCTAssertTrue(overview.waitForExistence(timeout: 10), "Server settings does not offer Overview")
+        overview.tap()
 
-        for words in ["Server settings", serverName, "Overview", "Choose a picture…", "Name", "Message history", "How long this server keeps its messages."] {
+        for words in [serverName, "Overview", "Choose a picture…", "Name", "Message history", "How long this server keeps its messages."] {
             XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", words)).firstMatch.waitForExistence(timeout: 10), "the screen does not say \"\(words)\"")
         }
         XCTAssertTrue(app.images["No server picture"].exists || anything.matching(NSPredicate(format: "label == %@", "No server picture")).firstMatch.exists, "the picture is not labelled")
@@ -512,7 +517,9 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(anything.matching(NSPredicate(format: "label == %@", "Server picture")).firstMatch.exists, "the picture is not labelled")
         reached("picture", under: steps)
 
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch.tap()
+        // Back over the sections to the sidebar.
+        let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+        while backButton.exists { backButton.tap(); sleep(1) }
         let tile = app.buttons[rename]
         XCTAssertTrue(tile.waitForExistence(timeout: 10), "no \(rename) on the rail")
         XCTAssertTrue(tile.isSelected)
@@ -530,6 +537,361 @@ final class SmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Invite people"].waitForExistence(timeout: 90), "the server did not open")
         XCTAssertFalse(app.buttons["Server settings"].exists, "Server settings is offered to a member who may not change them")
         reached("member", under: steps)
+    }
+
+    /// Roles, titles and tags by hand (scripts/smoke-roles.sh, which seeds
+    /// the boards' Acme: the phone's account owning it, five roles, six
+    /// members with roles and titles, a guest, a morning in #general). Each
+    /// step is announced and waits for `<step>.seen`, the smoke reading the
+    /// instance at it: `sections` (Server settings' three, with what each
+    /// holds), `made` (New role: Support, in sky, saved from the header),
+    /// `asks` (Administrator turned on asks first), `edited` (renamed
+    /// Helpers, Manage messages and Administrator on, "Saved."), `menu`
+    /// (the role's More), `moved` (Move up, drawn at once), `given` (Add
+    /// members: Priya), `removed` (the Remove beside Priya in Design's
+    /// editor), `titled` (Leo's row in Members: a title),
+    /// `tags` (#general, each author's tag beside their name; the smoke then
+    /// takes Admin from Maya from elsewhere), `live` (her tag is Design with
+    /// the conversation still on screen), `card` (Devon's profile card: his
+    /// title and his roles, each changed from its Edit), `titles` (Overview's "Tag beside
+    /// names": Titles, and #general tags by title), `kicked` (Sam, from his
+    /// row, nothing asked), `deleting` (the role's sheet, saying who holds
+    /// it) and `deleted`.
+    func testRolesTitlesAndTagsByHand() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        func labelled(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label == %@", words)).firstMatch }
+        func starting(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label BEGINSWITH %@", words)).firstMatch }
+        let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+        func back() { backButton.tap(); sleep(1) }
+        func shown(_ element: XCUIElement, _ why: String, within seconds: TimeInterval = 15) { XCTAssertTrue(element.waitForExistence(timeout: seconds), why) }
+        func gone(_ element: XCUIElement, _ why: String, within seconds: TimeInterval = 15) {
+            XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)], timeout: seconds), .completed, why)
+        }
+        /// Brings something further down the screen into reach.
+        func reach(_ element: XCUIElement) { for _ in 0..<6 where !(element.exists && element.isHittable) { app.swipeUp(velocity: .slow) } }
+        /// Types over what a field holds.
+        func retype(_ field: XCUIElement, _ words: String) {
+            reach(field)
+            let held = (field.value as? String) ?? ""
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: held.count + 2) + words)
+        }
+
+        // Server settings: its sections, each with what it holds.
+        let settings = app.buttons["Server settings"]
+        shown(settings, "no Server settings for the server's owner", within: 90)
+        settings.tap()
+        let roles = app.buttons["section-roles"], members = app.buttons["section-members"]
+        shown(app.buttons["section-overview"], "Server settings does not offer Overview")
+        shown(roles, "Server settings does not offer Roles")
+        XCTAssertEqual(roles.label, "Roles")
+        XCTAssertEqual(roles.value as? String, "5 roles")
+        XCTAssertEqual(members.label, "Members")
+        // Counted once the member list has been read.
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "7"), object: members)], timeout: 20), .completed, "Members does not say how many: \(String(describing: members.value))")
+        reached("sections", under: steps)
+
+        // Roles, in order, each saying how many hold it; Everyone last, with no More.
+        roles.tap()
+        shown(labelled("In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone."), "Roles does not say how its order works")
+        let order = ["Admin", "Moderator", "Design", "Engineering", "Can invite", "Everyone"]
+        for name in order { shown(app.buttons["role-\(name)"], "no row for \(name)") }
+        XCTAssertEqual(order.sorted { app.buttons["role-\($0)"].frame.minY < app.buttons["role-\($1)"].frame.minY }, order, "the roles are not listed highest first")
+        XCTAssertEqual(app.buttons["role-Moderator"].value as? String, "1 member")
+        XCTAssertEqual(app.buttons["role-Can invite"].value as? String, "2 members, not shown as tag")
+        XCTAssertEqual(app.buttons["role-Everyone"].value as? String, "7 members")
+        XCTAssertTrue(app.buttons["more-Design"].exists, "Design has no More")
+        XCTAssertFalse(app.buttons["more-Everyone"].exists, "Everyone has a More")
+
+        // New role: nothing to save until it has a name; then it is the role this editor is of.
+        app.buttons["New role"].tap()
+        let save = app.buttons["Save"]
+        shown(save, "a new role's editor has no Save")
+        XCTAssertFalse(save.isEnabled, "Save is offered for a role with no name")
+        XCTAssertFalse(app.buttons["delete-role"].exists, "a new role offers Delete role")
+        let name = app.textFields["Name"]
+        name.tap()
+        // A name another role has, whatever its capitals: refused, and said under the header.
+        name.typeText("admin")
+        save.tap()
+        shown(app.staticTexts["role-error"], "a name another role has was not refused")
+        XCTAssertEqual(app.staticTexts["role-error"].label, "Another role in Acme has that name.")
+        XCTAssertFalse(app.buttons["delete-role"].exists, "a role refused is taken as made")
+        retype(name, "Support")
+        let colours = anything.matching(NSPredicate(format: "label == %@", "Colour"))
+        XCTAssertEqual(["Peach", "Blue", "Purple", "Mint", "Amber", "Sky", "Stone", "Green", "Indigo", "None"].filter { !colours.buttons[$0].exists }, [], "a colour is missing")
+        XCTAssertTrue(colours.buttons["None"].isSelected, "a new role has a colour")
+        colours.buttons["Sky"].tap()
+        XCTAssertTrue(colours.buttons["Sky"].isSelected)
+        let preview = labelled("Preview")
+        XCTAssertTrue((preview.value as? String)?.hasSuffix(", Support") ?? false, "the preview does not carry the tag: \(String(describing: preview.value))")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        shown(app.buttons["delete-role"], "the role made is not the one the editor is of")
+        shown(labelled("Nobody holds this role yet."), "a new role does not say nobody holds it")
+        reached("made", under: steps)
+
+        // Edit it: its name, a permission, and Administrator, which asks first.
+        name.typeText("\n")
+        retype(name, "Helpers\n")
+        let manageMessages = app.switches["permission-MANAGE_MESSAGES"], administrator = app.switches["permission-ADMINISTRATOR"]
+        reach(administrator)
+        XCTAssertEqual(administrator.value as? String, "0")
+        administrator.tap()
+        shown(labelled("Turn on Administrator?"), "turning Administrator on asked nothing")
+        shown(starting("Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say."), "the question does not say what Administrator allows")
+        reached("asks", under: steps)
+        app.buttons["Cancel"].tap()
+        gone(labelled("Turn on Administrator?"), "the question did not go")
+        XCTAssertEqual(administrator.value as? String, "0", "Administrator went on though the question was cancelled")
+        administrator.tap()
+        shown(app.buttons["ask-confirm"], "turning Administrator on asked nothing the second time")
+        XCTAssertEqual(app.buttons["ask-confirm"].label, "Turn on")
+        app.buttons["ask-confirm"].tap()
+        gone(labelled("Turn on Administrator?"), "the question did not go")
+        XCTAssertEqual(administrator.value as? String, "1", "Administrator is not on after Turn on")
+        reach(manageMessages)
+        manageMessages.tap()
+        XCTAssertEqual(manageMessages.value as? String, "1")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        shown(app.staticTexts["role-saved"], "nothing says the role was saved")
+        XCTAssertFalse(save.isEnabled, "Save is still offered once the role is saved")
+        shown(app.staticTexts["Helpers"], "the header does not say the role's new name")
+        reached("edited", under: steps)
+
+        // Its More: Move up puts it above Can invite, drawn at once.
+        back()
+        shown(app.buttons["role-Helpers"], "Roles does not list Helpers")
+        app.buttons["more-Helpers"].tap()
+        for item in ["Edit role", "Move up", "Move down", "Delete role"] { shown(app.buttons[item], "the role's menu has no \(item)", within: 5) }
+        XCTAssertFalse(app.buttons["Move down"].isEnabled, "Move down is offered to the last role above Everyone")
+        reached("menu", under: steps)
+        app.buttons["Move up"].tap()
+        let above = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.buttons["role-Helpers"].frame.minY < app.buttons["role-Can invite"].frame.minY }, object: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [above], timeout: 10), .completed, "Helpers did not move above Can invite")
+        XCTAssertFalse(app.staticTexts["roles-error"].exists, "the move was refused")
+        reached("moved", under: steps)
+
+        // Its editor's Add members: Priya, who then holds it.
+        app.buttons["role-Helpers"].tap()
+        let add = app.buttons["Add members"]
+        reach(add)
+        add.tap()
+        let priya = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Priya Natarajan")).firstMatch
+        shown(priya, "Add members does not list Priya")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Jordan Lee")).firstMatch.exists, "a guest is offered a role")
+        priya.tap()
+        app.buttons["Add"].tap()
+        shown(app.buttons["Remove Priya Natarajan from Helpers"], "the editor does not list Priya among those who hold the role")
+        reached("given", under: steps)
+
+        // Remove, beside one who holds a role: Priya loses Design at once.
+        back()
+        app.buttons["role-Design"].tap()
+        let removePriya = app.buttons["Remove Priya Natarajan from Design"]
+        reach(removePriya)
+        XCTAssertTrue(app.buttons["Remove Maya Chen from Design"].exists, "Design's editor does not list Maya among those who hold it")
+        removePriya.tap()
+        gone(removePriya, "Priya is still listed among those who hold Design")
+        reached("removed", under: steps)
+
+        // Members: Leo's row opens to his roles, his title and Kick.
+        back(); back()
+        members.tap()
+        let leo = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "member-leo")).firstMatch
+        shown(leo, "Members does not list Leo")
+        XCTAssertTrue((leo.value as? String)?.hasSuffix("Mobile Lead, Can invite, collapsed") ?? false, "Leo's row says \(String(describing: leo.value))")
+        let owner = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "member-ryan")).firstMatch
+        XCTAssertTrue((owner.value as? String)?.hasPrefix("Owner, ") ?? false, "the owner's row does not say so: \(String(describing: owner.value))")
+        let guest = anything.matching(NSPredicate(format: "identifier BEGINSWITH %@", "member-jordan")).firstMatch
+        XCTAssertTrue((guest.value as? String)?.hasPrefix("Guest, ") ?? false, "the guest's row does not say so: \(String(describing: guest.value))")
+        // A search over the list held: by title.
+        let search = app.textFields["Search members"]
+        search.tap()
+        search.typeText("mobile")
+        gone(owner, "a search for a title still lists everyone")
+        XCTAssertTrue(leo.exists, "a search for Leo's title does not find him")
+        retype(search, "\n")
+        shown(owner, "the list did not come back once the search was emptied")
+        reach(leo)
+        leo.tap()
+        let title = app.textFields["Title"]
+        shown(title, "Leo's row did not open to his title")
+        XCTAssertEqual(title.value as? String, "Mobile Lead")
+        for role in ["Admin", "Moderator", "Design", "Engineering", "Helpers", "Can invite"] { XCTAssertTrue(app.buttons["tick-\(role)"].exists, "no \(role) to tick") }
+        XCTAssertEqual(app.buttons["tick-Can invite"].value as? String, "ticked")
+        XCTAssertEqual(app.buttons["tick-Design"].value as? String, "not ticked")
+        XCTAssertTrue(app.buttons["member-kick"].exists, "the owner is not offered Kick for Leo")
+        shown(labelled("Up to 32 characters. A title grants nothing."), "nothing says what a title is")
+        retype(title, "Release Captain\n")
+        reach(app.buttons["member-save"])
+        app.buttons["member-save"].tap()
+        gone(title, "the row did not close once saved")
+        let titled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value CONTAINS %@", "Release Captain"), object: leo)
+        XCTAssertEqual(XCTWaiter().wait(for: [titled], timeout: 15), .completed, "Leo's row does not say his new title: \(String(describing: leo.value))")
+        reached("titled", under: steps)
+
+        // #general: each author's tag beside their name, and it follows a change made elsewhere.
+        back(); back()
+        app.buttons["general"].tap()
+        let maya = starting("Maya Chen, ")
+        shown(maya, "#general has no message of Maya's")
+        XCTAssertTrue(maya.label.hasPrefix("Maya Chen, Admin, "), "Maya's message says whose it is as \"\(maya.label)\"")
+        XCTAssertTrue(starting("Devon Park, Moderator, ").exists, "Devon's message carries no Moderator tag")
+        XCTAssertTrue(starting("Priya Natarajan, Helpers, ").exists, "Priya's tag is not the role made and given to her, her highest shown as a tag")
+        XCTAssertTrue(starting("Leo Martins, ").exists && !starting("Leo Martins, Can invite").exists, "a role not shown as a tag is Leo's tag")
+        XCTAssertTrue(starting("Ryan Winchester, ").exists && !starting("Ryan Winchester, Founder").exists, "the owner carries a title as a tag where the server shows roles")
+        reached("tags", under: steps)
+        shown(starting("Maya Chen, Design, "), "Maya's tag did not follow her roles changed from elsewhere while the conversation was open", within: 30)
+        reached("live", under: steps)
+
+        // Devon's card, from the channel's members: his title and his roles, each changed from its Edit.
+        app.buttons["Members"].tap()
+        let devon = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Devon Park")).firstMatch
+        shown(devon, "the channel's members do not list Devon")
+        XCTAssertTrue(devon.label.contains("Moderator"), "Devon's row in the channel's members carries no tag: \(devon.label)")
+        devon.tap()
+        let editTitle = app.buttons["Edit title"], editRoles = app.buttons["Edit roles"]
+        shown(editTitle, "the card does not offer the owner Devon's title")
+        XCTAssertTrue(app.staticTexts["Staff Engineer"].exists, "the card does not show Devon's title")
+        XCTAssertTrue(labelled("Moderator, Engineering").exists, "the card does not list Devon's roles")
+        editTitle.tap()
+        shown(labelled("Devon Park in Acme"), "the title's editor does not say whose it is")
+        retype(app.textFields["Title"], "Principal Engineer\n")
+        app.buttons["member-save"].tap()
+        shown(app.staticTexts["Principal Engineer"], "the card does not show Devon's new title")
+        editRoles.tap()
+        shown(app.buttons["tick-Design"], "the card's Edit did not open Devon's roles")
+        XCTAssertFalse(app.buttons["member-kick"].exists, "a card's editor offers Kick")
+        app.buttons["tick-Design"].tap()
+        XCTAssertEqual(app.buttons["tick-Design"].value as? String, "ticked")
+        reach(app.buttons["member-save"])
+        app.buttons["member-save"].tap()
+        shown(labelled("Moderator, Design, Engineering"), "the card does not list the role Devon was given")
+        reached("card", under: steps)
+        putAwaySheet(app, showing: editRoles)
+        back()
+
+        // Overview: the tag beside names is the server's to choose; Titles.
+        back()
+        settings.tap()
+        app.buttons["section-overview"].tap()
+        let tagChoices = anything.matching(NSPredicate(format: "label == %@", "Tag beside names"))
+        let byRoles = tagChoices.buttons["Roles"], byTitles = tagChoices.buttons["Titles"]
+        shown(tagChoices.firstMatch, "Overview has no Tag beside names")
+        reach(byTitles)
+        XCTAssertTrue(byRoles.isSelected, "a server does not show roles until told otherwise")
+        byTitles.tap()
+        let chosen = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: byTitles)
+        XCTAssertEqual(XCTWaiter().wait(for: [chosen], timeout: 15), .completed, "Titles was not chosen")
+        XCTAssertFalse(byRoles.isSelected)
+        shown(labelled("A profile shows a member’s title and roles either way."), "nothing says what a profile shows")
+        back(); back()
+        app.buttons["general"].tap()
+        shown(starting("Maya Chen, Head of Design, "), "Maya's tag is not her title once the server shows titles")
+        XCTAssertTrue(starting("Ryan Winchester, Founder, ").exists, "the owner's title is not their tag")
+        XCTAssertTrue(starting("Priya Natarajan, ").exists && !starting("Priya Natarajan, Design").exists, "a member with no title falls back to a role")
+        reached("titles", under: steps)
+
+        // Kick, from a member's row: nothing is asked first.
+        back()
+        settings.tap()
+        members.tap()
+        let sam = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "member-sam")).firstMatch
+        shown(sam, "Members does not list Sam")
+        reach(sam)
+        sam.tap()
+        let kick = app.buttons["member-kick"]
+        reach(kick)
+        XCTAssertEqual(kick.label, "Kick Sam Okafor")
+        kick.tap()
+        gone(sam, "Sam is still listed after Kick")
+        reached("kicked", under: steps)
+
+        // Delete role, from its More: the sheet says who holds it.
+        back()
+        roles.tap()
+        shown(app.buttons["more-Helpers"], "Roles does not list Helpers")
+        app.buttons["more-Helpers"].tap()
+        app.buttons["Delete role"].tap()
+        shown(labelled("Delete Helpers?"), "deleting a role asked nothing")
+        shown(labelled("1 member holds this role. They lose what it allowed. This can’t be undone."), "the sheet does not say who holds the role")
+        XCTAssertEqual(app.buttons["ask-cancel"].label, "Keep it")
+        reached("deleting", under: steps)
+        app.buttons["ask-cancel"].tap()
+        gone(labelled("Delete Helpers?"), "the sheet did not go")
+        XCTAssertTrue(app.buttons["role-Helpers"].exists, "the role went though it was kept")
+        app.buttons["more-Helpers"].tap()
+        app.buttons["Delete role"].tap()
+        shown(app.buttons["ask-confirm"], "deleting a role asked nothing the second time")
+        XCTAssertEqual(app.buttons["ask-confirm"].label, "Delete role")
+        app.buttons["ask-confirm"].tap()
+        gone(app.buttons["role-Helpers"], "Helpers is still listed after Delete role")
+        reached("deleted", under: steps)
+    }
+
+    /// Roles as someone who manages only what is below them
+    /// (scripts/smoke-roles.sh signs in as Devon, whose highest role is
+    /// Moderator, with Manage roles and Manage members): Server settings
+    /// has Roles and Members and no Overview; Admin and Moderator are
+    /// listed and not opened or moved; in a role's editor Administrator is
+    /// not Devon's to turn and says why; and of Maya, who is above, only
+    /// the roles below Devon's own can be given and taken. Step `below`.
+    func testRolesAsOneWhoManagesWhatIsBelow() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        let app = launch(screen: "server")
+        let anything = app.descendants(matching: .any)
+        let backButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Back to ")).firstMatch
+        let settings = app.buttons["Server settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 90), "no Server settings for one who manages roles and members")
+        settings.tap()
+        XCTAssertTrue(app.buttons["section-roles"].waitForExistence(timeout: 10), "no Roles for one who manages roles")
+        XCTAssertTrue(app.buttons["section-members"].exists, "no Members for one who manages members")
+        XCTAssertFalse(app.buttons["section-overview"].exists, "Overview is offered to one who may not manage the server")
+        app.buttons["section-roles"].tap()
+
+        // At or above Devon's own highest: listed, and neither opened nor moved.
+        XCTAssertTrue(app.buttons["role-Design"].waitForExistence(timeout: 10), "Roles does not list Design")
+        for name in ["Admin", "Moderator"] {
+            XCTAssertFalse(app.buttons["role-\(name)"].exists, "\(name) opens for one at or below it")
+            XCTAssertFalse(app.buttons["more-\(name)"].exists, "\(name) has a More for one at or below it")
+            let row = anything.matching(NSPredicate(format: "label == %@ AND value CONTAINS %@", name, "not yours to change")).firstMatch
+            XCTAssertTrue(row.exists, "\(name)'s row does not say it is not Devon's to change")
+        }
+        XCTAssertTrue(app.buttons["more-Design"].exists && app.buttons["more-Engineering"].exists, "the roles below have no More")
+        // Design is the highest Devon manages: it goes no higher.
+        app.buttons["more-Design"].tap()
+        XCTAssertTrue(app.buttons["Move down"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Move up"].isEnabled, "Design may be moved above Moderator")
+        XCTAssertTrue(app.buttons["Move down"].isEnabled)
+        app.buttons["Edit role"].tap()
+
+        // Administrator is not Devon's to give: shown, not turned, and saying why.
+        let administrator = app.switches["permission-ADMINISTRATOR"]
+        for _ in 0..<4 where !(administrator.exists && administrator.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(administrator.exists, "the editor does not show Administrator")
+        XCTAssertFalse(administrator.isEnabled, "Administrator may be turned by one who does not hold it")
+        // Why is the switch's hint, which a UI test cannot read; the smoke's picture `devon-editor` shows it.
+        let mention = app.switches["permission-MENTION_EVERYONE"]
+        for _ in 0..<4 where !(mention.exists && mention.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(mention.isEnabled, "a permission Devon holds is not Devon's to give")
+
+        // Maya is above Devon: her roles below Devon's own can be given and taken, and nothing else.
+        backButton.tap(); sleep(1); backButton.tap(); sleep(1)
+        app.buttons["section-members"].tap()
+        let maya = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "member-maya")).firstMatch
+        XCTAssertTrue(maya.waitForExistence(timeout: 10), "Members does not list Maya")
+        maya.tap()
+        XCTAssertTrue(app.buttons["tick-Design"].waitForExistence(timeout: 10), "Maya's row did not open to her roles")
+        XCTAssertFalse(app.buttons["tick-Admin"].isEnabled, "Admin may be given by one below it")
+        XCTAssertFalse(app.buttons["tick-Moderator"].isEnabled, "Moderator may be given by one who holds it as their highest")
+        XCTAssertTrue(app.buttons["tick-Design"].isEnabled && app.buttons["tick-Engineering"].isEnabled)
+        XCTAssertFalse(app.textFields["Title"].exists, "the title of someone above is offered")
+        XCTAssertFalse(app.buttons["member-kick"].exists, "Kick is offered for someone above")
+        reached("below", under: steps)
     }
 
     /// Channel membership by hand (scripts/smoke-membership.sh, which seeds
@@ -636,7 +998,11 @@ final class SmokeUITests: XCTestCase {
 
         // Default channels: #design too.
         app.buttons["Server settings"].tap()
+        // Its sections are a screen of their own; Overview holds the card.
+        XCTAssertTrue(app.buttons["section-overview"].waitForExistence(timeout: 10), "Server settings does not offer Overview")
+        app.buttons["section-overview"].tap()
         XCTAssertTrue(labelled("Default channels").waitForExistence(timeout: 20))
+        app.swipeUp()
         app.swipeUp()
         app.swipeUp()
         let design = button(containing: "#design")
@@ -646,6 +1012,7 @@ final class SmokeUITests: XCTestCase {
         app.buttons["save-defaults"].tap()
         XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 10), "nothing says the default channels were saved")
         reached("defaults", under: steps)
+        back()
         back()
 
         // Leave #random from its members: back at the server, it is gone from the sidebar.

@@ -124,7 +124,7 @@ shoot newdm newdm
 shoot card-ada profilecard LUMIA_DEV_CHANNEL=general "LUMIA_DEV_PERSON=ada$stamp"
 shoot card-grace profilecard LUMIA_DEV_CHANNEL=general "LUMIA_DEV_PERSON=grace$stamp"
 shoot yoursettings yoursettings
-shoot defaults serversettings LUMIA_DEV_SCROLL=defaults
+shoot defaults overview LUMIA_DEV_SCROLL=defaults
 shoot newchannel newchannel
 xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 

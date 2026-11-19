@@ -10,7 +10,7 @@ import XCTest
 
 final class RepliesTests: XCTestCase {
     private func member(_ id: String, name: String, handle: String? = nil, nickname: String = "") -> MemberSummary {
-        MemberSummary(accountId: id, handle: handle ?? id, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false)
+        MemberSummary(accountId: id, handle: handle ?? id, displayName: name, nickname: nickname, pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false, roleIds: [], title: "", guest: false, owner: false, tag: nil, canManage: false)
     }
 
     private func mention(_ id: String, _ start: UInt32, _ end: UInt32, everyone: Bool = false) -> MentionSummary {
