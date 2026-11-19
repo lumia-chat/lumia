@@ -22,7 +22,7 @@ import uniffi.lumia_ffi.rolesDraftOf
 import uniffi.lumia_ffi.rolesFollowed
 import uniffi.lumia_ffi.rolesFormOf
 import uniffi.lumia_ffi.rolesHolderCounts
-import uniffi.lumia_ffi.rolesMayBeGiven
+import uniffi.lumia_ffi.rolesGivenTo
 import uniffi.lumia_ffi.rolesMemberFollowed
 import uniffi.lumia_ffi.rolesMemberRefusal
 import uniffi.lumia_ffi.rolesRoleRefusal
@@ -111,9 +111,11 @@ fun searched(members: List<MemberSummary>, query: String): List<MemberSummary> =
 fun holderCounts(roles: List<RoleSummary>, members: List<MemberSummary>?): Map<String, ULong>? =
     members?.let { roles.map { r -> r.roleId }.zip(rolesHolderCounts(roles, it)).toMap() }
 
-/** Who "Add members" offers a role: those the core's `rolesMayBeGiven` says may be (no guest, nobody who holds it), found by [query], by name. */
-fun holderCandidates(members: List<MemberSummary>, roleId: String, query: String): List<MemberSummary> =
-    searched(members, query).filter { rolesMayBeGiven(roleId, it) }.sortedBy { nameOf(it).lowercase() }
+/** Who "Add members" offers a role: those the core says may be (no guest, nobody who holds it; `rolesGivenTo`, one call for the whole list), found by [query], by name. */
+fun holderCandidates(members: List<MemberSummary>, roleId: String, query: String): List<MemberSummary> {
+    val found = searched(members, query)
+    return rolesGivenTo(roleId, found).mapNotNull { found.getOrNull(it.toInt()) }.sortedBy { nameOf(it).lowercase() }
+}
 
 /** What the Add button of "Add members" says for [chosen] ticked. */
 fun addHoldersButton(chosen: Int): String = if (chosen > 1) "Add $chosen members" else "Add"
