@@ -6,7 +6,7 @@ const PICTURE = "/api/v1/avatars/" + "a".repeat(64);
 const NEW_PICTURE = "/api/v1/avatars/" + "b".repeat(64);
 
 function member(accountId: string, over: Partial<MemberSummary> = {}): MemberSummary {
-  return { accountId, handle: accountId, displayName: "", nickname: "", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false, ...over };
+  return { accountId, handle: accountId, displayName: "", nickname: "", pronouns: "", bio: "", avatarUrl: "", channelAddsByInvitation: false, serverDmsOff: false, roleIds: [], title: "", guest: false, owner: false, tag: null, canManage: false, ...over };
 }
 
 const ada = member("ada", { displayName: "Ada", nickname: "Countess", avatarUrl: PICTURE, pronouns: "she/her", channelAddsByInvitation: true, serverDmsOff: true });

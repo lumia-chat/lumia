@@ -44,6 +44,51 @@ export interface ServerSummary {
   /** Its own switches there: adds to channels wait as invitations; nobody may start a server DM with it. */
   channelAddsByInvitation: boolean;
   serverDmsOff: boolean;
+  /** The server's owner, whom a profile card and the settings' member list mark (architecture 7.5). */
+  ownerAccountId: string;
+  /** Whether this account is that owner. */
+  isOwner: boolean;
+  /** Whether it may create roles and put them in order (`MANAGE_ROLES`); which roles it may change is each role's `canManage`. */
+  canManageRoles: boolean;
+  /** Whether it may remove members and set their titles (`MANAGE_MEMBERS`); which members is each member's `canManage`. */
+  canManageMembers: boolean;
+  /** Whether the tag beside a name there is the member's title; false, the default, their role. */
+  tagTitles: boolean;
+  /** The server's roles, highest first, Everyone last. */
+  roles: RoleSummary[];
+  /** The offered permissions this account may switch on for a role, by their wire names: the ones it holds itself. */
+  grantable: string[];
+  /** This account's own roles there, its own title (empty for none), and whether it is a guest. */
+  roleIds: string[];
+  title: string;
+  guest: boolean;
+}
+/** A role of a server (architecture 7.5), as the snapshot's servers list theirs. */
+export interface RoleSummary {
+  roleId: string;
+  /** "Everyone" for the role every member holds. */
+  name: string;
+  /** One of the nine tones, or empty for none. */
+  color: string;
+  /** Lower is higher; the instance's. The list is already in order. */
+  position: number;
+  isEveryone: boolean;
+  /** Never a member's tag ("Show as tag" off). */
+  hideTag: boolean;
+  /** Every permission it grants, by its wire name (`MANAGE_ROLES`). */
+  permissions: string[];
+  /** Whether this account may change it, delete it, give it and take it away; of Everyone, change its permissions. */
+  canManage: boolean;
+}
+/** The tag beside a member's name: a role in its colour, or a title in none (empty). */
+export interface TagSummary {
+  label: string;
+  color: string;
+}
+/** A heading of a role's editor and the permissions under it; the core's list, the same on every client. */
+export interface PermissionGroup {
+  title: string;
+  permissions: { name: string; label: string; detail: string }[];
 }
 /** A WebAuthn ceremony's start: the challenge's id and the options as the browser's JSON. */
 export interface PasskeyChallengeSummary {
@@ -261,6 +306,16 @@ export interface MemberSummary {
   /** Their switches in the server listed (architecture 6.8). */
   channelAddsByInvitation: boolean;
   serverDmsOff: boolean;
+  /** Their roles in the server listed, by id, and their title there, empty for none (architecture 7.5); empty for a public profile. */
+  roleIds: string[];
+  title: string;
+  /** Whether they are a guest there, and whether they own it. */
+  guest: boolean;
+  owner: boolean;
+  /** The tag beside their name there, as the server shows it; read again when `tagsChanged` says to. */
+  tag: TagSummary | null;
+  /** Whether this account may set their title and remove them from the server. */
+  canManage: boolean;
 }
 export interface DmChannelSummary {
   channelId: string;
@@ -485,6 +540,8 @@ export type ClientEvent =
   | { kind: "profileUpdated"; accountId: string; handle: string; displayName: string; avatarUrl: string; pronouns: string; bio: string }
   /** A link session moved (identity spec 4.2.1), after the `accountApplied` it came in: this browser's own as the new device. */
   | { kind: "linkSessionUpdated"; sessionId: string }
+  /** What a server's tags are drawn from changed (its roles, some members' roles or titles, or which of the two it shows), after the `accountApplied` it came in: what the core keeps has it already. */
+  | { kind: "tagsChanged"; serverId: string }
   | { kind: "acked"; commandId: string; seq: number }
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }
@@ -766,6 +823,46 @@ export class Bridge {
   setShowDeleted(serverId: string, show: boolean): Promise<SnapshotSummary> {
     return this.call("setShowDeleted", serverId, show);
   }
+  /** The permissions a role's editor offers, under their headings (architecture 7.5): the core's list. */
+  rolePermissions(): Promise<PermissionGroup[]> {
+    return this.call("rolePermissions");
+  }
+  /**
+   * A new role, placed last above Everyone: `color` one of the nine tones or
+   * empty, `permissions` the offered ones switched on, by their wire names.
+   * `PERMISSION_DENIED`; `INVALID_ARGUMENT` with `details.field` `name` or
+   * `color`; `ALREADY_EXISTS` for a name another role has.
+   */
+  createRole(serverId: string, name: string, color: string, hideTag: boolean, permissions: string[]): Promise<SnapshotSummary> {
+    return this.call("createRole", serverId, name, color, hideTag, permissions);
+  }
+  /** A role's name, colour, tag switch and permissions, whole; what no editor offers is kept, and of Everyone only the permissions change. */
+  updateRole(serverId: string, roleId: string, name: string, color: string, hideTag: boolean, permissions: string[]): Promise<SnapshotSummary> {
+    return this.call("updateRole", serverId, roleId, name, color, hideTag, permissions);
+  }
+  deleteRole(serverId: string, roleId: string): Promise<SnapshotSummary> {
+    return this.call("deleteRole", serverId, roleId);
+  }
+  /** The server's roles in this order: every role but Everyone once, highest first. `INVALID_ARGUMENT` with `details.field` `role_ids` for an order that is not the server's roles. */
+  reorderRoles(serverId: string, roleIds: string[]): Promise<SnapshotSummary> {
+    return this.call("reorderRoles", serverId, roleIds);
+  }
+  /** The roles a member is to hold, the whole set; the member as the server now shows them. */
+  setMemberRoles(serverId: string, accountId: string, roleIds: string[]): Promise<MemberSummary> {
+    return this.call("setMemberRoles", serverId, accountId, roleIds);
+  }
+  /** A member's title, up to 32 characters; empty clears it. This account's own is its own to set. */
+  setMemberTitle(serverId: string, accountId: string, title: string): Promise<MemberSummary> {
+    return this.call("setMemberTitle", serverId, accountId, title);
+  }
+  /** Removes a member from a server (`MANAGE_MEMBERS`, and a member below this account). */
+  removeMember(serverId: string, accountId: string): Promise<void> {
+    return this.call("removeMember", serverId, accountId);
+  }
+  /** Whether the tag beside a name in a server is the member's title; false, their role (`MANAGE_SERVER`). */
+  setTagTitles(serverId: string, titles: boolean): Promise<SnapshotSummary> {
+    return this.call("setTagTitles", serverId, titles);
+  }
   /**
    * `PUT /account/rail`: keeps `items` as this account's rail, whole
    * (architecture 6.9); its other devices hear of it through the account
@@ -995,6 +1092,10 @@ export class Bridge {
   }
   members(serverId: string, query = ""): Promise<MemberSummary[]> {
     return this.call("members", serverId, query);
+  }
+  /** The members last listed for a server, from the store, each with its tag as the server now shows it; empty when it was never listed. What is read again on `tagsChanged`. */
+  keptMembers(serverId: string): Promise<MemberSummary[]> {
+    return this.call("keptMembers", serverId);
   }
   dmAvailable(): Promise<boolean> {
     return this.call("dmAvailable");
