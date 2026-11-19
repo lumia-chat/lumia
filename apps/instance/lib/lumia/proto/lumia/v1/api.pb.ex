@@ -410,6 +410,12 @@ defmodule Lumia.V1.UpdateServerRequest do
     type: Lumia.V1.StorageFull,
     json_name: "storageFull",
     enum: true
+
+  field :member_tag, 7,
+    proto3_optional: true,
+    type: Lumia.V1.MemberTag,
+    json_name: "memberTag",
+    enum: true
 end
 
 defmodule Lumia.V1.ServerStorage do
@@ -449,6 +455,7 @@ defmodule Lumia.V1.UpdateMembershipRequest do
     json_name: "channelAddsByInvitation"
 
   field :server_dms_off, 2, proto3_optional: true, type: :bool, json_name: "serverDmsOff"
+  field :title, 3, proto3_optional: true, type: :string
 end
 
 defmodule Lumia.V1.AddChannelMembersRequest do
@@ -591,10 +598,22 @@ defmodule Lumia.V1.UpdateMemberRequest do
 
   field :server_id, 1, type: :bytes, json_name: "serverId"
   field :account_id, 2, type: :bytes, json_name: "accountId"
-  field :role_ids, 3, repeated: true, type: :bytes, json_name: "roleIds"
   field :nickname, 4, type: :string
   field :kind, 5, type: Lumia.V1.MembershipKind, enum: true
   field :expires_at, 6, type: Google.Protobuf.Timestamp, json_name: "expiresAt"
+  field :roles, 7, type: Lumia.V1.RoleIds
+  field :title, 8, proto3_optional: true, type: :string
+end
+
+defmodule Lumia.V1.RoleIds do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RoleIds",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :role_ids, 1, repeated: true, type: :bytes, json_name: "roleIds"
 end
 
 defmodule Lumia.V1.ListRolesResponse do
@@ -606,6 +625,17 @@ defmodule Lumia.V1.ListRolesResponse do
     syntax: :proto3
 
   field :roles, 1, repeated: true, type: Lumia.V1.Role
+end
+
+defmodule Lumia.V1.ReorderRolesRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ReorderRolesRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :role_ids, 1, repeated: true, type: :bytes, json_name: "roleIds"
 end
 
 defmodule Lumia.V1.UpsertRoleRequest do
@@ -717,6 +747,7 @@ defmodule Lumia.V1.AccountSnapshot do
 
   field :read_states, 11, repeated: true, type: Lumia.V1.ReadState, json_name: "readStates"
   field :rail, 12, type: Lumia.V1.Rail
+  field :roles, 13, repeated: true, type: Lumia.V1.Role
 end
 
 defmodule Lumia.V1.ReadState do

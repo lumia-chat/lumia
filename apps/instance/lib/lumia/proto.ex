@@ -58,9 +58,13 @@ defmodule Lumia.Proto do
       retention_days: s.retention_days || 0,
       show_deleted: s.show_deleted || false,
       attachment_retention_days: s.attachment_retention_days || 0,
-      storage_full: storage_full(s.storage_full)
+      storage_full: storage_full(s.storage_full),
+      member_tag: member_tag(s.member_tag)
     }
   end
+
+  defp member_tag("title"), do: :MEMBER_TAG_TITLE
+  defp member_tag(_role), do: :MEMBER_TAG_ROLE
 
   defp storage_full("delete_oldest"), do: :STORAGE_FULL_DELETE_OLDEST
   defp storage_full(_refuse), do: :STORAGE_FULL_REFUSE
@@ -96,7 +100,8 @@ defmodule Lumia.Proto do
       expires_at: timestamp(m.expires_at),
       permissions: permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1),
       channel_adds_by_invitation: m.channel_adds_by_invitation,
-      server_dms_off: m.server_dms_off
+      server_dms_off: m.server_dms_off,
+      title: m.title || ""
     }
   end
 
@@ -265,7 +270,8 @@ defmodule Lumia.Proto do
       position: r.position,
       permissions: r.permissions |> Lumia.Authz.Permission.from_bits() |> Enum.map(&permission/1),
       color: r.color || "",
-      is_everyone: r.is_everyone
+      is_everyone: r.is_everyone,
+      hide_tag: r.hide_tag
     }
   end
 

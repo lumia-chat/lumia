@@ -89,6 +89,19 @@ defmodule Lumia.V1.Permission do
   field :MANAGE_BOTS, 31
 end
 
+defmodule Lumia.V1.MemberTag do
+  @moduledoc false
+
+  use Protobuf,
+    enum: true,
+    full_name: "lumia.v1.MemberTag",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :MEMBER_TAG_ROLE, 0
+  field :MEMBER_TAG_TITLE, 1
+end
+
 defmodule Lumia.V1.StorageFull do
   @moduledoc false
 
@@ -171,6 +184,7 @@ defmodule Lumia.V1.Server do
   field :show_deleted, 9, type: :bool, json_name: "showDeleted"
   field :attachment_retention_days, 10, type: :uint32, json_name: "attachmentRetentionDays"
   field :storage_full, 11, type: Lumia.V1.StorageFull, json_name: "storageFull", enum: true
+  field :member_tag, 12, type: Lumia.V1.MemberTag, json_name: "memberTag", enum: true
 end
 
 defmodule Lumia.V1.Role do
@@ -185,6 +199,7 @@ defmodule Lumia.V1.Role do
   field :permissions, 5, repeated: true, type: Lumia.V1.Permission, enum: true
   field :color, 6, type: :string
   field :is_everyone, 7, type: :bool, json_name: "isEveryone"
+  field :hide_tag, 8, type: :bool, json_name: "hideTag"
 end
 
 defmodule Lumia.V1.Overwrite do
@@ -248,6 +263,7 @@ defmodule Lumia.V1.Member do
   field :permissions, 8, repeated: true, type: Lumia.V1.Permission, enum: true
   field :channel_adds_by_invitation, 9, type: :bool, json_name: "channelAddsByInvitation"
   field :server_dms_off, 10, type: :bool, json_name: "serverDmsOff"
+  field :title, 11, type: :string
 end
 
 defmodule Lumia.V1.Mention do

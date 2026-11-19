@@ -431,6 +431,9 @@ defmodule Lumia.V1.AccountEvent do
     type: Lumia.V1.LinkSessionUpdated,
     json_name: "linkSessionUpdated",
     oneof: 0
+
+  field :roles_updated, 42, type: Lumia.V1.RolesUpdated, json_name: "rolesUpdated", oneof: 0
+  field :members_updated, 43, type: Lumia.V1.MembersUpdated, json_name: "membersUpdated", oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -443,6 +446,7 @@ defmodule Lumia.V1.MembershipAdded do
 
   field :member, 1, type: Lumia.V1.Member
   field :server, 2, type: Lumia.V1.Server
+  field :roles, 3, repeated: true, type: Lumia.V1.Role
 end
 
 defmodule Lumia.V1.MembershipRemoved do
@@ -499,6 +503,30 @@ defmodule Lumia.V1.ServerUpdated do
     syntax: :proto3
 
   field :server, 1, type: Lumia.V1.Server
+end
+
+defmodule Lumia.V1.RolesUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.RolesUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :server_id, 1, type: :bytes, json_name: "serverId"
+  field :roles, 2, repeated: true, type: Lumia.V1.Role
+end
+
+defmodule Lumia.V1.MembersUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.MembersUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :server_id, 1, type: :bytes, json_name: "serverId"
+  field :members, 2, repeated: true, type: Lumia.V1.Member
 end
 
 defmodule Lumia.V1.RailArranged do

@@ -11,7 +11,6 @@ defmodule LumiaWeb.ServerController do
   alias Lumia.Servers
   alias Lumia.Servers.Member
   alias Lumia.Servers.MemberRole
-  alias Lumia.Servers.Role
   alias Lumia.Servers.Server
   alias Lumia.V1
   alias LumiaWeb.ProtoConn
@@ -63,7 +62,8 @@ defmodule LumiaWeb.ServerController do
                :retention_days,
                :show_deleted,
                :attachment_retention_days,
-               :storage_full
+               :storage_full,
+               :member_tag
              ]),
              fn {_, v} ->
                is_nil(v)
@@ -147,15 +147,19 @@ defmodule LumiaWeb.ServerController do
     end
   end
 
-  @doc "`PATCH /servers/{server_id}/membership`: the caller's own switches there (architecture 6.8)."
+  @doc """
+  `PATCH /servers/{server_id}/membership`: the caller's own switches there
+  (architecture 6.8) and its own title (architecture 7.5).
+  """
   def update_membership(conn, %{"server_id" => server_id}) do
     account_id = conn.assigns.current_account_id
 
     with {:ok, req} <- ProtoConn.decode(conn, V1.UpdateMembershipRequest),
          changes =
-           Map.reject(Map.take(req, [:channel_adds_by_invitation, :server_dms_off]), fn {_, v} ->
-             is_nil(v)
-           end),
+           Map.reject(
+             Map.take(req, [:channel_adds_by_invitation, :server_dms_off, :title]),
+             fn {_, v} -> is_nil(v) end
+           ),
          {:ok, member} <- Servers.update_membership(server_id, account_id, changes) do
       ProtoConn.render(conn, Proto.member(member, role_ids(server_id, account_id)))
     end
@@ -186,6 +190,7 @@ defmodule LumiaWeb.ServerController do
           order_by: [asc: m.joined_at, asc: m.account_id],
           limit: ^(size + 1)
         )
+        |> named(params["query"])
         |> after_cursor(cursor)
         |> Repo.all()
 
@@ -208,6 +213,25 @@ defmodule LumiaWeb.ServerController do
         page: %V1.PageResponse{next_cursor: next_cursor}
       })
     end
+  end
+
+  # Those whose handle or display name begins with the query, whatever its
+  # capitals.
+  defp named(query, text) when text in [nil, ""], do: query
+
+  defp named(query, text) do
+    prefix =
+      text
+      |> String.downcase()
+      |> String.replace(["\\", "%", "_"], &("\\" <> &1))
+      |> Kernel.<>("%")
+
+    from m in query,
+      join: a in Lumia.Accounts.Account,
+      on: a.id == m.account_id,
+      where:
+        like(fragment("lower(?)", a.handle), ^prefix) or
+          like(fragment("lower(coalesce(?, ''))", a.display_name), ^prefix)
   end
 
   # Keyset pagination over (joined_at, account_id) (protocol section 11).
@@ -252,17 +276,48 @@ defmodule LumiaWeb.ServerController do
 
   defp page(members, _size), do: {members, ""}
 
+  @doc """
+  `PATCH /servers/{server_id}/members/{account_id}`: the member's roles,
+  its title, or both (authorization 3.3 and 3.5); what the request leaves
+  out is left as it is.
+  """
   def update_member(conn, %{"server_id" => server_id, "account_id" => account_id}) do
     actor = conn.assigns.current_account_id
 
     with {:ok, _server} <- member_server(conn, server_id),
          {:ok, req} <- ProtoConn.decode(conn, V1.UpdateMemberRequest),
-         wanted = Enum.map(req.role_ids, &Proto.from_uuid/1),
-         true <- Enum.all?(wanted, &is_binary/1) || {:error, :invalid_argument},
-         {:ok, member} <- Servers.set_roles(server_id, account_id, wanted, actor) do
+         {:ok, member} <-
+           Lumia.Tx.transact(fn -> change_member(server_id, account_id, actor, req) end) do
       ProtoConn.render(conn, Proto.member(member, role_ids(server_id, account_id)))
     end
   end
+
+  # Both or neither: a title refused undoes the roles given with it.
+  defp change_member(server_id, account_id, actor, %V1.UpdateMemberRequest{} = req) do
+    with {:ok, member} <- set_roles(server_id, account_id, actor, req.roles) do
+      set_title(server_id, account_id, actor, req.title, member)
+    end
+  end
+
+  defp set_roles(server_id, account_id, _actor, nil) do
+    case Repo.get_by(Member, server_id: server_id, account_id: account_id) do
+      nil -> {:error, :not_found}
+      member -> {:ok, member}
+    end
+  end
+
+  defp set_roles(server_id, account_id, actor, %V1.RoleIds{role_ids: ids}) do
+    wanted = Enum.map(ids, &Proto.from_uuid/1)
+
+    if Enum.all?(wanted, &is_binary/1),
+      do: Servers.set_roles(server_id, account_id, wanted, actor),
+      else: {:error, {:invalid_argument, "roles"}}
+  end
+
+  defp set_title(_server_id, _account_id, _actor, nil, member), do: {:ok, member}
+
+  defp set_title(server_id, account_id, actor, title, _member),
+    do: Servers.set_title(server_id, account_id, actor, title)
 
   def remove_member(conn, %{"server_id" => server_id, "account_id" => account_id}) do
     actor = conn.assigns.current_account_id
@@ -276,10 +331,27 @@ defmodule LumiaWeb.ServerController do
 
   def roles(conn, %{"server_id" => server_id}) do
     with {:ok, _server} <- member_server(conn, server_id) do
-      roles = Repo.all(from r in Role, where: r.server_id == ^server_id, order_by: r.position)
-      ProtoConn.render(conn, %V1.ListRolesResponse{roles: Enum.map(roles, &Proto.role/1)})
+      render_roles(conn, Servers.roles(server_id))
     end
   end
+
+  @doc """
+  `PUT /servers/{server_id}/role-order`: the server's roles, `@everyone`
+  aside, in the order wanted (authorization 3.5).
+  """
+  def reorder_roles(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, req} <- ProtoConn.decode(conn, V1.ReorderRolesRequest),
+         wanted = Enum.map(req.role_ids, &Proto.from_uuid/1),
+         true <- Enum.all?(wanted, &is_binary/1) || {:error, {:invalid_argument, "role_ids"}},
+         {:ok, roles} <-
+           Servers.reorder_roles(server_id, conn.assigns.current_account_id, wanted) do
+      render_roles(conn, roles)
+    end
+  end
+
+  defp render_roles(conn, roles),
+    do: ProtoConn.render(conn, %V1.ListRolesResponse{roles: Enum.map(roles, &Proto.role/1)})
 
   def create_role(conn, %{"server_id" => server_id}) do
     with {:ok, _server} <- member_server(conn, server_id),
@@ -339,9 +411,9 @@ defmodule LumiaWeb.ServerController do
   defp role_attrs(%V1.Role{} = role) do
     %{
       name: role.name,
-      position: role.position,
       permissions: Enum.map(role.permissions, &Proto.from_permission/1),
-      color: if(role.color == "", do: nil, else: role.color)
+      color: role.color,
+      hide_tag: role.hide_tag
     }
   end
 

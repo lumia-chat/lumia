@@ -2705,6 +2705,7 @@ impl App {
         let req = lumia_core::proto::UpdateMembershipRequest {
             channel_adds_by_invitation,
             server_dms_off,
+            title: None,
         };
         self.api
             .update_membership(&wire::display(&server_id), &req)

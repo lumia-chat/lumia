@@ -272,6 +272,8 @@ message UpdateServerRequest {
   // Days the server keeps its attachments; 0 keeps them for ever.
   optional uint32 attachment_retention_days = 5;
   optional StorageFull storage_full = 6;
+  // Whether a member's tag is its role or its title (architecture 7.5).
+  optional MemberTag member_tag = 7;
 }
 
 // GET /servers/{server_id}/storage, for MANAGE_SERVER: what the server's
@@ -289,6 +291,9 @@ message ChannelIds { repeated bytes channel_ids = 1; }
 message UpdateMembershipRequest {
   optional bool channel_adds_by_invitation = 1;
   optional bool server_dms_off = 2;
+  // The caller's own title there: up to 32 characters once trimmed, empty
+  // for none (architecture 7.5).
+  optional string title = 3;
 }
 
 // POST /channels/{channel_id}/members: accounts added at once, or invited
@@ -344,17 +349,32 @@ message ListMembersResponse {
   PageResponse page = 3;
 }
 
+// PATCH /servers/{server_id}/members/{account_id}: a member's roles, its
+// title, or both (specs/authorization.md 3.3 and 3.5). A field left out is
+// left as it is. Answers Member.
 message UpdateMemberRequest {
+  reserved 3;
   bytes server_id = 1;
   bytes account_id = 2;
-  repeated bytes role_ids = 3;
   string nickname = 4;
   // Promote a guest.
   MembershipKind kind = 5;
   google.protobuf.Timestamp expires_at = 6;
+  // The whole set of roles the member is to hold, @everyone never among
+  // them.
+  RoleIds roles = 7;
+  // Up to 32 characters once trimmed; empty for none.
+  optional string title = 8;
 }
 
+message RoleIds { repeated bytes role_ids = 1; }
+
 message ListRolesResponse { repeated Role roles = 1; }
+
+// PUT /servers/{server_id}/role-order: every role of the server but
+// @everyone, once each, highest first (specs/authorization.md 3.5).
+// Answers ListRolesResponse.
+message ReorderRolesRequest { repeated bytes role_ids = 1; }
 
 message UpsertRoleRequest { Role role = 1; }
 
@@ -420,6 +440,8 @@ message AccountSnapshot {
   // The rail as the account arranged it, tidied: every server it is in
   // placed once (architecture 6.9).
   Rail rail = 12;
+  // The roles of every server the account is in (architecture 7.5).
+  repeated Role roles = 13;
 }
 
 // A conversation's read state for the caller: the last event read, how many

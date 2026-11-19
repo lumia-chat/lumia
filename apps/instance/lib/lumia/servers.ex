@@ -26,12 +26,15 @@ defmodule Lumia.Servers do
   alias Lumia.Servers.ChannelMember
   alias Lumia.Servers.ChannelOverwrite
   alias Lumia.Servers.Member
+  alias Lumia.Servers.MemberAnnouncement
   alias Lumia.Servers.MemberRole
   alias Lumia.Servers.Role
   alias Lumia.Servers.Server
   alias Lumia.Tx
   alias Lumia.V1
   alias Lumia.Workers.AclChanged
+  alias Lumia.Workers.MembersUpdated
+  alias Lumia.Workers.RolesUpdated
   alias Lumia.Workers.ServerUpdated
   alias Lumia.Workers.ViewerDiff
 
@@ -47,6 +50,12 @@ defmodule Lumia.Servers do
   ]
 
   @name_max 100
+
+  # A role's name and a member's title (authorization 3.5 and 10).
+  @label_max 32
+
+  # The design system's tones, each with a ground and an ink in both themes.
+  @tones ~w(peach blue purple mint amber sky stone green indigo)
 
   # ---- Servers ---------------------------------------------------------------
 
@@ -167,7 +176,11 @@ defmodule Lumia.Servers do
              Accounts.append_event(
                account_id,
                {:membership_added,
-                %V1.MembershipAdded{member: Proto.member(member), server: Proto.server(server)}}
+                %V1.MembershipAdded{
+                  member: Proto.member(member),
+                  server: Proto.server(server),
+                  roles: Enum.map(roles(server_id), &Proto.role/1)
+                }}
              ),
            :ok <- Lumia.Channels.arrive(server_id, account_id, Keyword.get(opts, :channel_id)),
            {:ok, _} <-
@@ -221,22 +234,133 @@ defmodule Lumia.Servers do
   end
 
   @doc """
-  The member's own switches in a server (architecture 6.8):
-  `:channel_adds_by_invitation`, `:server_dms_off`, either or both. Their
-  other devices hear of it through `MembershipUpdated`. Returns the member.
+  What is the member's own in a server: its switches (architecture 6.8),
+  `:channel_adds_by_invitation` and `:server_dms_off`, and its `:title`
+  there (architecture 7.5), any of them. Their other devices hear of it
+  through `MembershipUpdated`, and the server's members of a new title
+  through `MembersUpdated`. Returns the member.
   """
   def update_membership(server_id, account_id, changes) do
-    Tx.transact(fn ->
-      with {:ok, member} <- fetch_member(server_id, account_id),
-           {:ok, updated} <- member |> Ecto.Changeset.change(changes) |> Repo.update(),
-           {:ok, _} <-
-             Accounts.append_event(
-               account_id,
-               {:membership_updated, %V1.MembershipUpdated{member: own_member(updated)}}
-             ) do
-        {:ok, updated}
-      end
-    end)
+    {title, switches} = Map.pop(changes, :title, :unchanged)
+
+    with {:ok, title} <- wanted_title(title) do
+      Tx.transact(fn -> change_membership(server_id, account_id, switches, title) end)
+    end
+  end
+
+  defp change_membership(server_id, account_id, switches, title) do
+    with {:ok, member} <- fetch_member(server_id, account_id),
+         {:ok, updated} <- member |> Ecto.Changeset.change(switches) |> Repo.update(),
+         {:ok, updated} <- retitle(updated, title, account_id),
+         {:ok, _} <-
+           Accounts.append_event(
+             account_id,
+             {:membership_updated, %V1.MembershipUpdated{member: own_member(updated)}}
+           ) do
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  A title as kept: trimmed, up to #{@label_max} characters with no line
+  break or other control character, nil when empty (authorization 3.5); or
+  `{:error, {:invalid_argument, "title"}}`.
+  """
+  def member_title(title) when is_binary(title) do
+    case label(title) do
+      {:ok, ""} -> {:ok, nil}
+      {:ok, title} -> {:ok, title}
+      :error -> {:error, {:invalid_argument, "title"}}
+    end
+  end
+
+  def member_title(_), do: {:error, {:invalid_argument, "title"}}
+
+  @doc """
+  Sets a member's title, or clears it with an empty one. The member's own
+  is theirs to set; anyone else's takes an actor who could kick them
+  (authorization 3.3). The member's log gets `MembershipUpdated` and the
+  server's members are told (`MembersUpdated`). Returns the member.
+  """
+  def set_title(server_id, account_id, actor_id, title) do
+    with {:ok, title} <- member_title(title) do
+      Tx.transact(fn -> change_title(server_id, account_id, actor_id, title) end)
+    end
+  end
+
+  defp change_title(server_id, account_id, actor_id, title) do
+    with {:ok, server} <- fetch_server(server_id),
+         {:ok, member} <- fetch_member(server_id, account_id),
+         :ok <- may_title(server, account_id, actor_id),
+         {:ok, updated} <- retitle(member, title, actor_id),
+         :ok <- tell_of_title(member, updated) do
+      {:ok, updated}
+    end
+  end
+
+  defp wanted_title(:unchanged), do: {:ok, :unchanged}
+  defp wanted_title(title), do: member_title(title)
+
+  defp may_title(_server, account_id, account_id), do: :ok
+
+  defp may_title(server, account_id, actor_id) do
+    with {:ok, actor} <- actor(server.id, actor_id) do
+      target = %{
+        owner?: server.owner_account_id == account_id,
+        highest_position: highest_position(server.id, account_id)
+      }
+
+      if Authz.can_remove_member?(actor, target), do: :ok, else: {:error, :permission_denied}
+    end
+  end
+
+  # The title changed, audited, and the server's members to be told; a
+  # title that is the one already held changes nothing.
+  defp retitle(member, :unchanged, _actor_id), do: {:ok, member}
+  defp retitle(%Member{title: title} = member, title, _actor_id), do: {:ok, member}
+
+  defp retitle(member, title, actor_id) do
+    with {:ok, updated} <- member |> Ecto.Changeset.change(title: title) |> Repo.update(),
+         {:ok, _} <-
+           Audit.record({:server, member.server_id}, actor_id, "member.title",
+             target: {:account, member.account_id},
+             before: %{"title" => member.title},
+             after: %{"title" => title}
+           ),
+         :ok <- announce_member(member.server_id, member.account_id) do
+      {:ok, updated}
+    end
+  end
+
+  defp tell_of_title(%Member{title: title}, %Member{title: title}), do: :ok
+
+  defp tell_of_title(_before, updated) do
+    with {:ok, _} <-
+           Accounts.append_event(
+             updated.account_id,
+             {:membership_updated, %V1.MembershipUpdated{member: own_member(updated)}}
+           ),
+         do: :ok
+  end
+
+  # The server's other members are to hear of this member's roles or title
+  # (authorization 6.4): a row for the change, and the job that reads it.
+  defp announce_member(server_id, account_id) do
+    with {:ok, _} <-
+           Repo.insert(%MemberAnnouncement{server_id: server_id, account_id: account_id}),
+         {:ok, _} <- MembersUpdated.schedule(server_id) do
+      :ok
+    end
+  end
+
+  # Trimmed, within the limit and free of control characters, line breaks
+  # among them.
+  defp label(text) do
+    text = String.trim(text)
+
+    if String.length(text) <= @label_max and not String.match?(text, ~r/\p{Cc}/u),
+      do: {:ok, text},
+      else: :error
   end
 
   @doc "Assigns a role. Member-level: MembershipUpdated on the account log, no acl bump."
@@ -251,9 +375,8 @@ defmodule Lumia.Servers do
 
   defp change_roles(server_id, account_id, role_id, actor_id, op) do
     Tx.transact(fn ->
-      with {:ok, role} <- fetch_role(server_id, role_id),
-           {:ok, actor} <- actor(server_id, actor_id),
-           true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied},
+      with {:ok, actor} <- actor(server_id, actor_id),
+           :ok <- manageable(server_id, actor, role_id),
            {:ok, _} <- apply_role_change(server_id, account_id, role_id, op),
            {:ok, member} <- fetch_member(server_id, account_id),
            {:ok, _} <-
@@ -266,6 +389,7 @@ defmodule Lumia.Servers do
                target: {:account, account_id},
                after: %{"role_id" => role_id}
              ),
+           :ok <- announce_member(server_id, account_id),
            {:ok, _} <- ViewerDiff.schedule(server_id) do
         {:ok, :ok}
       end
@@ -303,10 +427,15 @@ defmodule Lumia.Servers do
     each(role_ids, &manageable(server_id, actor, &1))
   end
 
+  # `@everyone` is everyone's without being held, and is nobody's to give.
   defp manageable(server_id, actor, role_id) do
     with {:ok, role} <- fetch_role(server_id, role_id),
+         false <- role.is_everyone,
          true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied} do
       :ok
+    else
+      true -> {:error, {:invalid_argument, "roles"}}
+      other -> other
     end
   end
 
@@ -324,6 +453,7 @@ defmodule Lumia.Servers do
              target: {:account, account_id},
              after: %{"role_ids" => role_ids(server_id, account_id), "changed" => changes}
            ),
+         :ok <- announce_member(server_id, account_id),
          {:ok, _} <- ViewerDiff.schedule(server_id) do
       :ok
     end
@@ -365,80 +495,175 @@ defmodule Lumia.Servers do
 
   # ---- Roles and overwrites (definition-level: acl bump) ----------------------
 
+  @doc "A server's roles in order, highest first, `@everyone` last."
+  def roles(server_id) do
+    Repo.all(from r in Role, where: r.server_id == ^server_id, order_by: [r.position, r.id])
+  end
+
+  @doc "The roles of each of `server_ids`, a server's together and in order."
+  def roles_of(server_ids) do
+    Repo.all(
+      from r in Role,
+        where: r.server_id in ^server_ids,
+        order_by: [r.server_id, r.position, r.id]
+    )
+  end
+
   @doc """
-  Creates a role. Requires MANAGE_ROLES and that the actor holds every
-  permission granted. Bumps every channel in the server: a new role
-  changes nothing until assigned, but its position shifts the hierarchy.
+  Creates a role, placed last above `@everyone` whatever position is asked
+  for (authorization 3.5). Requires MANAGE_ROLES and that the actor holds
+  every permission granted. `attrs` has `:name`, and may have `:color`,
+  `:hide_tag` and `:permissions`. Bumps every channel in the server, and
+  every member is told (`RolesUpdated`).
   """
   def create_role(server_id, actor_id, attrs) do
     perms = Permission.to_bits(Map.get(attrs, :permissions, []))
 
     Tx.transact(fn ->
-      with {:ok, actor} <- actor(server_id, actor_id),
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, actor} <- actor(server_id, actor_id),
            true <- Authz.can_grant?(actor, perms) || {:error, :permission_denied},
-           true <-
-             Permission.has?(actor.server_permissions, :manage_roles) || actor.owner? ||
-               {:error, :permission_denied},
+           :ok <- require_permission(actor, :manage_roles),
+           {:ok, name} <- role_name(Map.get(attrs, :name)),
+           {:ok, color} <- role_color(Map.get(attrs, :color)),
            :ok <- check_role_limit(server_id),
            {:ok, role} <-
-             Repo.insert(%Role{
-               server_id: server_id,
-               name: Map.fetch!(attrs, :name),
-               position: Map.get(attrs, :position, 0),
-               permissions: perms,
-               color: Map.get(attrs, :color)
-             }),
+             write_role(
+               Ecto.Changeset.change(%Role{
+                 server_id: server_id,
+                 name: name,
+                 position: next_position(server_id),
+                 permissions: perms,
+                 color: color,
+                 hide_tag: Map.get(attrs, :hide_tag) == true
+               })
+             ),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "role.create",
                target: {:role, role.id},
                after: role_json(role)
              ),
-           {:ok, _} <- bump_server(server_id) do
+           :ok <- roles_changed(server_id) do
         {:ok, role}
       end
     end)
   end
 
-  @doc "Updates a role's permissions, name, position, or color. Bumps every channel in the server."
+  @doc """
+  Updates a role's name, colour, tag switch or permissions, whichever
+  `attrs` has; its position is never changed here (`reorder_roles/3`). Of
+  `@everyone` only the permissions change. Bumps every channel in the
+  server, and every member is told (`RolesUpdated`).
+  """
   def update_role(server_id, role_id, actor_id, attrs) do
     Tx.transact(fn ->
-      with {:ok, role} <- fetch_role(server_id, role_id),
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, role} <- fetch_role(server_id, role_id),
            {:ok, actor} <- actor(server_id, actor_id),
            true <-
              (role.is_everyone or Authz.can_manage_role?(actor, role)) ||
                {:error, :permission_denied},
-           true <-
-             (Permission.has?(actor.server_permissions, :manage_roles) or actor.owner?) ||
-               {:error, :permission_denied},
+           :ok <- require_permission(actor, :manage_roles),
            new_perms = new_permissions(role, attrs),
            true <-
              Authz.can_grant?(actor, new_perms &&& bnot(role.permissions)) ||
                {:error, :permission_denied},
+           {:ok, changes} <- role_changes(role, attrs),
            {:ok, updated} <-
-             role
-             |> Ecto.Changeset.change(
-               name: Map.get(attrs, :name, role.name),
-               position: Map.get(attrs, :position, role.position),
-               permissions: new_perms,
-               color: Map.get(attrs, :color, role.color)
-             )
-             |> Repo.update(),
+             write_role(Ecto.Changeset.change(role, Map.put(changes, :permissions, new_perms))),
            {:ok, _} <-
              Audit.record({:server, server_id}, actor_id, "role.update",
                target: {:role, role.id},
                before: role_json(role),
                after: role_json(updated)
              ),
-           {:ok, _} <- bump_server(server_id) do
+           :ok <- roles_changed(server_id) do
         {:ok, updated}
       end
     end)
   end
 
+  @doc """
+  Puts a server's roles in the order of `role_ids`, which names every role
+  but `@everyone` once (authorization 3.5). Requires MANAGE_ROLES; for
+  anyone but the owner, every role at or above the actor's highest keeps
+  its place. The roles are numbered from 1 in the order given. An order
+  that is the one held writes nothing. Returns the roles in order.
+  """
+  def reorder_roles(server_id, actor_id, role_ids) when is_list(role_ids) do
+    Tx.transact(fn ->
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, actor} <- actor(server_id, actor_id),
+           :ok <- require_permission(actor, :manage_roles),
+           ranked = Enum.reject(roles(server_id), & &1.is_everyone),
+           current = Enum.map(ranked, & &1.id),
+           :ok <- same_roles(current, role_ids),
+           :ok <- may_reorder(actor, ranked, role_ids),
+           :ok <- renumber(server_id, actor_id, current, role_ids) do
+        {:ok, roles(server_id)}
+      end
+    end)
+  end
+
+  defp same_roles(current, wanted) do
+    if Enum.sort(current) == Enum.sort(wanted),
+      do: :ok,
+      else: {:error, {:invalid_argument, "role_ids"}}
+  end
+
+  # Nothing the actor may not manage moves, and nothing is lifted to or
+  # above the actor's own highest: the order begins as it did, down to and
+  # including that role. An actor with no role is above nothing.
+  defp may_reorder(%{owner?: true}, _ranked, _wanted), do: :ok
+
+  defp may_reorder(actor, ranked, wanted) do
+    held =
+      case actor.highest_position do
+        nil -> length(ranked)
+        highest -> Enum.count(ranked, &(&1.position <= highest))
+      end
+
+    if Enum.take(wanted, held) == ranked |> Enum.take(held) |> Enum.map(& &1.id),
+      do: :ok,
+      else: {:error, :permission_denied}
+  end
+
+  defp renumber(_server_id, _actor_id, same, same), do: :ok
+
+  # One statement, so roles may trade places under `roles_server_position`.
+  defp renumber(server_id, actor_id, current, wanted) do
+    positions = Enum.to_list(1..length(wanted))
+
+    {_, _} =
+      Repo.update_all(
+        from(r in Role,
+          join:
+            v in fragment(
+              "(SELECT * FROM unnest(?::uuid[], ?::int[]) AS v(id, position))",
+              type(^wanted, {:array, Ecto.UUID}),
+              ^positions
+            ),
+          on: v.id == r.id,
+          where: r.server_id == ^server_id,
+          update: [set: [position: v.position, updated_at: ^DateTime.utc_now()]]
+        ),
+        []
+      )
+
+    with {:ok, _} <-
+           Audit.record({:server, server_id}, actor_id, "role.reorder",
+             before: %{"role_ids" => current},
+             after: %{"role_ids" => wanted}
+           ) do
+      roles_changed(server_id)
+    end
+  end
+
   @doc "Deletes a role. @everyone cannot be deleted. Bumps every channel in the server."
   def delete_role(server_id, role_id, actor_id) do
     Tx.transact(fn ->
-      with {:ok, role} <- fetch_role(server_id, role_id),
+      with {:ok, _server} <- lock_server(server_id),
+           {:ok, role} <- fetch_role(server_id, role_id),
            :ok <- deletable(role),
            {:ok, actor} <- actor(server_id, actor_id),
            true <- Authz.can_manage_role?(actor, role) || {:error, :permission_denied},
@@ -448,11 +673,95 @@ defmodule Lumia.Servers do
                target: {:role, role.id},
                before: role_json(role)
              ),
-           {:ok, _} <- bump_server(server_id) do
+           :ok <- roles_changed(server_id) do
         {:ok, :ok}
       end
     end)
     |> unwrap()
+  end
+
+  @doc """
+  A role's name as kept: trimmed, 1 to #{@label_max} characters with no
+  line break, and not `@everyone`'s (authorization 3.5); or
+  `{:error, {:invalid_argument, "name"}}`.
+  """
+  def role_name(name) when is_binary(name) do
+    with {:ok, name} when name != "" <- label(name),
+         false <- name |> String.trim_leading("@") |> String.downcase() == "everyone" do
+      {:ok, name}
+    else
+      _ -> {:error, {:invalid_argument, "name"}}
+    end
+  end
+
+  def role_name(_), do: {:error, {:invalid_argument, "name"}}
+
+  @doc "A role's colour as kept: a tone's name, or nil for none (authorization 3.5)."
+  def role_color(color) when color in [nil, ""], do: {:ok, nil}
+  def role_color(color) when color in @tones, do: {:ok, color}
+  def role_color(_), do: {:error, {:invalid_argument, "color"}}
+
+  # What an update changes besides permissions. `@everyone` keeps the name,
+  # colour and tag the instance gave it.
+  defp role_changes(%Role{is_everyone: true}, _attrs), do: {:ok, %{}}
+
+  defp role_changes(_role, attrs) do
+    Enum.reduce_while(Map.take(attrs, [:name, :color, :hide_tag]), {:ok, %{}}, fn
+      {:name, name}, {:ok, acc} ->
+        put_checked(acc, :name, role_name(name))
+
+      {:color, color}, {:ok, acc} ->
+        put_checked(acc, :color, role_color(color))
+
+      {:hide_tag, hide}, {:ok, acc} when is_boolean(hide) ->
+        {:cont, {:ok, Map.put(acc, :hide_tag, hide)}}
+
+      {key, _}, _ ->
+        {:halt, {:error, {:invalid_argument, Atom.to_string(key)}}}
+    end)
+  end
+
+  defp put_checked(acc, key, {:ok, value}), do: {:cont, {:ok, Map.put(acc, key, value)}}
+  defp put_checked(_acc, _key, error), do: {:halt, error}
+
+  # A name another role of the server has, whatever its capitals, is refused.
+  defp write_role(changeset) do
+    changeset
+    |> Ecto.Changeset.unique_constraint(:name, name: :roles_server_name)
+    |> Repo.insert_or_update()
+    |> case do
+      {:ok, role} -> {:ok, role}
+      {:error, _changeset} -> {:error, :already_exists}
+    end
+  end
+
+  # After the last role that is not `@everyone`.
+  defp next_position(server_id) do
+    last =
+      Repo.one(
+        from r in Role,
+          where: r.server_id == ^server_id and not r.is_everyone,
+          select: max(r.position)
+      )
+
+    (last || 0) + 1
+  end
+
+  # Definition-level (6.1), and every member's client is to hear (6.4).
+  defp roles_changed(server_id) do
+    with {:ok, _} <- bump_server(server_id),
+         {:ok, _} <- RolesUpdated.schedule(server_id) do
+      :ok
+    end
+  end
+
+  # A server's roles are changed one request at a time: the order and the
+  # names are held to rules that span its roles.
+  defp lock_server(server_id) do
+    case Repo.one(from s in Server, where: s.id == ^server_id, lock: "FOR UPDATE") do
+      nil -> {:error, :not_found}
+      server -> {:ok, server}
+    end
   end
 
   @doc """
@@ -475,7 +784,7 @@ defmodule Lumia.Servers do
                {:error, :permission_denied},
            true <- Authz.can_grant?(actor, ow.allow) || {:error, :permission_denied},
            :ok <- check_overwrite_target(channel.server_id, target_kind, target_id),
-           :ok <- check_overwrite_limit(channel_id),
+           :ok <- check_overwrite_limit(channel_id, target_kind, target_id),
            {:ok, _} <-
              Repo.insert(
                %ChannelOverwrite{
@@ -521,7 +830,8 @@ defmodule Lumia.Servers do
   Changes a server's settings: `:name`, `:retention_days` (0 keeps
   messages for ever), `:show_deleted`, `:attachment_retention_days` (0
   keeps attachments for ever), `:storage_full` (a `Lumia.V1.StorageFull`),
-  any of them; a key left out is left as it is.
+  `:member_tag` (a `Lumia.V1.MemberTag`, architecture 7.5), any of them; a
+  key left out is left as it is.
   Needs `MANAGE_SERVER` (the owner and `ADMINISTRATOR` have it). Each
   setting changed is audited, and every member is told (`ServerUpdated`).
   """
@@ -637,6 +947,12 @@ defmodule Lumia.Servers do
       {:storage_full, :STORAGE_FULL_DELETE_OLDEST}, {:ok, acc} ->
         {:cont, {:ok, Map.put(acc, :storage_full, "delete_oldest")}}
 
+      {:member_tag, :MEMBER_TAG_ROLE}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :member_tag, "role")}}
+
+      {:member_tag, :MEMBER_TAG_TITLE}, {:ok, acc} ->
+        {:cont, {:ok, Map.put(acc, :member_tag, "title")}}
+
       {key, _}, _ ->
         {:halt, {:error, {:invalid_argument, Atom.to_string(key)}}}
     end)
@@ -651,6 +967,7 @@ defmodule Lumia.Servers do
             show_deleted: "server.show_deleted",
             attachment_retention_days: "server.attachment_retention",
             storage_full: "server.storage_full",
+            member_tag: "server.member_tag",
             icon_url: "server.icon"
           ],
           Map.get(before, key) != Map.get(after_change, key),
@@ -983,11 +1300,17 @@ defmodule Lumia.Servers do
        else: {:error, :limit_exceeded}
   end
 
-  defp check_overwrite_limit(channel_id) do
-    if Repo.aggregate(from(o in ChannelOverwrite, where: o.channel_id == ^channel_id), :count) <
-         limit(:overwrites_per_channel),
-       do: :ok,
-       else: {:error, :limit_exceeded}
+  # The limit is on how many a channel has: replacing one adds none.
+  defp check_overwrite_limit(channel_id, target_kind, target_id) do
+    others =
+      from o in ChannelOverwrite,
+        where:
+          o.channel_id == ^channel_id and
+            not (o.target_kind == ^to_string(target_kind) and o.target_id == ^target_id)
+
+    if Repo.aggregate(others, :count) < limit(:overwrites_per_channel),
+      do: :ok,
+      else: {:error, :limit_exceeded}
   end
 
   # Operator hard limits (authorization section 10, architecture 16).
@@ -1016,7 +1339,8 @@ defmodule Lumia.Servers do
       "name" => r.name,
       "position" => r.position,
       "permissions" => Permission.from_bits(r.permissions),
-      "color" => r.color
+      "color" => r.color,
+      "hide_tag" => r.hide_tag
     }
   end
 end

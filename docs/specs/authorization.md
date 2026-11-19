@@ -97,7 +97,7 @@ The rules of architecture 7.5, as the instance enforces them. Each is checked in
 
 **The order.** No request carries a position: `Role.position` is the instance's answer and is ignored when sent. `@everyone` is last and stays there. A created role takes the place after the last role that is not `@everyone`. A reorder (`PUT /servers/{server_id}/role-order`) names every role of the server but `@everyone`, each once, in the order wanted; anything else is `INVALID_ARGUMENT` with `details.field` `role_ids`. For an actor who is not the owner the new order must begin with the same roles in the same places as the old one, down to and including the actor's highest role: nothing the actor may not manage moves, and nothing is lifted to or above the actor's own. An actor holding no role is above nothing and may reorder nothing. The instance then numbers the roles 1, 2, 3 and on in the order given, so no two share a position. A reorder that changes nothing is answered and nothing is written.
 
-**A role.** Its name is 1 to 32 characters once trimmed, with no line break, and no other role of the server has it, compared without case: `INVALID_ARGUMENT` with `details.field` `name`, or `ALREADY_EXISTS`. Its colour is empty or one of `peach`, `blue`, `purple`, `mint`, `amber`, `sky`, `stone`, `green`, `indigo`, the design system's tones, each of which has a ground and an ink in both themes: `INVALID_ARGUMENT` with `details.field` `color` otherwise. `hide_tag` keeps the role from being a member's tag. Of `@everyone` only the permissions change; its name, colour and tag are what the instance gave it, and a client names it itself.
+**A role.** Its name is 1 to 32 characters once trimmed, with no line break, it is not `everyone` or `@everyone`, and no other role of the server has it, compared without case: `INVALID_ARGUMENT` with `details.field` `name`, or `ALREADY_EXISTS`. Its colour is empty or one of `peach`, `blue`, `purple`, `mint`, `amber`, `sky`, `stone`, `green`, `indigo`, the design system's tones, each of which has a ground and an ink in both themes: `INVALID_ARGUMENT` with `details.field` `color` otherwise. `hide_tag` keeps the role from being a member's tag. Of `@everyone` only the permissions change; its name, colour and tag are what the instance gave it, and a client names it itself.
 
 **A title.** Up to 32 characters once trimmed, with no line break; empty clears it (`INVALID_ARGUMENT` with `details.field` `title` otherwise). A member or a guest sets its own through `PATCH /servers/{server_id}/membership`. Someone else's is set through `PATCH /servers/{server_id}/members/{account_id}` by an actor who could kick them (section 3.3). A title grants nothing and resolution never reads it. A member whose title a manager cleared may set it again; the remedy for one who keeps doing so is the kick.
 
@@ -266,6 +266,6 @@ Give a member a role; verify MembershipUpdated on that member's log at once and
 A member sets their own title; someone with MANAGE_MEMBERS sets the title of a
   member below them, then of one above them and of the owner; verify the last
   two are PERMISSION_DENIED.
-Change the permissions of a role; verify the roles in a fresh account snapshot
-  and in MembershipAdded for someone who joins afterwards.
+Make a role; verify it among the server's roles in a fresh account snapshot and
+  in MembershipAdded for someone who joins afterwards.
 ```

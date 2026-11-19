@@ -188,16 +188,35 @@ message AccountEvent {
     IdentityRebound identity_rebound = 39;  // this account started over with another identity (identity spec 4.7)
     ContactIdentityChanged contact_identity_changed = 40; // a contact did: a key change, not a rotation
     LinkSessionUpdated link_session_updated = 41; // a link session of this account moved (identity spec 4.2.1)
+    RolesUpdated roles_updated = 42;        // a server this account is in changed its roles (architecture 7.5)
+    MembersUpdated members_updated = 43;    // members of a server this account is in changed roles or title
   }
 }
 
-message MembershipAdded { Member member = 1; Server server = 2; }
+message MembershipAdded {
+  Member member = 1;
+  Server server = 2;
+  // The server's roles as they are (architecture 7.5).
+  repeated Role roles = 3;
+}
 message MembershipRemoved { bytes server_id = 1; LeaveReason reason = 2; }
 message MembershipUpdated { Member member = 1; }
 message ChannelAdded { Channel channel = 1; }
 message ChannelRemoved { bytes channel_id = 1; }
 // The server as it now is (architecture 6.7).
 message ServerUpdated { Server server = 1; }
+// A server's roles as they now are, all of them: what a client held is
+// replaced (specs/authorization.md 6.4).
+message RolesUpdated {
+  bytes server_id = 1;
+  repeated Role roles = 2;
+}
+// Members whose roles or title changed, each as it now is (role_ids, title
+// and kind; no permissions), at most 200 to an event.
+message MembersUpdated {
+  bytes server_id = 1;
+  repeated Member members = 2;
+}
 message RailArranged { Rail rail = 1; }
 // An add waiting for its member's yes, because they take adds to channels
 // as invitations (architecture 6.8).

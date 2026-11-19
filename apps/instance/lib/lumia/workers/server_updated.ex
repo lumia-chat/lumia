@@ -15,17 +15,12 @@ defmodule Lumia.Workers.ServerUpdated do
     max_attempts: 5,
     unique: [period: 60, keys: [:server_id], states: [:available, :scheduled, :retryable]]
 
-  import Ecto.Query
-
-  alias Lumia.Accounts
   alias Lumia.Proto
   alias Lumia.Repo
-  alias Lumia.Servers.Member
+  alias Lumia.Servers.Fanout
   alias Lumia.Servers.Server
-  alias Lumia.Tx
   alias Lumia.V1
 
-  @batch 500
   @delay_seconds 1
 
   @doc "Schedules the job for a server. Safe to call inside a transaction."
@@ -40,25 +35,9 @@ defmodule Lumia.Workers.ServerUpdated do
         :ok
 
       server ->
-        event = {:server_updated, %V1.ServerUpdated{server: Proto.server(server)}}
-
-        from(m in Member,
-          where: m.server_id == ^server_id,
-          order_by: m.account_id,
-          select: m.account_id
-        )
-        |> Repo.all()
-        |> Enum.chunk_every(@batch)
-        |> Enum.each(&tell(&1, event))
+        Fanout.to_members(server_id, [
+          {:server_updated, %V1.ServerUpdated{server: Proto.server(server)}}
+        ])
     end
-  end
-
-  # One batch of members, in one transaction.
-  defp tell(accounts, event) do
-    {:ok, _} =
-      Tx.transact(fn ->
-        Enum.each(accounts, &({:ok, _} = Accounts.append_event(&1, event)))
-        {:ok, :ok}
-      end)
   end
 end

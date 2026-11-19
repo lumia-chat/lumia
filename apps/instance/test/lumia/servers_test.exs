@@ -141,6 +141,28 @@ defmodule Lumia.ServersTest do
                ])
     end
 
+    test "replacing an overwrite on a channel at its limit is not one more", ctx do
+      Application.put_env(:lumia, :limits, overwrites_per_channel: 1)
+      on_exit(fn -> Application.delete_env(:lumia, :limits) end)
+
+      alice = account("alice")
+      bob = account("bob")
+      {:ok, _} = Servers.add_member(ctx.server.id, alice.id, ctx.owner.id)
+      {:ok, _} = Servers.add_member(ctx.server.id, bob.id, ctx.owner.id)
+      target = {:member, alice.id}
+
+      assert :ok =
+               Servers.set_overwrite(ctx.random.id, ctx.owner.id, target, [], [:send_messages])
+
+      assert :ok =
+               Servers.set_overwrite(ctx.random.id, ctx.owner.id, target, [:send_messages], [])
+
+      assert {:error, :limit_exceeded} ==
+               Servers.set_overwrite(ctx.random.id, ctx.owner.id, {:member, bob.id}, [], [
+                 :send_messages
+               ])
+    end
+
     test "roles_per_member is enforced by assign_role and set_roles", ctx do
       Application.put_env(:lumia, :limits, roles_per_member: 2)
       on_exit(fn -> Application.delete_env(:lumia, :limits) end)
@@ -241,24 +263,22 @@ defmodule Lumia.ServersTest do
       mod = account("mod")
       {:ok, _} = Servers.add_member(ctx.server.id, mod.id, ctx.owner.id)
 
-      {:ok, mod_role} =
-        Servers.create_role(ctx.server.id, ctx.owner.id, %{
-          name: "mod",
-          position: 5,
-          permissions: [:manage_roles, :manage_members, :send_messages]
-        })
-
+      # A new role is placed last, so these are made highest first.
       {:ok, high_role} =
         Servers.create_role(ctx.server.id, ctx.owner.id, %{
           name: "admin",
-          position: 1,
           permissions: [:manage_server]
+        })
+
+      {:ok, mod_role} =
+        Servers.create_role(ctx.server.id, ctx.owner.id, %{
+          name: "mod",
+          permissions: [:manage_roles, :manage_members, :send_messages]
         })
 
       {:ok, low_role} =
         Servers.create_role(ctx.server.id, ctx.owner.id, %{
           name: "helper",
-          position: 9,
           permissions: []
         })
 
@@ -279,9 +299,16 @@ defmodule Lumia.ServersTest do
       {:ok, role} =
         Servers.create_role(ctx.server.id, ctx.owner.id, %{
           name: "administrators",
-          position: 2,
           permissions: [:administrator]
         })
+
+      {:ok, _} =
+        Servers.reorder_roles(ctx.server.id, ctx.owner.id, [
+          ctx.high_role.id,
+          role.id,
+          ctx.mod_role.id,
+          ctx.low_role.id
+        ])
 
       :ok = Servers.assign_role(ctx.server.id, admin.id, role.id, ctx.owner.id)
 

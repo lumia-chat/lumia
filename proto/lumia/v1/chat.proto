@@ -102,6 +102,15 @@ message Server {
   uint32 attachment_retention_days = 10;
   // What happens when the server's files reach its limit.
   StorageFull storage_full = 11;
+  // What the tag beside a member's name shows (architecture 7.5).
+  MemberTag member_tag = 12;
+}
+
+// A member's tag is its highest role that is shown as one, or its title;
+// there is no falling back from one to the other.
+enum MemberTag {
+  MEMBER_TAG_ROLE = 0;
+  MEMBER_TAG_TITLE = 1;
 }
 
 // specs/media.md 4.5.
@@ -117,11 +126,16 @@ message Role {
   bytes role_id = 1;
   bytes server_id = 2;
   string name = 3;
-  // Lower sorts first; the member's lowest-position role is the display tag.
+  // Lower sorts first and is higher. The instance's to set: an answer
+  // only, ignored in a request (specs/authorization.md 3.5).
   uint32 position = 4;
   repeated Permission permissions = 5;
-  string color = 6;  // CSS color or empty
+  // One of the design system's tones (peach, blue, purple, mint, amber,
+  // sky, stone, green, indigo) or empty for none.
+  string color = 6;
   bool is_everyone = 7;
+  // Never a member's tag, whatever its place (architecture 7.5).
+  bool hide_tag = 8;
 }
 
 // Per-channel permission overwrite for a role or a member (architecture 7.2).
@@ -179,6 +193,9 @@ message Member {
   bool channel_adds_by_invitation = 9;
   // Nobody may start a server DM with them:
   bool server_dms_off = 10;
+  // The member's title in this server, up to 32 characters; empty for none
+  // (architecture 7.5).
+  string title = 11;
 }
 
 message Mention {

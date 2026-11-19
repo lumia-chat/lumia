@@ -14,6 +14,9 @@ defmodule Lumia.Servers.Server do
     field :stored_bytes, :integer, default: 0
     field :attachment_retention_days, :integer
     field :storage_full, :string, default: "refuse"
+    # What the tag beside a member's name shows (architecture 7.5):
+    # `"role"` or `"title"`.
+    field :member_tag, :string, default: "role"
     belongs_to :owner, Lumia.Accounts.Account, foreign_key: :owner_account_id
     timestamps()
   end

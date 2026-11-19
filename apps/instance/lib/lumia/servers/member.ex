@@ -12,6 +12,8 @@ defmodule Lumia.Servers.Member do
     field :account_id, Ecto.UUID, primary_key: true
     field :kind, :string, default: "member"
     field :nickname, :string
+    # The member's title in this server (architecture 7.5), or nil.
+    field :title, :string
     field :joined_at, :utc_datetime_usec
     field :expires_at, :utc_datetime_usec
     # The member's own switches in this server (architecture 6.8): adds to

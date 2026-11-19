@@ -493,7 +493,9 @@ defmodule LumiaWeb.ApiTest do
         |> put_req_header("content-type", @json)
         |> patch(
           "/api/v1/servers/#{ctx.server.id}/members/#{alice.id}",
-          Lumia.ProtoJSON.encode!(%V1.UpdateMemberRequest{role_ids: [Proto.uuid(role.id)]})
+          Lumia.ProtoJSON.encode!(%V1.UpdateMemberRequest{
+            roles: %V1.RoleIds{role_ids: [Proto.uuid(role.id)]}
+          })
         )
 
       assert %V1.Member{role_ids: [rid]} = decode(patched, V1.Member)
