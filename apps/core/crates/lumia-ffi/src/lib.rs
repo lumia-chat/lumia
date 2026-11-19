@@ -3926,10 +3926,13 @@ pub fn roles_untouched(opened: RoleDraft, draft: RoleDraft) -> bool {
     roles::untouched(&opened.into(), &draft.into())
 }
 
-/// Whether a member's form still holds exactly what it opened with.
+/// The places in `members` of those "Add members" offers `role_id` to, in order: asked once
+/// for the whole list.
 #[uniffi::export]
-pub fn roles_form_untouched(opened: MemberForm, form: MemberForm) -> bool {
-    roles::form_untouched(&opened.into(), &form.into())
+pub fn roles_given_to(role_id: String, members: Vec<MemberSummary>) -> Vec<u32> {
+    let members: Vec<(bool, Vec<String>)> =
+        members.into_iter().map(|m| (m.guest, m.role_ids)).collect();
+    roles::given_to(&role_id, &members)
 }
 
 /// Whether `member` may be offered `role_id` in "Add members": no guest, nobody who holds it.

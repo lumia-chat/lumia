@@ -82,10 +82,14 @@ fn answer(file: &File, case: &Case) -> Value {
         )),
         "sectionLabel" => json!(roles::section_label(of(&a["section"]))),
         "untouched" => json!(roles::untouched(&of(&a["opened"]), &of(&a["draft"]))),
-        "formUntouched" => json!(roles::form_untouched(
-            &of::<MemberForm>(&a["opened"]),
-            &of::<MemberForm>(&a["form"])
-        )),
+        "givenTo" => {
+            let people: Vec<Value> = of(&a["members"]);
+            let members: Vec<(bool, Vec<String>)> = people
+                .iter()
+                .map(|p| (p["guest"].as_bool().unwrap(), of(&p["roleIds"])))
+                .collect();
+            json!(roles::given_to(s(&a["roleId"]), &members))
+        }
         "mayBeGiven" => json!(roles::may_be_given(
             s(&a["roleId"]),
             a["guest"].as_bool().unwrap(),

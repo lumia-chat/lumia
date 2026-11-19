@@ -253,11 +253,6 @@ export function changesAny(changes: MemberChanges): boolean {
   return changes.give.length > 0 || changes.take.length > 0 || changes.title !== null;
 }
 
-/** Whether a member's form still holds exactly what it opened with. */
-export function formUntouched(opened: MemberForm, form: MemberForm): boolean {
-  return sameForm(form, opened);
-}
-
 /** Whether a member may be offered a role in "Add members": a guest is given no roles, and one who holds it already has it. */
 export function mayBeGiven(roleId: string, member: Pick<MemberSummary, "guest" | "roleIds">): boolean {
   return !member.guest && !member.roleIds.includes(roleId);

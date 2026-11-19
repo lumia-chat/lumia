@@ -268,46 +268,6 @@
       "why": "recoloured"
     },
     {
-      "rule": "formUntouched",
-      "args": {
-        "opened": {
-          "roleIds": [
-            "eng",
-            "design"
-          ],
-          "title": "Lead"
-        },
-        "form": {
-          "roleIds": [
-            "design",
-            "eng"
-          ],
-          "title": "Lead"
-        }
-      },
-      "answer": true,
-      "why": "the same roles in another order"
-    },
-    {
-      "rule": "formUntouched",
-      "args": {
-        "opened": {
-          "roleIds": [
-            "design"
-          ],
-          "title": ""
-        },
-        "form": {
-          "roleIds": [
-            "design"
-          ],
-          "title": "L"
-        }
-      },
-      "answer": false,
-      "why": "a title being typed"
-    },
-    {
       "rule": "mayBeGiven",
       "args": {
         "roleId": "eng",
@@ -340,6 +300,39 @@
       },
       "answer": false,
       "why": "a guest is given no roles"
+    },
+    {
+      "rule": "givenTo",
+      "args": {
+        "roleId": "eng",
+        "members": [
+          {
+            "guest": false,
+            "roleIds": [
+              "design"
+            ]
+          },
+          {
+            "guest": false,
+            "roleIds": [
+              "eng"
+            ]
+          },
+          {
+            "guest": true,
+            "roleIds": []
+          },
+          {
+            "guest": false,
+            "roleIds": []
+          }
+        ]
+      },
+      "answer": [
+        0,
+        3
+      ],
+      "why": "the places of those offered it, in order: no guest, nobody holding it"
     },
     {
       "rule": "toneOf",

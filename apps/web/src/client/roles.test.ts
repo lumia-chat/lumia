@@ -39,8 +39,8 @@ function answer(c: Case): unknown {
       return roles.sectionLabel(a.section);
     case "untouched":
       return roles.untouched(a.opened, a.draft);
-    case "formUntouched":
-      return roles.formUntouched(a.opened, a.form);
+    case "givenTo":
+      return a.members.flatMap((m: { guest: boolean; roleIds: string[] }, i: number) => (roles.mayBeGiven(a.roleId, m) ? [i] : []));
     case "mayBeGiven":
       return roles.mayBeGiven(a.roleId, { guest: a.guest, roleIds: a.roleIds });
     case "holderCounts":

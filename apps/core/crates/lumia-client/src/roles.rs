@@ -874,17 +874,24 @@ pub fn changes_any(changes: &MemberChanges) -> bool {
     !changes.give.is_empty() || !changes.take.is_empty() || changes.title.is_some()
 }
 
-/// Whether a member's form still holds exactly what it opened with.
-#[must_use]
-pub fn form_untouched(opened: &MemberForm, form: &MemberForm) -> bool {
-    same_form(form, opened)
-}
-
 /// Whether a member may be offered a role in "Add members", from its editor: a guest is
 /// given no roles, and one who holds it already has it. `role_ids` are the member's.
 #[must_use]
 pub fn may_be_given(role_id: &str, guest: bool, role_ids: &[String]) -> bool {
     !guest && !role_ids.iter().any(|id| id == role_id)
+}
+
+/// The places in `members` (each whether a guest, and the role ids it holds) of those "Add
+/// members" offers `role_id` to ([`may_be_given`]), in order: the whole list at once, for a
+/// shell across a binding.
+#[must_use]
+pub fn given_to(role_id: &str, members: &[(bool, Vec<String>)]) -> Vec<u32> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, (guest, role_ids))| may_be_given(role_id, *guest, role_ids))
+        .filter_map(|(i, _)| u32::try_from(i).ok())
+        .collect()
 }
 
 /// A member's form's two states.
