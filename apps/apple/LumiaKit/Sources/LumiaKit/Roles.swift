@@ -4,9 +4,10 @@
 // records (`HeldRole`, `RoleChoice`, `MemberForm`, `MemberOffers`,
 // `TagLook`, `SettingsSection`, `RoleWords`) the screens use as they come.
 // What is here is the phone's own: the core's tone names as the phone's
-// colours, counts as `Int`, an error read into the refusal's words, a move
-// drawn before the instance answers, and the few things a phone says that
-// the other clients do not.
+// colours, counts as `Int`, the places the core's search answers read back
+// into members, "Add members" in the order of names, an error read into the
+// refusal's words, a move drawn before the instance answers, and the few
+// things a phone says that the other clients do not.
 import Foundation
 import LumiaFFI
 
@@ -17,17 +18,15 @@ extension HeldRole: Identifiable {
 extension RoleChoice: Identifiable {}
 
 public extension SettingsSection {
-    /// The section's name, as its row says it.
-    var label: String {
+    /// The section as an identifier names it: "overview", "roles", "members",
+    /// whatever its row says (the core's `rolesSectionLabel`).
+    var key: String {
         switch self {
-        case .overview: "Overview"
-        case .roles: "Roles"
-        case .members: "Members"
+        case .overview: "overview"
+        case .roles: "roles"
+        case .members: "members"
         }
     }
-
-    /// The section as an identifier names it: "overview", "roles", "members".
-    var key: String { label.lowercased() }
 }
 
 public extension MemberOffers {
@@ -76,21 +75,37 @@ public enum Roles {
         rolesHolders(role: role, members: members).map { Int($0) }
     }
 
+    /// How many of `members` hold each of `roles`, by role id, asked of the
+    /// core once for the whole list (a call a role would cross the binding
+    /// with every member each time); nil until the members are known.
+    public static func holderCounts(_ roles: [RoleSummary], members: [MemberSummary]?) -> [String: Int]? {
+        guard let members else { return nil }
+        let counts = rolesHolderCounts(roles: roles, members: members)
+        return Dictionary(zip(roles.map(\.roleId), counts.map { Int($0) }), uniquingKeysWith: { first, _ in first })
+    }
+
     /// "1 member", "1,204 members".
     public static func membersCount(_ n: Int) -> String { rolesMembersCount(n: UInt64(max(0, n))) }
 
     /// A count with a comma between each three digits.
     public static func grouped(_ n: Int) -> String { rolesGrouped(n: UInt64(max(0, n))) }
 
-    /// Members found by what is typed in a search.
+    /// Members found by what is typed in a search: the core's places of
+    /// them, asked once for the whole list, read back into the list; all of
+    /// them for nothing typed, with nothing asked.
     public static func searched(_ members: [MemberSummary], query: String) -> [MemberSummary] {
-        members.filter { rolesFound(query: query, member: $0) }
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return members }
+        return rolesSearched(query: query, members: members).compactMap { at in
+            let i = Int(at)
+            return members.indices.contains(i) ? members[i] : nil
+        }
     }
 
-    /// Who may be given a role from its editor: members who do not hold
-    /// it, a guest never, found by `query`, in the order of their names.
+    /// Who may be given a role from its editor: those the core's
+    /// `rolesMayBeGiven` lets be offered (no guest, nobody who holds it),
+    /// found by `query`, in the order of their names.
     public static func candidates(_ members: [MemberSummary], roleID: String, query: String, name: (MemberSummary) -> String) -> [MemberSummary] {
-        searched(members.filter { !$0.guest && !$0.roleIds.contains(roleID) }, query: query)
+        searched(members, query: query).filter { rolesMayBeGiven(roleId: roleID, member: $0) }
             .sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
     }
 
@@ -103,14 +118,6 @@ public enum Roles {
             out.append(r)
         }
         return out
-    }
-
-    /// Whether an editor holds what it opened on, as typed: nothing typed,
-    /// chosen or switched that is still there, a permission switched on and
-    /// off again as it was. "Saved." stays said while it does.
-    public static func untouched(opened: RoleDraft, draft: RoleDraft) -> Bool {
-        draft.name == opened.name && draft.color == opened.color && draft.hideTag == opened.hideTag
-            && draft.permissions.count == opened.permissions.count && draft.permissions.allSatisfy(opened.permissions.contains)
     }
 
     /// Why a role was not saved, moved or deleted, in the core's words.
@@ -133,7 +140,7 @@ public enum PhoneRoleWords {
     public static func rowValue(held: Int?, hideTag: Bool, locked: Bool) -> String {
         var parts: [String] = []
         if let held { parts.append(Roles.membersCount(held)) }
-        if hideTag { parts.append("not shown as tag") }
+        if hideTag { parts.append(Roles.words.notShownAsTag.lowercased()) }
         if locked { parts.append("not yours to change") }
         return parts.joined(separator: ", ")
     }

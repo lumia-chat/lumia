@@ -126,7 +126,7 @@ struct ServerSettingsSectionsScreen: View {
             HStack(spacing: LumiaTokens.space10) {
                 Image(systemName: icon(section)).font(.system(size: RoleMetrics.glyph)).foregroundStyle(LumiaTokens.inkQuiet.color)
                     .frame(width: LumiaTokens.space18)
-                Text(section.label).font(RoleMetrics.sectionName.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
+                Text(rolesSectionLabel(section: section)).font(RoleMetrics.sectionName.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
                 Spacer(minLength: LumiaTokens.space8)
                 if let note { Text(note).font(RoleMetrics.note.font).foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1) }
                 Image(systemName: "chevron.right").font(.system(size: RoleMetrics.smallGlyph, weight: .semibold)).foregroundStyle(LumiaTokens.inkFaint.color)
@@ -136,7 +136,7 @@ struct ServerSettingsSectionsScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(section.label)
+        .accessibilityLabel(rolesSectionLabel(section: section))
         .accessibilityValue(note ?? "")
         .accessibilityIdentifier("section-\(section.key)")
     }
@@ -407,7 +407,7 @@ struct RolesScreen: View {
     private var roles: [RoleSummary] { moved ?? server?.roles ?? [] }
 
     var body: some View {
-        PanelScreen(back: settingsBack(server), title: "Roles", subtitle: server.map { "\($0.name) · \(rolesCount(roles: $0.roles))" }) {
+        PanelScreen(back: settingsBack(server), title: rolesSectionLabel(section: .roles), subtitle: server.map { "\($0.name) · \(rolesCount(roles: $0.roles))" }) {
             ScrollView {
                 if let server {
                     VStack(alignment: .leading, spacing: LumiaTokens.space12) {
@@ -416,8 +416,10 @@ struct RolesScreen: View {
                             .fixedSize(horizontal: false, vertical: true)
                         if !error.isEmpty { LumiaErrorText(error).accessibilityIdentifier("roles-error") }
                         let roles = roles
+                        // How many hold each role, asked of the core once for the list, not once a row.
+                        let held = Roles.holderCounts(roles, members: session.serverMembers[serverID])
                         VStack(spacing: LumiaTokens.space6) {
-                            ForEach(roles, id: \.roleId) { role in row(role, among: roles) }
+                            ForEach(roles, id: \.roleId) { role in row(role, among: roles, held: held?[role.roleId]) }
                         }
                         .accessibilityElement(children: .contain)
                         .accessibilityLabel("Roles")
@@ -440,10 +442,9 @@ struct RolesScreen: View {
         .task { if session.serverMembers[serverID] == nil { await session.refreshMembers(serverID: serverID) } }
     }
 
-    private func row(_ role: RoleSummary, among roles: [RoleSummary]) -> some View {
+    private func row(_ role: RoleSummary, among roles: [RoleSummary], held: Int?) -> some View {
         let locked = rolesLocked(role: role)
         let moves = !role.isEveryone && !locked
-        let held = Roles.holders(role, members: session.serverMembers[serverID])
         return HStack(spacing: 0) {
             if locked {
                 words(role, held: held, end: "lock", moves: false)
@@ -495,7 +496,7 @@ struct RolesScreen: View {
         if role.hideTag {
             HStack(spacing: LumiaTokens.space4) {
                 Image(systemName: "eye.slash").font(.system(size: LumiaTokens.textCount.size))
-                Text("Not shown as tag").lineLimit(1)
+                Text(Roles.words.notShownAsTag).lineLimit(1)
             }
         }
     }
@@ -678,7 +679,7 @@ struct RoleEditorScreen: View {
         .onChange(of: draft) { _, now in
             if now.name.count > Roles.labelMax { draft.name = String(now.name.prefix(Roles.labelMax)) }
             // The draft as a save or the role itself left it is not a change: "Saved." stays said.
-            if let opened, !Roles.untouched(opened: opened, draft: now) { saved = false }
+            if let opened, !rolesUntouched(opened: opened, draft: now) { saved = false }
         }
         .sheet(isPresented: $askingAdministrator) {
             AskSheet(
@@ -1090,7 +1091,7 @@ struct ServerMembersScreen: View {
     private var members: [MemberSummary] { session.serverMembers[serverID] ?? [] }
 
     var body: some View {
-        PanelScreen(back: settingsBack(server), title: "Members", subtitle: server.map { PhoneRoleWords.membersIn(members.count, serverName: $0.name) }) {
+        PanelScreen(back: settingsBack(server), title: rolesSectionLabel(section: .members), subtitle: server.map { PhoneRoleWords.membersIn(members.count, serverName: $0.name) }) {
             ScrollView {
                 if let server {
                     VStack(alignment: .leading, spacing: LumiaTokens.space12) {

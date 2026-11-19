@@ -459,7 +459,7 @@ struct ServerOverviewScreen: View {
     private var server: ServerSummary? { session.snapshot?.servers.first { $0.serverId == serverID } }
 
     var body: some View {
-        PanelScreen(back: settingsBack(server), title: "Overview", subtitle: server?.name) {
+        PanelScreen(back: settingsBack(server), title: rolesSectionLabel(section: .overview), subtitle: server?.name) {
             ScrollViewReader { proxy in
                 ScrollView {
                     if let server, loaded {

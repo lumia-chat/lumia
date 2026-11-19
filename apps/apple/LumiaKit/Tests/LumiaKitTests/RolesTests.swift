@@ -59,8 +59,20 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(Roles.words.administrator, "ADMINISTRATOR")
     }
 
-    func testASectionIsNamedAndIdentified() {
-        XCTAssertEqual([SettingsSection.overview, .roles, .members].map(\.label), ["Overview", "Roles", "Members"])
+    // Every role's holders in one call, read back by role id; none while the members are unknown.
+    func testHolderCountsAreOneCallReadBackByRole() {
+        let people = [member("a", roleIDs: ["mod", "eng"]), member("b", roleIDs: ["eng"]), member("c")]
+        let counts = Roles.holderCounts(acme, members: people)
+        XCTAssertEqual(counts?["mod"], 1)
+        XCTAssertEqual(counts?["eng"], 2)
+        XCTAssertEqual(counts?["admin"], 0)
+        XCTAssertEqual(counts?["everyone"], 3)
+        XCTAssertEqual(counts?.count, acme.count)
+        XCTAssertNil(Roles.holderCounts(acme, members: nil))
+    }
+
+    // An identifier's key is the phone's, whatever the row says.
+    func testASectionIsIdentified() {
         XCTAssertEqual([SettingsSection.overview, .roles, .members].map(\.key), ["overview", "roles", "members"])
     }
 
@@ -96,21 +108,6 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(Roles.drawnMoved(acme, roleID: "eng", beforeID: "design").filter { !$0.isEveryone }.map(\.roleId), order)
     }
 
-    // "Saved." stays said while the editor holds what it opened on, a
-    // permission switched on and off again included; a space typed is a change.
-    func testAnEditorUntouchedSinceItsSave() {
-        let opened = rolesDraftOf(role: role("mod", name: "Moderator", color: "green", permissions: ["MANAGE_ROLES", "SEND_IN_THREADS"]))
-        var draft = opened
-        XCTAssertTrue(Roles.untouched(opened: opened, draft: draft))
-        draft.permissions = ["SEND_IN_THREADS", "MANAGE_ROLES"]
-        XCTAssertTrue(Roles.untouched(opened: opened, draft: draft))
-        draft.name = "Moderator "
-        XCTAssertFalse(Roles.untouched(opened: opened, draft: draft))
-        draft = opened
-        draft.permissions.removeAll { $0 == "MANAGE_ROLES" }
-        XCTAssertFalse(Roles.untouched(opened: opened, draft: draft))
-    }
-
     // A member list that could not be read is not an empty one: who holds
     // a role stays unknown, or as it was last known, and "Delete
     // Moderator?" does not say nobody holds a role forty members hold.
@@ -134,14 +131,21 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(MemberLists.after(held: lists, serverIDs: ["trail"], read: ["acme": forty, "trail": []]), ["trail": []])
     }
 
-    func testWhoMayBeGivenARoleFromItsEditor() {
-        var guest = member("jordan", name: "Jordan Lee")
-        guest.guest = true
-        let people = [member("sam", name: "Sam Okafor"), member("devon", name: "Devon Park", roleIDs: ["mod"]), guest, member("maya", name: "Maya Chen")]
-        XCTAssertEqual(Roles.candidates(people, roleID: "mod", query: "", name: \.displayName).map(\.handle), ["maya", "sam"])
-        XCTAssertEqual(Roles.candidates(people, roleID: "mod", query: "@SAM", name: \.displayName).map(\.handle), ["sam"])
+    // The core's places of those found, read back into the members, in their order.
+    func testASearchIsReadBackIntoTheMembers() {
+        let people = [member("sam", name: "Sam Okafor"), member("devon", name: "Devon Park"), member("maya", name: "Maya Chen")]
+        XCTAssertEqual(Roles.searched(people, query: "").map(\.handle), ["sam", "devon", "maya"])
+        XCTAssertEqual(Roles.searched(people, query: "a").map(\.handle), ["sam", "devon", "maya"])
+        XCTAssertEqual(Roles.searched(people, query: "chen").map(\.handle), ["maya"])
+        XCTAssertEqual(Roles.searched([], query: "chen"), [])
+    }
+
+    // "Add members": those the core lets be offered and its search finds, by name.
+    func testAddMembersIsInTheOrderOfNames() {
+        let people = [member("sam", name: "Sam Okafor"), member("devon", name: "Devon Park", roleIDs: ["mod"]), member("maya", name: "Maya Chen")]
         XCTAssertEqual(Roles.candidates(people, roleID: "eng", query: "", name: \.displayName).map(\.handle), ["devon", "maya", "sam"])
-        XCTAssertEqual(Roles.searched(people, query: "nobody"), [])
+        XCTAssertEqual(Roles.candidates(people, roleID: "mod", query: "", name: \.displayName).map(\.handle), ["maya", "sam"])
+        XCTAssertEqual(Roles.candidates(people, roleID: "eng", query: "o", name: \.displayName).map(\.handle), ["devon", "sam"])
     }
 
     func testThePhonesOwnWords() {
