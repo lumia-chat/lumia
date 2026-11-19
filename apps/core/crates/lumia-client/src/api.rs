@@ -68,7 +68,8 @@ use lumia_core::proto::{
     SendDmRequestRequest, SignedHistoryManifest,
 };
 use lumia_core::proto::{
-    ListRolesResponse, MemberTag, ReorderRolesRequest, Role, UpdateMemberRequest, UpsertRoleRequest,
+    ListRolesResponse, MemberTag, ReorderRolesRequest, Role, UpdateMemberRequest,
+    UpdateRoleRequest, UpsertRoleRequest,
 };
 use lumia_core::proto::{ReauthOidcStartRequest, ReauthOidcStartResponse, RebindIdentityRequest};
 use prost::Message;
@@ -1688,6 +1689,30 @@ impl Api {
         let (status, bytes) = self
             .send(
                 reqwest::Method::PUT,
+                &format!("/api/v1/servers/{server_id}/roles/{role_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PATCH /servers/{id}/roles/{role_id}`: what `req` names of the role
+    /// and nothing else of it: its name, colour and tag switch, and the
+    /// permissions switched on (`grant`) and off (`revoke`).
+    ///
+    /// # Errors
+    /// As [`Api::update_role`]; `INVALID_ARGUMENT` with `details.field`
+    /// `permissions` for one named in both lists.
+    pub async fn change_role(
+        &self,
+        server_id: &str,
+        role_id: &str,
+        req: &UpdateRoleRequest,
+    ) -> Result<Role, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
                 &format!("/api/v1/servers/{server_id}/roles/{role_id}"),
                 Some(req.encode_to_vec()),
                 None,

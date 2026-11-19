@@ -715,7 +715,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                             println!("-- reconnecting in {delay:?} (attempt {attempt}): {reason}");
                         }
                         Some(GatewayEvent::Closed(reason)) => { println!("closed: {reason}"); break; }
-                        Some(GatewayEvent::AccountApplied(_)) => {}
+                        Some(GatewayEvent::AccountApplied(_) | GatewayEvent::AccountSnapshotTaken { .. }) => {}
                         None => break,
                     },
                     _ = tokio::signal::ctrl_c() => break,
@@ -1233,6 +1233,9 @@ async fn dm_loop(
                 GatewayEvent::AccountApplied(events) => engine.on_account_events(&events).await?,
                 GatewayEvent::SnapshotTaken { seq, .. } => {
                     vec![Outcome::Print(format!("snapshot to seq {seq}"))]
+                }
+                GatewayEvent::AccountSnapshotTaken { seq } => {
+                    vec![Outcome::Print(format!("account snapshot to seq {seq}"))]
                 }
                 GatewayEvent::Reconnecting {
                     attempt,

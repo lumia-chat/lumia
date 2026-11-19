@@ -20,7 +20,7 @@
 //! store refuses them out of order, and `Welcome` asks for the account log
 //! before the channels (protocol section 6.3).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use futures_channel::mpsc;
@@ -65,6 +65,15 @@ pub enum GatewayEvent {
         /// The snapshot's sequence number.
         seq: u64,
     },
+    /// The account log took the snapshot path up to `seq` (delivery spec
+    /// 6: the cursor was more than the replay cap behind). The account
+    /// events before it were never replayed, so whatever the application
+    /// keeps from them (other members' roles and titles among it) is as
+    /// old as its last connection and is to be read again.
+    AccountSnapshotTaken {
+        /// The snapshot's sequence number.
+        seq: u64,
+    },
     /// The connection dropped; the loop tries again after `delay`.
     Reconnecting {
         /// Consecutive failed attempts so far, from 1.
@@ -81,8 +90,16 @@ pub enum GatewayEvent {
 /// Instructions to the gateway loop from the application.
 #[derive(Debug, Clone)]
 pub enum GatewayCommand {
-    /// Send a command (also written to the outbox until acked).
+    /// Send a command (also written to the outbox until acked). It is in
+    /// the outbox once the loop has read this, which while the instance
+    /// cannot be reached is not at once: a sender that must not lose it to
+    /// the process ending writes the outbox itself and says `Outbox`.
     Send(Command),
+    /// The outbox holds commands their sender wrote there through its own
+    /// connection to the store: send those this connection has not sent.
+    /// Before the welcome there is nothing to do, since the welcome sends
+    /// the whole outbox.
+    Outbox,
     /// Subscribe to a channel from the store's cursor.
     Subscribe(Vec<u8>),
     /// The app came to the foreground: ask for every head.
@@ -216,7 +233,7 @@ async fn run_until_told<S: Store>(
             &device_id,
             &mut channels,
             &mut commands,
-            std::mem::take(&mut stash),
+            &mut stash,
             &events,
         )
         .await;
@@ -314,17 +331,41 @@ async fn run_until_told<S: Store>(
         // The wait watches the application: one that lets go meanwhile
         // (signing out, going to the background) ends the loop then and
         // not after the wait, and what it sends is kept, in order, for the
-        // next connection.
+        // next connection that is made, however many attempts fail first.
         let mut waited = Box::pin(sleep(delay).fuse());
         loop {
             futures_util::select! {
                 () = waited => break,
                 command = commands.next().fuse() => match command {
-                    Some(command) => stash.push(command),
+                    Some(command) => hold(command, &mut store, &mut stash),
                     None => return (store, Told::Done),
                 },
             }
         }
+    }
+}
+
+/// Keeps what the application sent while there is no connection. A command
+/// goes to the outbox now, which the next welcome sends whole: held in
+/// memory it would be gone with the process, and the instance may be out
+/// of reach for as long as the device is. The rest waits for the next
+/// connection in the order it came.
+fn hold<S: Store>(command: GatewayCommand, store: &mut S, stash: &mut Vec<GatewayCommand>) {
+    match command {
+        GatewayCommand::Send(command) => {
+            let queued = store.outbox_push(&OutboxEntry {
+                command_id: command.command_id.clone(),
+                channel_id: command.channel_id.clone(),
+                bytes: command.encode_to_vec(),
+            });
+            // A store that would not take it now is asked again when connected.
+            if queued.is_err() {
+                stash.push(GatewayCommand::Send(command));
+            }
+        }
+        // Already in the outbox, and the next welcome sends that.
+        GatewayCommand::Outbox => {}
+        command => stash.push(command),
     }
 }
 
@@ -390,7 +431,9 @@ fn jitter(span: Duration) -> Duration {
 
 /// Runs one connection until it closes. Subscribes to `channels` from the
 /// store's cursors; a `Subscribe` command adds to that list so a reconnect
-/// picks it up.
+/// picks it up. `stash` is what the application sent while there was no
+/// connection: it is carried out once this one is made, and left as it is
+/// when none is.
 ///
 /// # Errors
 /// On a transport failure before the handshake, an API failure while
@@ -404,7 +447,7 @@ pub async fn run<S: Store>(
     device_id: &[u8],
     channels: &mut Vec<Vec<u8>>,
     commands: &mut mpsc::UnboundedReceiver<GatewayCommand>,
-    stash: Vec<GatewayCommand>,
+    stash: &mut Vec<GatewayCommand>,
     events: &mpsc::UnboundedSender<GatewayEvent>,
 ) -> Result<Exit, ClientError> {
     let stored = store.cursors(LogKind::Channel)?;
@@ -438,8 +481,23 @@ pub async fn run<S: Store>(
 
     // A queue, not a stack: effects run in the order the session returns them.
     let mut pending: VecDeque<Effect> = VecDeque::from([session.hello()]);
-    for command in stash {
-        on_command(command, store, &mut session, channels, &mut pending)?;
+    // The commands this connection has sent and not heard back about: the
+    // welcome sends the whole outbox, and what is said to be in it after
+    // (`GatewayCommand::Outbox`) is sent once.
+    let mut sent: HashSet<Vec<u8>> = HashSet::new();
+    // Taken only now that there is a connection, and one at a time: an
+    // attempt that failed above, or fails here, leaves the rest for the next.
+    while !stash.is_empty() {
+        let command = stash.remove(0);
+        on_command(
+            command,
+            store,
+            &mut session,
+            channels,
+            &mut pending,
+            &mut sent,
+            false,
+        )?;
     }
     let mut heartbeat_period = DEFAULT_HEARTBEAT;
     let mut heartbeat = Box::pin(sleep(heartbeat_period).fuse());
@@ -500,6 +558,11 @@ pub async fn run<S: Store>(
                     // session's, or the next live account event is a gap
                     // the store refuses.
                     store.apply_account_snapshot(&account_id, snap.seq)?;
+                    // The events up to it were skipped, not applied: the
+                    // application is told, since nothing else will say
+                    // what they would have.
+                    let _ =
+                        events.unbounded_send(GatewayEvent::AccountSnapshotTaken { seq: snap.seq });
                     pending.extend(session.account_snapshot_applied(snap.seq));
                 }
                 Effect::Apply {
@@ -570,17 +633,17 @@ pub async fn run<S: Store>(
                                 heartbeat = Box::pin(sleep(heartbeat_period).fuse());
                             }
                             // Retry anything still in the outbox, verbatim.
-                            for entry in store.outbox()? {
-                                if let Ok(command) = Command::decode(entry.bytes.as_slice()) {
-                                    pending.push_back(session.command(command));
-                                }
-                            }
+                            send_outbox(store, &session, &mut pending, &mut sent)?;
                         }
-                        Notice::Acked { command_id, .. } => store.outbox_remove(command_id)?,
+                        Notice::Acked { command_id, .. } => {
+                            store.outbox_remove(command_id)?;
+                            sent.remove(command_id);
+                        }
                         // A command gets exactly one Ack or Error (protocol
                         // 6.5); a refused one is not retried.
                         Notice::Error(error) if !error.command_id.is_empty() => {
                             store.outbox_remove(&error.command_id)?;
+                            sent.remove(&error.command_id);
                         }
                         Notice::Disconnected(d) => {
                             disconnect = Some((
@@ -612,7 +675,15 @@ pub async fn run<S: Store>(
             }
             command = commands.next().fuse() => {
                 match command {
-                    Some(command) => on_command(command, store, &mut session, channels, &mut pending)?,
+                    Some(command) => on_command(
+                        command,
+                        store,
+                        &mut session,
+                        channels,
+                        &mut pending,
+                        &mut sent,
+                        welcomed,
+                    )?,
                     None => return Ok(Exit::Done),
                 }
             }
@@ -625,14 +696,37 @@ pub async fn run<S: Store>(
     }
 }
 
+/// Queues every command of the outbox this connection has not sent, in the
+/// order they were put there, and notes them as sent.
+fn send_outbox<S: Store>(
+    store: &S,
+    session: &Session,
+    pending: &mut VecDeque<Effect>,
+    sent: &mut HashSet<Vec<u8>>,
+) -> Result<(), ClientError> {
+    for entry in store.outbox()? {
+        if !sent.insert(entry.command_id) {
+            continue;
+        }
+        if let Ok(command) = Command::decode(entry.bytes.as_slice()) {
+            pending.push_back(session.command(command));
+        }
+    }
+    Ok(())
+}
+
 /// Carries out one application command: the outbox entry and the frame,
-/// a subscription from the store's cursor, or a head check.
+/// what the outbox holds unsent, a subscription from the store's cursor,
+/// or a head check. `sent` is what this connection has sent of the outbox
+/// and `welcomed` whether its handshake is done.
 fn on_command<S: Store>(
     command: GatewayCommand,
     store: &mut S,
     session: &mut Session,
     channels: &mut Vec<Vec<u8>>,
     pending: &mut VecDeque<Effect>,
+    sent: &mut HashSet<Vec<u8>>,
+    welcomed: bool,
 ) -> Result<(), ClientError> {
     match command {
         GatewayCommand::Send(command) => {
@@ -641,7 +735,17 @@ fn on_command<S: Store>(
                 channel_id: command.channel_id.clone(),
                 bytes: command.encode_to_vec(),
             })?;
-            pending.push_back(session.command(command));
+            // Before the welcome it waits in the outbox, which the welcome
+            // sends whole and in order: sent now as well, it went twice.
+            if welcomed {
+                sent.insert(command.command_id.clone());
+                pending.push_back(session.command(command));
+            }
+        }
+        GatewayCommand::Outbox => {
+            if welcomed {
+                send_outbox(store, session, pending, sent)?;
+            }
         }
         GatewayCommand::Subscribe(channel_id) => {
             let cursor = store
@@ -705,6 +809,197 @@ mod tests {
         assert_eq!(followed_account(&store).unwrap(), (Some(two), 1));
         store.meta_set(ACCOUNT_META, &hex::encode(&one)).unwrap();
         assert_eq!(followed_account(&store).unwrap(), (Some(one), 2));
+    }
+
+    /// What the application sends while the instance cannot be reached is
+    /// not lost with the next attempt that fails: it used to be handed to
+    /// that attempt, and went with it. A command is in the outbox as soon
+    /// as it is read, and the rest waits for a connection that is made.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    #[allow(clippy::unwrap_used)]
+    async fn what_is_sent_while_unreachable_is_kept_for_the_next_connection() {
+        use crate::api::Tokens;
+        use crate::sqlite::SqliteStore;
+
+        // An address nothing listens on: every connection is refused.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let api = Api::new(&format!("http://127.0.0.1:{port}")).with_tokens(Tokens {
+            access: Some("a".into()),
+            refresh: None,
+        });
+        let mut store = SqliteStore::in_memory().unwrap();
+        let (tx, mut rx) = mpsc::unbounded();
+        let (etx, mut erx) = mpsc::unbounded();
+        let command = Command {
+            command_id: vec![7; 16],
+            channel_id: vec![1; 16],
+            ..Default::default()
+        };
+
+        // One attempt, holding a subscription asked for meanwhile: it fails,
+        // and the subscription is still held for the next.
+        let mut stash = vec![GatewayCommand::Subscribe(vec![2; 16])];
+        let attempt = run(
+            &api,
+            &mut store,
+            "t",
+            &[9; 16],
+            &mut Vec::new(),
+            &mut rx,
+            &mut stash,
+            &etx,
+        )
+        .await;
+        assert!(attempt.is_err());
+        assert!(matches!(
+            stash.as_slice(),
+            [GatewayCommand::Subscribe(channel)] if *channel == vec![2u8; 16]
+        ));
+
+        let looping = tokio::spawn(run_until_told(
+            api,
+            store,
+            "t",
+            vec![9; 16],
+            Vec::new(),
+            rx,
+            etx,
+        ));
+        let mut attempts = 0;
+        while let Some(event) = erx.next().await {
+            if let GatewayEvent::Reconnecting { attempt, .. } = event {
+                if attempt == 1 {
+                    // Sent during the first wait, and so held through the
+                    // second attempt, which fails too.
+                    tx.unbounded_send(GatewayCommand::Send(command.clone()))
+                        .unwrap();
+                }
+                attempts = attempt;
+                if attempt == 3 {
+                    break;
+                }
+            }
+        }
+        assert_eq!(attempts, 3);
+        drop(tx);
+        let (store, _) = looping.await.unwrap();
+        let queued: Vec<Vec<u8>> = store
+            .outbox()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.command_id)
+            .collect();
+        assert_eq!(queued, [vec![7u8; 16]]);
+    }
+
+    /// A command goes once on a connection, however the loop hears of it:
+    /// read from the application, found in the outbox at the welcome, or
+    /// said to be in the outbox by whoever wrote it there.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_command_goes_once_on_a_connection() {
+        use crate::sqlite::SqliteStore;
+        use lumia_core::proto::{client_frame, ClientFrame};
+
+        /// The loop's state for one connection.
+        struct Connection {
+            store: SqliteStore,
+            session: Session,
+            pending: VecDeque<Effect>,
+            sent: HashSet<Vec<u8>>,
+        }
+
+        impl Connection {
+            fn hears(&mut self, command: GatewayCommand, welcomed: bool) {
+                on_command(
+                    command,
+                    &mut self.store,
+                    &mut self.session,
+                    &mut Vec::new(),
+                    &mut self.pending,
+                    &mut self.sent,
+                    welcomed,
+                )
+                .unwrap();
+            }
+
+            /// As the application writes one through its own connection.
+            fn written(&mut self, n: u8) {
+                self.store
+                    .outbox_push(&OutboxEntry {
+                        command_id: vec![n; 16],
+                        channel_id: vec![1; 16],
+                        bytes: command(n).encode_to_vec(),
+                    })
+                    .unwrap();
+            }
+
+            /// The commands queued to go since the last look, by their number.
+            fn gone(&mut self) -> Vec<u8> {
+                self.pending
+                    .drain(..)
+                    .filter_map(|effect| match effect {
+                        Effect::Send(ClientFrame {
+                            frame: Some(client_frame::Frame::Command(c)),
+                        }) => Some(c.command_id[0]),
+                        _ => None,
+                    })
+                    .collect()
+            }
+        }
+
+        fn command(n: u8) -> Command {
+            Command {
+                command_id: vec![n; 16],
+                channel_id: vec![1; 16],
+                ..Default::default()
+            }
+        }
+
+        let mut connection = Connection {
+            store: SqliteStore::in_memory().unwrap(),
+            session: Session::new("t", vec![9; 16], Cursors::default()),
+            pending: VecDeque::new(),
+            sent: HashSet::new(),
+        };
+
+        // Before the welcome nothing is sent: one read from the application
+        // is kept, and one said to be in the outbox is left there.
+        connection.hears(GatewayCommand::Send(command(1)), false);
+        connection.written(2);
+        connection.hears(GatewayCommand::Outbox, false);
+        assert!(connection.gone().is_empty());
+        assert_eq!(connection.store.outbox().unwrap().len(), 2);
+
+        // The welcome sends the outbox whole, in the order it was written.
+        send_outbox(
+            &connection.store,
+            &connection.session,
+            &mut connection.pending,
+            &mut connection.sent,
+        )
+        .unwrap();
+        assert_eq!(connection.gone(), [1, 2]);
+
+        // Said again, they do not go again; one written since goes alone.
+        connection.hears(GatewayCommand::Outbox, true);
+        assert!(connection.gone().is_empty());
+        connection.written(3);
+        connection.hears(GatewayCommand::Outbox, true);
+        assert_eq!(connection.gone(), [3]);
+
+        // After the welcome one read from the application goes at once, and
+        // is not sent again for being in the outbox.
+        connection.hears(GatewayCommand::Send(command(4)), true);
+        assert_eq!(connection.gone(), [4]);
+        connection.hears(GatewayCommand::Outbox, true);
+        assert!(connection.gone().is_empty());
+        assert_eq!(connection.store.outbox().unwrap().len(), 4);
     }
 
     #[test]

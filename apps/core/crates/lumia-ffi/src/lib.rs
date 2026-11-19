@@ -221,6 +221,30 @@ impl From<roles::RoleSummary> for RoleSummary {
     }
 }
 
+/// A role as its editor holds it (`change_role`): what the editor opened
+/// on, and what it holds at Save.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RoleDraft {
+    pub name: String,
+    /// One of the nine tones, or empty for none.
+    pub color: String,
+    /// Never a member's tag ("Show as tag" off).
+    pub hide_tag: bool,
+    /// The offered permissions switched on, by their wire names.
+    pub permissions: Vec<String>,
+}
+
+impl From<RoleDraft> for roles::RoleDraft {
+    fn from(r: RoleDraft) -> Self {
+        Self {
+            name: r.name,
+            color: r.color,
+            hide_tag: r.hide_tag,
+            permissions: r.permissions,
+        }
+    }
+}
+
 /// The tag beside a member's name: a role in its colour, or a title in none.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct TagSummary {
@@ -2473,10 +2497,33 @@ impl Client {
             .into())
     }
 
+    /// What an editor changed of a role, and nothing else of it: `was` is
+    /// the role as the editor opened on it, `now` what it holds at Save,
+    /// and the difference is what is sent (the name, the colour, the tag
+    /// switch, the offered permissions switched on and off). What the
+    /// editor did not touch stays as the instance has it, whatever someone
+    /// else changed meanwhile. An editor saved as it opened asks nothing.
+    /// Returns the snapshot as it then is.
+    pub fn change_role(
+        &self,
+        server_id: String,
+        role_id: String,
+        was: RoleDraft,
+        now: RoleDraft,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .change_role(&server_id, &role_id, &was.into(), &now.into()),
+            )?
+            .into())
+    }
+
     /// A role's name, colour, tag switch and permissions, whole; a
     /// permission no editor offers is kept as the role has it, and of
     /// `Everyone` only the permissions change. Returns the snapshot as it
-    /// then is.
+    /// then is. Going, once the shells save through `change_role`.
     pub fn update_role(
         &self,
         server_id: String,
@@ -2517,8 +2564,34 @@ impl Client {
             .into())
     }
 
+    /// What was changed of a member, in one request the instance does whole
+    /// or not at all: the roles to give them (`give`) and to take away
+    /// (`take`), their other roles left as the instance has them, and their
+    /// title when one is given (empty clears it; none leaves it as it is).
+    /// Returns the member as the server now shows them.
+    pub fn change_member(
+        &self,
+        server_id: String,
+        account_id: String,
+        give: Vec<String>,
+        take: Vec<String>,
+        title: Option<String>,
+    ) -> Res<MemberSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.change_member(
+                &server_id,
+                &account_id,
+                &give,
+                &take,
+                title.as_deref(),
+            ))?
+            .into())
+    }
+
     /// The roles a member is to hold, the whole set. Returns the member as
-    /// the server now shows them.
+    /// the server now shows them. Going, once the shells save through
+    /// `change_member`.
     pub fn set_member_roles(
         &self,
         server_id: String,

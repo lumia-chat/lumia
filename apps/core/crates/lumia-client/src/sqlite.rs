@@ -102,7 +102,28 @@ CREATE TABLE IF NOT EXISTS drafts (
   reply TEXT NOT NULL DEFAULT '',
   updated_at_micros INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kept_members (
+  server_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  place INTEGER NOT NULL,
+  member TEXT NOT NULL,
+  PRIMARY KEY (server_id, account_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS kept_members_account ON kept_members (account_id);
+CREATE TABLE IF NOT EXISTS kept_member_lists (
+  server_id TEXT PRIMARY KEY,
+  stale INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
 ";
+
+/// How long a connection waits for another's write to end before it gives
+/// up as busy.
+pub const BUSY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Where every server's member list was kept as one value before each
+/// member had a row (`kept_members`): dropped at open, and the lists are
+/// fetched again as they are asked for.
+const MEMBERS_AS_ONE_VALUE: &str = "kept_members";
 
 /// One row of a conversation's decrypted log (e2ee spec section 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,11 +267,23 @@ impl SqliteStore {
     fn init(conn: Connection) -> Result<Self, StoreError> {
         // Two connections share one file (the gateway's and the DM engine's);
         // writers wait for each other instead of failing.
-        conn.busy_timeout(std::time::Duration::from_secs(10))
-            .map_err(backend)?;
+        conn.busy_timeout(BUSY_WAIT).map_err(backend)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
             .map_err(backend)?;
         conn.execute_batch(SCHEMA).map_err(backend)?;
+        // Looked for first: an open that finds none writes nothing, and so
+        // waits for no other writer.
+        let as_one_value = conn
+            .prepare("SELECT 1 FROM meta WHERE key = ?1")
+            .and_then(|mut stmt| stmt.exists(params![MEMBERS_AS_ONE_VALUE]))
+            .map_err(backend)?;
+        if as_one_value {
+            conn.execute(
+                "DELETE FROM meta WHERE key = ?1",
+                params![MEMBERS_AS_ONE_VALUE],
+            )
+            .map_err(backend)?;
+        }
         add_missing_columns(&conn)?;
         refetch_what_was_kept_short(&conn)?;
         Ok(Self { conn })
@@ -289,6 +322,46 @@ impl SqliteStore {
                 Err(e)
             }
         }
+    }
+
+    /// Begins a write transaction if the write lock is free at this moment,
+    /// and says whether it did: `false` when another connection holds it,
+    /// with nothing waited for. What then runs on this connection waits for
+    /// nobody, until [`SqliteStore::end`]. For a caller that holds a lock of
+    /// its own, which it must not hold through SQLite's wait: it lets go,
+    /// and tries again.
+    ///
+    /// # Errors
+    /// On a database failure other than the lock being held.
+    pub fn begin_now(&self) -> Result<bool, StoreError> {
+        self.conn
+            .busy_timeout(std::time::Duration::ZERO)
+            .map_err(backend)?;
+        let begun = self.conn.execute_batch("BEGIN IMMEDIATE");
+        self.conn.busy_timeout(BUSY_WAIT).map_err(backend)?;
+        match begun {
+            Ok(()) => Ok(true),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(backend(e)),
+        }
+    }
+
+    /// Ends the transaction [`SqliteStore::begin_now`] began: what was
+    /// written in it is kept (`commit`) or undone.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn end(&self, commit: bool) -> Result<(), StoreError> {
+        self.conn
+            .execute_batch(if commit { "COMMIT" } else { "ROLLBACK" })
+            .map_err(backend)
     }
 
     /// Writes an instance fact through a shared reference (for use inside
@@ -435,6 +508,225 @@ impl SqliteStore {
         self.conn
             .execute("DELETE FROM drafts", [])
             .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// The members last listed for a server, each as the caller encoded
+    /// it, in the order they were listed. A copy of what the instance
+    /// holds, kept so a launch can name people before it answers: each
+    /// member is a row, so a change to one is one row written, however
+    /// large the server.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn kept_members(&self, server_id: &str) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT member FROM kept_members WHERE server_id = ?1 ORDER BY place")
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![server_id], |row| row.get(0))
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    /// One member of a server's kept list; `None` when the list has no
+    /// such member, or there is no list.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn kept_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+    ) -> Result<Option<String>, StoreError> {
+        self.conn
+            .prepare_cached(
+                "SELECT member FROM kept_members WHERE server_id = ?1 AND account_id = ?2",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_row(params![server_id, account_id], |row| row.get(0))
+                    .optional()
+            })
+            .map_err(backend)
+    }
+
+    /// An account as each kept list has it: the server and the member.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn kept_memberships(&self, account_id: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT server_id, member FROM kept_members WHERE account_id = ?1")
+            .map_err(backend)?;
+        let rows = stmt
+            .query_map(params![account_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    /// Keeps a server's member list in place of the one before: `members`
+    /// as `(account_id, member)`, in order. `read_at` is what
+    /// [`SqliteStore::member_list_staleness`] answered before the list was
+    /// asked for: a list said to be stale since then stays so, because
+    /// what was read may be from before what made it stale.
+    ///
+    /// # Errors
+    /// On a database failure; the list before is then still whole.
+    pub fn keep_member_list(
+        &self,
+        server_id: &str,
+        members: &[(String, String)],
+        read_at: u64,
+    ) -> Result<(), StoreError> {
+        self.transaction(|store: &Self| {
+            store
+                .conn
+                .execute(
+                    "DELETE FROM kept_members WHERE server_id = ?1",
+                    params![server_id],
+                )
+                .map_err(backend)?;
+            let mut insert = store
+                .conn
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO kept_members (server_id, account_id, place, member)
+                     VALUES (?1, ?2, ?3, ?4)",
+                )
+                .map_err(backend)?;
+            for (place, (account_id, member)) in members.iter().enumerate() {
+                insert
+                    .execute(params![
+                        server_id,
+                        account_id,
+                        i64::try_from(place).unwrap_or(i64::MAX),
+                        member
+                    ])
+                    .map_err(backend)?;
+            }
+            store
+                .conn
+                .execute(
+                    "INSERT INTO kept_member_lists (server_id, stale) VALUES (?1, 0)
+                     ON CONFLICT (server_id) DO UPDATE SET
+                       stale = CASE WHEN stale = ?2 THEN 0 ELSE stale END",
+                    params![server_id, i64::try_from(read_at).unwrap_or(i64::MAX)],
+                )
+                .map_err(backend)?;
+            Ok::<_, StoreError>(())
+        })
+    }
+
+    /// Writes one member of a kept list over what it had of them; a member
+    /// the list does not have is not added.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn keep_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        member: &str,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .prepare_cached(
+                "UPDATE kept_members SET member = ?3 WHERE server_id = ?1 AND account_id = ?2",
+            )
+            .and_then(|mut stmt| stmt.execute(params![server_id, account_id, member]))
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Takes a member out of a server's kept list.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn drop_kept_member(&self, server_id: &str, account_id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM kept_members WHERE server_id = ?1 AND account_id = ?2",
+                params![server_id, account_id],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// Forgets a server's kept list: the account is no longer in it.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn drop_member_list(&self, server_id: &str) -> Result<(), StoreError> {
+        self.transaction(|store: &Self| {
+            store
+                .conn
+                .execute(
+                    "DELETE FROM kept_members WHERE server_id = ?1",
+                    params![server_id],
+                )
+                .map_err(backend)?;
+            store
+                .conn
+                .execute(
+                    "DELETE FROM kept_member_lists WHERE server_id = ?1",
+                    params![server_id],
+                )
+                .map_err(backend)?;
+            Ok::<_, StoreError>(())
+        })
+    }
+
+    /// Says every kept member list may be out of date: the account log was
+    /// taken from a snapshot, and what it would have said of their members
+    /// meanwhile was never heard. Each stays so until it is listed again
+    /// ([`SqliteStore::keep_member_list`]).
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn mark_member_lists_stale(&self) -> Result<(), StoreError> {
+        self.conn
+            .execute("UPDATE kept_member_lists SET stale = stale + 1", [])
+            .map(|_| ())
+            .map_err(backend)
+    }
+
+    /// The servers whose kept member list is to be listed again.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn stale_member_lists(&self) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT server_id FROM kept_member_lists WHERE stale > 0 ORDER BY server_id")
+            .map_err(backend)?;
+        let rows = stmt.query_map([], |row| row.get(0)).map_err(backend)?;
+        rows.collect::<Result<_, _>>().map_err(backend)
+    }
+
+    /// How many times a server's kept list has been said to be stale since
+    /// it was last listed; 0 for one that is current, and for none.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn member_list_staleness(&self, server_id: &str) -> Result<u64, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT stale FROM kept_member_lists WHERE server_id = ?1",
+                params![server_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|stale| stale.unwrap_or(0).max(0).unsigned_abs())
+            .map_err(backend)
+    }
+
+    /// Forgets every kept member list: whoever they were listed for is gone.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn forget_kept_members(&self) -> Result<(), StoreError> {
+        self.conn
+            .execute_batch("DELETE FROM kept_members; DELETE FROM kept_member_lists;")
             .map_err(backend)
     }
 
@@ -795,7 +1087,7 @@ impl Store for SqliteStore {
     fn outbox(&self) -> Result<Vec<OutboxEntry>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT command_id, channel_id, bytes FROM outbox ORDER BY queued_at")
+            .prepare("SELECT command_id, channel_id, bytes FROM outbox ORDER BY queued_at, rowid")
             .map_err(backend)?;
         let rows = stmt
             .query_map([], |row| {
@@ -1927,6 +2219,122 @@ mod tests {
         // A removed device keeps none (identity spec 4.4).
         store.erase().unwrap();
         assert_eq!(store.draft(&there).unwrap(), None);
+    }
+
+    #[test]
+    fn a_write_begun_now_waits_for_nobody() {
+        let dir = std::env::temp_dir().join(format!("lumia-now-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (one, other) = (
+            SqliteStore::open(&dir.join("store.sqlite")).unwrap(),
+            SqliteStore::open(&dir.join("store.sqlite")).unwrap(),
+        );
+        // The other connection is writing: refused at once, not after the busy wait.
+        assert!(other.begin_now().unwrap());
+        other.set_meta("k", "theirs").unwrap();
+        let asked = std::time::Instant::now();
+        assert!(!one.begin_now().unwrap());
+        assert!(asked.elapsed() < std::time::Duration::from_secs(1));
+        other.end(true).unwrap();
+
+        // Free: begun, and what is written in it is kept or undone as it ends.
+        assert!(one.begin_now().unwrap());
+        one.set_meta("k", "undone").unwrap();
+        one.end(false).unwrap();
+        assert_eq!(one.meta_get("k").unwrap().as_deref(), Some("theirs"));
+        assert!(one.begin_now().unwrap());
+        one.set_meta("k", "kept").unwrap();
+        one.end(true).unwrap();
+        assert_eq!(other.meta_get("k").unwrap().as_deref(), Some("kept"));
+        // The connection waits as before for what is not begun this way.
+        drop((one, other));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn list(members: &[(&str, &str)]) -> Vec<(String, String)> {
+        members
+            .iter()
+            .map(|(account, member)| ((*account).to_string(), (*member).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_kept_member_is_a_row_of_its_servers_list() {
+        let store = SqliteStore::in_memory().unwrap();
+        assert!(store.kept_members("s").unwrap().is_empty());
+        store
+            .keep_member_list("s", &list(&[("b", "Grace"), ("a", "Ada")]), 0)
+            .unwrap();
+        store
+            .keep_member_list("t", &list(&[("a", "Countess")]), 0)
+            .unwrap();
+        // In the order listed, each server's its own.
+        assert_eq!(store.kept_members("s").unwrap(), ["Grace", "Ada"]);
+        assert_eq!(
+            store.kept_member("t", "a").unwrap().as_deref(),
+            Some("Countess")
+        );
+        assert_eq!(store.kept_member("t", "b").unwrap(), None);
+        let mut everywhere = store.kept_memberships("a").unwrap();
+        everywhere.sort();
+        assert_eq!(
+            everywhere,
+            [
+                ("s".to_string(), "Ada".to_string()),
+                ("t".to_string(), "Countess".to_string())
+            ]
+        );
+
+        // One member written is that row and no other; one the list has not is not added.
+        store.keep_member("s", "a", "Ada L.").unwrap();
+        store.keep_member("s", "c", "Nobody").unwrap();
+        assert_eq!(store.kept_members("s").unwrap(), ["Grace", "Ada L."]);
+        assert_eq!(store.kept_members("t").unwrap(), ["Countess"]);
+        store.drop_kept_member("s", "b").unwrap();
+        assert_eq!(store.kept_members("s").unwrap(), ["Ada L."]);
+
+        // A list kept again takes the place of the one before, whole.
+        store
+            .keep_member_list("s", &list(&[("d", "Dana")]), 0)
+            .unwrap();
+        assert_eq!(store.kept_members("s").unwrap(), ["Dana"]);
+        store.drop_member_list("t").unwrap();
+        assert!(store.kept_members("t").unwrap().is_empty());
+        // Whoever signs out, and a removed device, keep none.
+        store.forget_kept_members().unwrap();
+        assert!(store.kept_members("s").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_stale_list_is_current_once_listed_after_what_made_it_stale() {
+        let store = SqliteStore::in_memory().unwrap();
+        store
+            .keep_member_list("s", &list(&[("a", "Ada")]), 0)
+            .unwrap();
+        store
+            .keep_member_list("t", &list(&[("a", "Ada")]), 0)
+            .unwrap();
+        assert!(store.stale_member_lists().unwrap().is_empty());
+        assert_eq!(store.member_list_staleness("never listed").unwrap(), 0);
+
+        store.mark_member_lists_stale().unwrap();
+        assert_eq!(store.stale_member_lists().unwrap(), ["s", "t"]);
+        // Read after it was said: current again.
+        let read_at = store.member_list_staleness("s").unwrap();
+        store
+            .keep_member_list("s", &list(&[("a", "Ada L.")]), read_at)
+            .unwrap();
+        assert_eq!(store.stale_member_lists().unwrap(), ["t"]);
+
+        // Said again while a read was on its way: what that read brings may be from
+        // before, so the list is kept and stays stale for another read.
+        let read_at = store.member_list_staleness("t").unwrap();
+        store.mark_member_lists_stale().unwrap();
+        store
+            .keep_member_list("t", &list(&[("a", "Ada L.")]), read_at)
+            .unwrap();
+        assert_eq!(store.kept_members("t").unwrap(), ["Ada L."]);
+        assert_eq!(store.stale_member_lists().unwrap(), ["s", "t"]);
     }
 
     #[test]

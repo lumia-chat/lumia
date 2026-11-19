@@ -353,7 +353,7 @@ async fn observe(env: &Env, channel: &[u8], head: u64) -> Result<(u64, Option<u6
             &device_id,
             &mut channels,
             &mut rx,
-            Vec::new(),
+            &mut Vec::new(),
             &etx,
         )
         .await?;

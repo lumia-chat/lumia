@@ -4,7 +4,7 @@
 //! tag a member the same. They say what to offer; the instance decides every write
 //! (specs/authorization.md 3.3 and 3.5), and the rules here are its rules read the same way.
 
-use lumia_core::proto::{Member, MemberTag, Permission, Role, Server};
+use lumia_core::proto::{Member, MemberTag, Permission, Role, Server, UpdateRoleRequest};
 use lumia_core::wire;
 use serde::{Deserialize, Serialize};
 
@@ -204,6 +204,70 @@ pub fn saved_permissions(chosen: &[String], held: &[i32]) -> Vec<i32> {
     saved
 }
 
+/// A role as its editor holds it: what the editor opened on, and what it holds at Save
+/// ([`changes`] sends the difference).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleDraft {
+    pub name: String,
+    /// One of [`TONES`], or empty for none.
+    pub color: String,
+    /// Never a member's tag ("Show as tag" off).
+    pub hide_tag: bool,
+    /// The offered permissions switched on, by their wire names. One no editor offers
+    /// counts for nothing here, in either draft.
+    pub permissions: Vec<String>,
+}
+
+/// What an editor changed of a role (architecture 7.5): `was` is the role as the editor
+/// opened on it and `now` what it holds at Save. The name when it differs once trimmed, the
+/// colour and the tag switch when they differ, and the offered permissions switched on
+/// (`grant`) and off (`revoke`). Whatever the editor did not touch is not named, so the
+/// instance leaves it as it is, however it has changed since the editor opened; a permission
+/// no editor offers is never named.
+#[must_use]
+pub fn changes(was: &RoleDraft, now: &RoleDraft) -> UpdateRoleRequest {
+    let on = |draft: &RoleDraft| -> Vec<i32> {
+        let mut on: Vec<i32> = draft
+            .permissions
+            .iter()
+            .filter_map(|name| Permission::from_str_name(name))
+            .map(|p| p as i32)
+            .filter(|p| is_offered(*p))
+            .collect();
+        on.sort_unstable();
+        on.dedup();
+        on
+    };
+    let (before, after) = (on(was), on(now));
+    let name = now.name.trim();
+    UpdateRoleRequest {
+        name: (name != was.name.trim()).then(|| name.to_string()),
+        color: (now.color != was.color).then(|| now.color.clone()),
+        hide_tag: (now.hide_tag != was.hide_tag).then_some(now.hide_tag),
+        grant: after
+            .iter()
+            .copied()
+            .filter(|p| !before.contains(p))
+            .collect(),
+        revoke: before
+            .iter()
+            .copied()
+            .filter(|p| !after.contains(p))
+            .collect(),
+    }
+}
+
+/// Whether `request` names nothing: an editor saved as it opened.
+#[must_use]
+pub fn changes_nothing(request: &UpdateRoleRequest) -> bool {
+    request.name.is_none()
+        && request.color.is_none()
+        && request.hide_tag.is_none()
+        && request.grant.is_empty()
+        && request.revoke.is_empty()
+}
+
 /// This account's standing in a server: what its own membership and the server's roles say
 /// it may do to a role or to a member.
 #[derive(Debug, Clone, Default)]
@@ -230,17 +294,26 @@ impl Standing {
     }
 
     /// From what a kept snapshot says of the account in a server: whether it owns it,
-    /// whether it holds `MANAGE_ROLES`, and its highest role's position. Enough to say which
-    /// roles it manages, and nothing else.
+    /// whether it holds `MANAGE_ROLES` and `MANAGE_MEMBERS`, and its highest role's
+    /// position. Enough to say which roles and which members it manages, and nothing else.
     #[must_use]
-    pub fn kept(owner: bool, manage_roles: bool, highest: Option<u32>) -> Self {
+    pub fn kept(
+        owner: bool,
+        manage_roles: bool,
+        manage_members: bool,
+        highest: Option<u32>,
+    ) -> Self {
+        let held = [
+            (manage_roles, Permission::ManageRoles),
+            (manage_members, Permission::ManageMembers),
+        ];
         Self {
             owner,
-            permissions: if manage_roles {
-                vec![Permission::ManageRoles as i32]
-            } else {
-                Vec::new()
-            },
+            permissions: held
+                .into_iter()
+                .filter(|(holds, _)| *holds)
+                .map(|(_, permission)| permission as i32)
+                .collect(),
             highest,
         }
     }
@@ -282,7 +355,8 @@ impl Standing {
     }
 
     /// Whether it may remove a member from the server and set their title: `MANAGE_MEMBERS`
-    /// and the member below it, never the owner.
+    /// and the member below it, never the owner. `theirs` is the position of the member's
+    /// highest role.
     #[must_use]
     pub fn manages_member(
         &self,
@@ -290,10 +364,14 @@ impl Standing {
         server: &Server,
         theirs: Option<u32>,
     ) -> bool {
-        if their_account == server.owner_account_id.as_slice() {
-            return false;
-        }
-        self.owner || (self.holds(Permission::ManageMembers) && self.above(theirs))
+        self.manages(their_account == server.owner_account_id.as_slice(), theirs)
+    }
+
+    /// [`Standing::manages_member`] for a caller that knows whether the member owns the
+    /// server (`they_own`) and not the server itself: one that reads a kept snapshot.
+    #[must_use]
+    pub fn manages(&self, they_own: bool, theirs: Option<u32>) -> bool {
+        !they_own && (self.owner || (self.holds(Permission::ManageMembers) && self.above(theirs)))
     }
 
     /// The instance's `above?`: holding no role is above nothing, and someone holding none
@@ -505,6 +583,14 @@ mod tests {
         let standing = Standing::of(&server, Some(&owner), &all);
         assert!(standing.manages_member(&id(8), &server, highest(&[id(1)], &all)));
         assert!(!standing.manages_member(&id(1), &server, None));
+
+        // What a kept snapshot says of the account is enough to say the same.
+        let kept = Standing::kept(false, false, true, Some(2));
+        assert!(kept.manages(false, Some(3)) && kept.manages(false, None));
+        assert!(!kept.manages(false, Some(2)) && !kept.manages(true, None));
+        assert!(!Standing::kept(false, true, false, Some(1)).manages(false, None));
+        assert!(!Standing::kept(false, false, true, None).manages(false, None));
+        assert!(Standing::kept(true, false, false, None).manages(false, Some(1)));
     }
 
     #[test]
@@ -565,6 +651,53 @@ mod tests {
                 Permission::StartCalls as i32,
             ]
         );
+    }
+
+    fn draft(name: &str, color: &str, hide_tag: bool, permissions: &[&str]) -> RoleDraft {
+        RoleDraft {
+            name: name.into(),
+            color: color.into(),
+            hide_tag,
+            permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn an_editor_saves_what_it_changed_and_names_nothing_else() {
+        let held = ["SEND_MESSAGES", "ATTACH_FILES"];
+        let was = draft("Mods", "sky", false, &held);
+        // Saved as it opened, a space typed after the name and the switches in another order.
+        let same = draft("Mods ", "sky", false, &["ATTACH_FILES", "SEND_MESSAGES"]);
+        assert!(changes_nothing(&changes(&was, &same)));
+
+        // A rename names the name: no permission is sent, so one switched off elsewhere
+        // since the editor opened stays off.
+        let renamed = changes(&was, &draft(" Moderators ", "sky", false, &held));
+        assert_eq!(renamed.name.as_deref(), Some("Moderators"));
+        assert!(renamed.color.is_none() && renamed.hide_tag.is_none());
+        assert!(renamed.grant.is_empty() && renamed.revoke.is_empty());
+
+        // The colour cleared, the tag hidden, one permission on and one off.
+        let request = changes(
+            &was,
+            &draft("Mods", "", true, &["SEND_MESSAGES", "MANAGE_MESSAGES"]),
+        );
+        assert_eq!(request.name, None);
+        assert_eq!(request.color.as_deref(), Some(""));
+        assert_eq!(request.hide_tag, Some(true));
+        assert_eq!(request.grant, [Permission::ManageMessages as i32]);
+        assert_eq!(request.revoke, [Permission::AttachFiles as i32]);
+        assert!(!changes_nothing(&request));
+    }
+
+    #[test]
+    fn a_permission_no_editor_offers_is_never_named() {
+        // Held and not offered: in neither list, whichever draft has it.
+        let was = draft("Bots", "", false, &["MANAGE_BOTS", "SEND_MESSAGES"]);
+        let now = draft("Bots", "", false, &["START_CALLS", "NOT_A_PERMISSION"]);
+        let request = changes(&was, &now);
+        assert!(request.grant.is_empty());
+        assert_eq!(request.revoke, [Permission::SendMessages as i32]);
     }
 
     fn listed() -> Vec<RoleSummary> {

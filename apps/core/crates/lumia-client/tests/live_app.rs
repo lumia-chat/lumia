@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lumia_client::api::Api;
 use lumia_client::app::{App, AppEvent, EventSink, Opener, Place, StoreName};
+use lumia_client::roles::{RoleDraft, RoleSummary};
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
 
@@ -637,7 +638,13 @@ async fn roles_and_titles_reach_every_member() {
     let from = member.seen();
     let given = owner
         .app
-        .set_member_roles(&server_id, &member_id, std::slice::from_ref(&helper))
+        .change_member(
+            &server_id,
+            &member_id,
+            std::slice::from_ref(&helper),
+            &[],
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(given.role_ids, std::slice::from_ref(&helper));
@@ -695,13 +702,36 @@ async fn roles_and_titles_reach_every_member() {
     assert!(server_of(member.app.snapshot().await.unwrap()).tag_titles);
     owner.app.set_tag_titles(&server_id, false).await.unwrap();
 
-    // A moderator manages what is below it and nothing else.
-    owner
+    // A moderator manages what is below it and nothing else. One request gives a role,
+    // takes another and sets a title; one the instance refuses changes none of the three.
+    let whole = owner
         .app
-        .set_member_roles(&server_id, &member_id, std::slice::from_ref(&mods))
+        .change_member(
+            &server_id,
+            &member_id,
+            std::slice::from_ref(&mods),
+            std::slice::from_ref(&helper),
+            Some(&"a".repeat(33)),
+        )
+        .await;
+    assert!(denied(&whole, "INVALID_ARGUMENT"), "{whole:?}");
+    let untouched = server_of(member.app.snapshot().await.unwrap());
+    assert_eq!(untouched.role_ids, std::slice::from_ref(&helper));
+    let moderator = owner
+        .app
+        .change_member(
+            &server_id,
+            &member_id,
+            std::slice::from_ref(&mods),
+            std::slice::from_ref(&helper),
+            Some(" Moderator "),
+        )
         .await
         .unwrap();
+    assert_eq!(moderator.role_ids, std::slice::from_ref(&mods));
+    assert_eq!(moderator.title, "Moderator");
     let theirs = server_of(member.app.snapshot().await.unwrap());
+    assert_eq!(theirs.title, "Moderator");
     assert!(theirs.can_manage_roles && theirs.can_manage_members && !theirs.is_owner);
     let manages: Vec<bool> = theirs.roles.iter().map(|r| r.can_manage).collect();
     assert_eq!(manages, [false, true, true]);
@@ -741,33 +771,47 @@ async fn roles_and_titles_reach_every_member() {
             .unwrap(),
     );
     assert_eq!(role_names(&below), ["Mods", "Made", "Helper", "Everyone"]);
+    // Its editor opens on a role as the snapshot has it, and saves what was changed in it.
+    let opened = |name: &str| draft_of(below.roles.iter().find(|r| r.name == name).unwrap());
     let more = member
         .app
-        .update_role(
+        .change_role(
             &server_id,
             &helper,
-            "Helper",
-            "mint",
-            false,
-            &wire(&["MANAGE_SERVER"]),
+            &opened("Helper"),
+            &RoleDraft {
+                permissions: wire(&["MANAGE_SERVER"]),
+                ..opened("Helper")
+            },
         )
         .await;
     assert!(denied(&more, "PERMISSION_DENIED"), "{more:?}");
     let own = member
         .app
-        .update_role(&server_id, &mods, "Mods", "sky", false, &[])
+        .change_role(
+            &server_id,
+            &mods,
+            &opened("Mods"),
+            &RoleDraft {
+                color: "amber".into(),
+                ..opened("Mods")
+            },
+        )
         .await;
     assert!(denied(&own, "PERMISSION_DENIED"), "{own:?}");
     let recoloured = server_of(
         member
             .app
-            .update_role(
+            .change_role(
                 &server_id,
                 &helper,
-                "Helpers",
-                "amber",
-                true,
-                &wire(&["SEND_MESSAGES"]),
+                &opened("Helper"),
+                &RoleDraft {
+                    name: "Helpers".into(),
+                    color: "amber".into(),
+                    hide_tag: true,
+                    permissions: wire(&["SEND_MESSAGES"]),
+                },
             )
             .await
             .unwrap(),
@@ -785,6 +829,16 @@ async fn roles_and_titles_reach_every_member() {
         ),
         ("Helpers", "amber", true)
     );
+    assert_eq!(helpers.permissions, ["SEND_MESSAGES"]);
+    // An editor saved as it opened changes nothing.
+    let same = server_of(
+        member
+            .app
+            .change_role(&server_id, &helper, &draft_of(helpers), &draft_of(helpers))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(role_names(&same), ["Mods", "Made", "Helpers", "Everyone"]);
 
     // A role deleted is gone from the member's device too.
     owner.app.delete_role(&server_id, &made).await.unwrap();
@@ -812,6 +866,301 @@ async fn roles_and_titles_reach_every_member() {
     assert!(left[0].owner);
     let gone = member.app.snapshot().await.unwrap();
     assert!(gone.servers.iter().all(|s| s.server_id != server_id));
+}
+
+/// A role as an editor opens on it: what a shell holds as `was`, and changes into `now`.
+fn draft_of(role: &RoleSummary) -> RoleDraft {
+    RoleDraft {
+        name: role.name.clone(),
+        color: role.color.clone(),
+        hide_tag: role.hide_tag,
+        permissions: role.permissions.clone(),
+    }
+}
+
+/// The server `server_id` of a snapshot.
+fn server_in(
+    snapshot: lumia_client::app::SnapshotSummary,
+    server_id: &str,
+) -> lumia_client::app::ServerSummary {
+    snapshot
+        .servers
+        .into_iter()
+        .find(|s| s.server_id == server_id)
+        .expect("the account is in the server")
+}
+
+/// A save sends what was changed, not what was showing (architecture 7.5), so two people at
+/// work on one server undo nothing of each other's: a rename from an editor left open does
+/// not switch back on a permission someone else switched off meanwhile, and taking one role
+/// from a member, from a list read a moment before, does not take the one someone else has
+/// just given them. Both were what the first build did.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_save_undoes_nobody_elses_change() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let wire = |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_string()).collect() };
+    for (name, permissions) in [
+        (
+            "Mods",
+            wire(&["MANAGE_ROLES", "SEND_MESSAGES", "ATTACH_FILES"]),
+        ),
+        ("Helper", wire(&["SEND_MESSAGES", "ATTACH_FILES"])),
+        ("Made", Vec::new()),
+    ] {
+        owner
+            .app
+            .create_role(&server_id, name, "", false, &permissions)
+            .await
+            .unwrap();
+    }
+    let mine = server_in(owner.app.snapshot().await.unwrap(), &server_id);
+    let id = |name: &str| -> String {
+        let role = mine.roles.iter().find(|r| r.name == name).unwrap();
+        role.role_id.clone()
+    };
+    let (mods, helper, made) = (id("Mods"), id("Helper"), id("Made"));
+    owner
+        .app
+        .change_member(
+            &server_id,
+            &member_id,
+            &[mods.clone(), helper.clone()],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    let role = |server: &lumia_client::app::ServerSummary| -> RoleSummary {
+        let found = server.roles.iter().find(|r| r.role_id == helper);
+        found.expect("the server has the role").clone()
+    };
+
+    // The moderator's device opens an editor on Helper and leaves it open.
+    let theirs = server_in(member.app.snapshot().await.unwrap(), &server_id);
+    let opened = draft_of(&role(&theirs));
+    assert!(opened.permissions.contains(&"ATTACH_FILES".to_string()));
+    assert_eq!(opened.permissions.len(), 2);
+
+    // Meanwhile the owner switches one of its permissions off.
+    let was = draft_of(&role(&mine));
+    let switched = owner
+        .app
+        .change_role(
+            &server_id,
+            &helper,
+            &was,
+            &RoleDraft {
+                permissions: wire(&["SEND_MESSAGES"]),
+                ..was.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        role(&server_in(switched, &server_id)).permissions,
+        ["SEND_MESSAGES"]
+    );
+
+    // The moderator saves a rename from the editor that still shows it on: it stays off.
+    let renamed = member
+        .app
+        .change_role(
+            &server_id,
+            &helper,
+            &opened,
+            &RoleDraft {
+                name: "Helpers".into(),
+                ..opened.clone()
+            },
+        )
+        .await
+        .unwrap();
+    let now = role(&server_in(renamed, &server_id));
+    assert_eq!(now.name, "Helpers");
+    assert_eq!(now.permissions, ["SEND_MESSAGES"]);
+
+    // The moderator's device lists the members: it holds Mods and Helper itself.
+    let listed = member.app.members(&server_id, "").await.unwrap();
+    let held = listed
+        .iter()
+        .find(|m| m.account_id == member_id)
+        .map(|m| m.role_ids.clone())
+        .unwrap();
+    assert_eq!(held.len(), 2);
+    // The owner gives them a third.
+    owner
+        .app
+        .change_member(
+            &server_id,
+            &member_id,
+            std::slice::from_ref(&made),
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+    // From the list read before that, Helper is switched off: what is sent is that one
+    // role to take, and the one just given is still theirs.
+    let wanted: Vec<String> = held.iter().filter(|r| **r != helper).cloned().collect();
+    let give: Vec<String> = wanted
+        .iter()
+        .filter(|r| !held.contains(r))
+        .cloned()
+        .collect();
+    let take: Vec<String> = held
+        .iter()
+        .filter(|r| !wanted.contains(r))
+        .cloned()
+        .collect();
+    let saved = member
+        .app
+        .change_member(&server_id, &member_id, &give, &take, None)
+        .await
+        .unwrap();
+    let mut holds = saved.role_ids.clone();
+    holds.sort();
+    let mut expected = vec![mods, made];
+    expected.sort();
+    assert_eq!(holds, expected);
+}
+
+/// A device comes back after more account events than a reconnect replays (the cap of
+/// specs/delivery.md 6), so its account log is taken from a snapshot and the events are
+/// skipped. Other members' roles and titles come only as those events: the kept list kept
+/// the ones from before, with nothing to say so. It is read again, and the shell told.
+#[tokio::test(flavor = "multi_thread")]
+async fn kept_members_are_read_again_when_the_log_is_taken_from_a_snapshot() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let within = Duration::from_secs(20);
+    let kept_title = |device: &Device| -> String {
+        let kept = device.app.kept_members(&server_id).unwrap();
+        let me = kept.into_iter().find(|m| m.account_id == member_id);
+        me.map(|m| m.title).unwrap_or_default()
+    };
+    let title = |to: String| {
+        let (owner, server_id, member_id) = (&owner, &server_id, &member_id);
+        async move {
+            owner
+                .app
+                .change_member(server_id, member_id, &[], &[], Some(&to))
+                .await
+                .unwrap();
+        }
+    };
+
+    // The member's device lists the server's people and hears of a change as it is made.
+    member.app.members(&server_id, "").await.unwrap();
+    title("Before".into()).await;
+    assert!(
+        settles(within, || kept_title(&member) == "Before").await,
+        "{:?}",
+        kept_title(&member)
+    );
+
+    // It goes away, and more happens on its account log than a reconnect replays: each
+    // change of its title by the owner is an event there.
+    stopped(&member).await;
+    for n in 0..1_010 {
+        title(format!("Title {n}")).await;
+    }
+    assert_eq!(kept_title(&member), "Before");
+    // The instance tells the server's members a second after a change: waited out, so
+    // that nothing of this is still to come as an event once the device is back.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    // Back: the log is taken from a snapshot, the list read again, and the shell told to
+    // take the snapshot (an account event's worth of nothing) and to draw the tags again.
+    let from = member.seen();
+    start_when_free(&member, &[]).await;
+    member
+        .wait_for(from, within, tags_changed(&server_id))
+        .await
+        .expect("the member's device is told its tags changed");
+    assert!(
+        settles(within, || kept_title(&member) == "Title 1009").await,
+        "{:?}",
+        kept_title(&member)
+    );
+    let skipped =
+        |event: &AppEvent| matches!(event, AppEvent::AccountApplied { count: 0 }).then_some(());
+    assert!(
+        member
+            .wait_for(from, Duration::from_secs(1), skipped)
+            .await
+            .is_some(),
+        "the log was not taken from a snapshot: the test showed nothing"
+    );
+    assert!(
+        member.troubles(from).is_empty(),
+        "{:?}",
+        member.troubles(from)
+    );
+}
+
+/// A message sent while the instance cannot be reached is in the store when the call
+/// returns, so the app may end there and then: opened again, it sends it. It used to wait
+/// in memory for a connection, and a composer that had cleared its draft had lost it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_sent_out_of_reach_goes_when_the_app_is_opened_again() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, _) = owner_and_member(&base).await;
+    let snapshot = member.app.snapshot().await.unwrap();
+    let general = snapshot
+        .channels
+        .iter()
+        .find(|c| c.server_id == server_id && c.name == "general")
+        .unwrap()
+        .channel_id
+        .clone();
+    stopped(&member).await;
+
+    // The same device, the instance out of reach: an address nothing answers at.
+    let nowhere = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    };
+    let away = member.reopened(&nowhere);
+    away.start(std::slice::from_ref(&general)).unwrap();
+    away.app
+        .set_draft(&general, "from the tunnel", None)
+        .unwrap();
+    let sent = away.app.send_message(&general, "from the tunnel").unwrap();
+    // Not long enough to matter: the loop has nothing to reach.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The app ends, and is opened again where the instance answers. What was typed is
+    // the message now, not a draft as well: it went with the send, without the shell.
+    let back = away.reopened(&base);
+    assert_eq!(back.app.draft(&general).unwrap(), None);
+    let from = back.seen();
+    start_when_free(&back, std::slice::from_ref(&general)).await;
+    let acked = |event: &AppEvent| match event {
+        AppEvent::Acked { command_id, .. } => (*command_id == sent).then_some(()),
+        _ => None,
+    };
+    back.wait_for(from, Duration::from_secs(15), acked)
+        .await
+        .expect("the message sent out of reach is acked after the relaunch");
+
+    // Someone else reads it, once.
+    let started = owner.seen();
+    owner.start(std::slice::from_ref(&general)).unwrap();
+    owner
+        .wait_for(started, Duration::from_secs(10), first_read(&general))
+        .await
+        .expect("the owner reads the channel");
+    let read = || {
+        let messages = owner.app.messages(&general, 50).unwrap();
+        let ours = messages.into_iter().filter(|m| m.message_id == sent);
+        ours.map(|m| m.body).collect::<Vec<_>>()
+    };
+    assert!(
+        settles(Duration::from_secs(10), || read() == ["from the tunnel"]).await,
+        "{:?}",
+        read()
+    );
 }
 
 fn names(snapshot: &lumia_client::app::SnapshotSummary, server_id: &str) -> Vec<String> {

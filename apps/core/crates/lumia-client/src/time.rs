@@ -46,6 +46,23 @@ pub fn now_nanos() -> i128 {
     i128::from(now_micros()) * 1000
 }
 
+/// Waits for `duration` on the calling thread, for a caller that cannot
+/// await, and says whether it could: natively the thread sleeps; on the
+/// web the one thread there is cannot, and nothing else would run if it did.
+#[must_use]
+pub fn pause(duration: Duration) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::sleep(duration);
+        true
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = duration;
+        false
+    }
+}
+
 /// Sleeps for `duration` without blocking the executor.
 pub async fn sleep(duration: Duration) {
     #[cfg(not(target_arch = "wasm32"))]

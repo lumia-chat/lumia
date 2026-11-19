@@ -36,8 +36,8 @@ use crate::dm::{DmEngine, Outcome};
 use crate::futures_channel::mpsc;
 use crate::gateway::{self, GatewayCommand, GatewayEvent};
 use crate::identity::Device;
-use crate::roles::{PermissionGroup, RoleSummary, Standing, TagSummary};
-use crate::sqlite::{DmStatus, SqliteStore};
+use crate::roles::{PermissionGroup, RoleDraft, RoleSummary, Standing, TagSummary};
+use crate::sqlite::{DmStatus, SqliteStore, BUSY_WAIT};
 use crate::writer::{WriterGuard, WriterLock};
 use crate::ClientError;
 
@@ -245,27 +245,26 @@ impl ServerSummary {
         crate::roles::highest_of(&self.role_ids, &self.roles)
     }
 
-    /// Whether this account may remove `member` from the server and set
-    /// their title: the instance's rule (specs/authorization.md 3.3).
-    fn manages(&self, member: &MemberSummary) -> bool {
-        if member.account_id == self.owner_account_id {
-            return false;
-        }
-        if self.is_owner {
-            return true;
-        }
-        let theirs = crate::roles::highest_of(&member.role_ids, &self.roles);
-        self.can_manage_members
-            && match (self.highest(), theirs) {
-                (None, _) => false,
-                (Some(_), None) => true,
-                (Some(mine), Some(theirs)) => mine < theirs,
-            }
+    /// This account's standing there, as far as this says it: enough for
+    /// which roles and which members it manages (`Standing::kept`).
+    fn standing(&self) -> Standing {
+        Standing::kept(
+            self.is_owner,
+            self.can_manage_roles,
+            self.can_manage_members,
+            self.highest(),
+        )
     }
 
     /// `member` as this server shows them: its tag, whether it is the owner,
-    /// and whether this account may manage it.
-    fn dress(&self, mut member: MemberSummary) -> MemberSummary {
+    /// and whether this account, of `standing` here, may remove it and set
+    /// its title (the instance's rule, specs/authorization.md 3.3). A role
+    /// the server no longer lists is not theirs any more
+    /// (specs/authorization.md 6.4).
+    fn dress(&self, standing: &Standing, mut member: MemberSummary) -> MemberSummary {
+        member
+            .role_ids
+            .retain(|id| self.roles.iter().any(|r| r.role_id == *id));
         member.tag = crate::roles::tag(
             self.tag_titles,
             &self.roles,
@@ -273,7 +272,10 @@ impl ServerSummary {
             &member.title,
         );
         member.owner = member.account_id == self.owner_account_id;
-        member.can_manage = self.manages(&member);
+        member.can_manage = standing.manages(
+            member.owner,
+            crate::roles::highest_of(&member.role_ids, &self.roles),
+        );
         member
     }
 }
@@ -1281,6 +1283,11 @@ pub enum AppEvent {
         channel_id: String,
         events: Vec<EventSummary>,
     },
+    /// Events of the account's log were applied: a shell takes the
+    /// snapshot again. A `count` of 0 is a reconnect so far behind that the
+    /// log was taken from a snapshot instead (specs/delivery.md 6): the
+    /// events were skipped, and the snapshot is to be taken again as after
+    /// any of them.
     AccountApplied {
         count: usize,
     },
@@ -1302,7 +1309,11 @@ pub enum AppEvent {
     /// What is kept has it already: a shell reads the server's members
     /// again ([`App::kept_members`]) for their tags, and takes the snapshot
     /// again as it does on any `AccountApplied`, which says afresh what
-    /// this account may do there.
+    /// this account may do there. Said too once a server's kept members
+    /// have been read again from the instance, after a reconnect so far
+    /// behind that the account log was taken from a snapshot and what it
+    /// would have said of them was skipped (an `AccountApplied` of no
+    /// events comes first).
     TagsChanged {
         server_id: String,
     },
@@ -1497,10 +1508,10 @@ const MEMBER_PAGES: usize = 50;
 /// left out keep it short (architecture 6.7).
 const DELETED_PAGES: usize = 10;
 
-/// Where the last snapshot and the last member lists are kept in the
-/// instance store's meta area (`App::kept_snapshot`, `App::kept_members`).
+/// Where the last snapshot is kept in the instance store's meta area
+/// (`App::kept_snapshot`). The last member lists are rows of their own
+/// there (`App::kept_members`).
 const KEPT_SNAPSHOT: &str = "kept_snapshot";
-const KEPT_MEMBERS: &str = "kept_members";
 
 /// The most of a draft that is kept, in bytes: far past the limit on a
 /// message, so anything a composer would send is whole, and a bound on what
@@ -1721,6 +1732,9 @@ fn app_event(ev: GatewayEvent) -> AppEvent {
             channel_id: wire::display(&channel_id),
             seq,
         },
+        // The account's events up to here were skipped, not applied: a
+        // shell takes the snapshot again, as it does after any of them.
+        GatewayEvent::AccountSnapshotTaken { .. } => AppEvent::AccountApplied { count: 0 },
         GatewayEvent::Reconnecting {
             attempt,
             delay,
@@ -1908,6 +1922,141 @@ struct Inner {
     /// save of a composer's words may arrive after the sign-out it was
     /// leaving for, and would otherwise outlive the forgetting.
     drafts_closed: bool,
+    /// The servers whose member list is being read from the instance
+    /// ([`App::members`]), each with what the account log and this
+    /// client's own calls have said of its members meanwhile.
+    member_reads: HashMap<String, MemberReads>,
+    /// Moves on when the kept lists are forgotten (a sign-out, this device
+    /// erased): a read begun before is of whoever was here then, and is
+    /// not kept when it arrives.
+    member_reads_forgotten: u64,
+    /// Whether the kept member lists said to be stale are being read again
+    /// ([`App::refresh_stale_members`]), and whether more were said to be
+    /// so since that began.
+    members_refreshing: bool,
+    members_refresh_wanted: bool,
+}
+
+/// The reads of one server's member list that are in flight
+/// ([`App::members`]). A list is read a page at a time, up to
+/// [`MEMBER_PAGES`] requests, and a page read early is older than what the
+/// account log says of its members before the last page arrives: `told` is
+/// what was said meanwhile, replayed over the pages before they are kept,
+/// since a change told once is not told again.
+#[derive(Default)]
+struct MemberReads {
+    reading: usize,
+    told: Vec<MemberChange>,
+}
+
+/// What became of a member of a kept list: said by the account log, or the
+/// answer to a change this client made.
+#[derive(Debug, Clone)]
+enum MemberChange {
+    /// Their roles, title and kind in the server, as they now are.
+    Standing {
+        account_id: String,
+        role_ids: Vec<String>,
+        title: String,
+        guest: bool,
+    },
+    /// Their name and picture, as they now are in every server.
+    Profile {
+        account_id: String,
+        handle: String,
+        display_name: String,
+        avatar_url: String,
+        pronouns: String,
+        bio: String,
+    },
+    /// They are no longer a member.
+    Gone { account_id: String },
+}
+
+impl MemberChange {
+    fn account_id(&self) -> &str {
+        match self {
+            Self::Standing { account_id, .. }
+            | Self::Profile { account_id, .. }
+            | Self::Gone { account_id } => account_id,
+        }
+    }
+
+    /// Writes the change into `member`, who it is about. Each server's
+    /// nickname and switches are its own and stay.
+    fn apply(&self, member: &mut MemberSummary) {
+        match self {
+            Self::Standing {
+                role_ids,
+                title,
+                guest,
+                ..
+            } => {
+                member.role_ids.clone_from(role_ids);
+                member.title.clone_from(title);
+                member.guest = *guest;
+            }
+            Self::Profile {
+                handle,
+                display_name,
+                avatar_url,
+                pronouns,
+                bio,
+                ..
+            } => {
+                member.handle.clone_from(handle);
+                member.display_name.clone_from(display_name);
+                member.avatar_url.clone_from(avatar_url);
+                member.pronouns.clone_from(pronouns);
+                member.bio.clone_from(bio);
+            }
+            Self::Gone { .. } => {}
+        }
+    }
+
+    /// Carries `changes` out on a list, in the order they were told; one
+    /// about someone the list does not have changes nothing.
+    fn replay(changes: &[Self], members: &mut Vec<MemberSummary>) {
+        for change in changes {
+            let about = change.account_id();
+            if matches!(change, Self::Gone { .. }) {
+                members.retain(|m| m.account_id != about);
+            } else if let Some(member) = members.iter_mut().find(|m| m.account_id == about) {
+                change.apply(member);
+            }
+        }
+    }
+}
+
+/// One read of a server's member list, from before its first page is asked
+/// for until what it read is kept or given up ([`App::members`]): while it
+/// lives, what is told of the server's members is noted for it.
+struct MemberRead<'a> {
+    app: &'a App,
+    server_id: String,
+    /// How much had been told of the server's members when this began.
+    from: usize,
+    /// How stale the kept list was said to be when this began
+    /// (`SqliteStore::member_list_staleness`).
+    staleness: u64,
+    /// `Inner::member_reads_forgotten` when this began.
+    forgotten: u64,
+}
+
+impl Drop for MemberRead<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.app.lock();
+        // Forgotten since (a sign-out): what is counted now is not this.
+        if inner.member_reads_forgotten != self.forgotten {
+            return;
+        }
+        if let Some(reads) = inner.member_reads.get_mut(&self.server_id) {
+            reads.reading = reads.reading.saturating_sub(1);
+            if reads.reading == 0 {
+                inner.member_reads.remove(&self.server_id);
+            }
+        }
+    }
 }
 
 /// The link session this device opened as the new device, and what it
@@ -2366,6 +2515,10 @@ impl App {
                 welcome: None,
                 welcome_missed: false,
                 drafts_closed: false,
+                member_reads: HashMap::new(),
+                member_reads_forgotten: 0,
+                members_refreshing: false,
+                members_refresh_wanted: false,
             }),
             rail_turn: AsyncMutex::new(()),
             bluesky: crate::transport::http_without_redirects(),
@@ -2906,12 +3059,54 @@ impl App {
         self.snapshot().await
     }
 
+    /// `PATCH /servers/{id}/roles/{role_id}`: what an editor changed of a
+    /// role and nothing else of it (architecture 7.5). `was` is the role as
+    /// the editor opened on it and `now` what the editor holds at Save; the
+    /// difference is what is sent ([`crate::roles::changes`]): the name
+    /// when it differs once trimmed, the colour and the tag switch when
+    /// they differ, and the offered permissions switched on and off. What
+    /// the editor did not touch stays as the instance has it, whatever
+    /// someone else has made of it since the editor opened: a rename does
+    /// not switch back on a permission another admin switched off
+    /// meanwhile. A permission no editor offers is never named. Of
+    /// `Everyone` only the permissions change, and a role's place is never
+    /// changed here ([`App::reorder_roles`]). An editor saved as it opened
+    /// asks the instance nothing. Returns the account's snapshot as it then
+    /// is.
+    ///
+    /// # Errors
+    /// As [`App::create_role`]; `PERMISSION_DENIED` for a role this account
+    /// may not manage; `NOT_FOUND` for a role the server does not have.
+    pub async fn change_role(
+        &self,
+        server_id: &str,
+        role_id: &str,
+        was: &RoleDraft,
+        now: &RoleDraft,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server = wire::display(&parse_uuid(server_id)?);
+        let role = wire::display(&parse_uuid(role_id)?);
+        let request = crate::roles::changes(was, now);
+        if crate::roles::changes_nothing(&request) {
+            if let Some(kept) = self.kept_snapshot()? {
+                return Ok(kept);
+            }
+            return self.snapshot().await;
+        }
+        self.api.change_role(&server, &role, &request).await?;
+        self.snapshot().await
+    }
+
     /// `PUT /servers/{id}/roles/{role_id}`: the role's name, colour, tag
     /// switch and permissions, whole, as [`App::create_role`] takes them. A
     /// permission no editor offers yet is kept as the role has it. Of
     /// `Everyone` only the permissions change. Its place is never changed
     /// here ([`App::reorder_roles`]). Returns the account's snapshot as it
     /// then is.
+    ///
+    /// Going, once the shells save through [`App::change_role`]: this
+    /// writes back whatever the editor was showing, so an editor left open
+    /// undoes what someone else changed of the role meanwhile.
     ///
     /// # Errors
     /// As [`App::create_role`]; `PERMISSION_DENIED` for a role this account
@@ -2995,12 +3190,60 @@ impl App {
         self.snapshot().await
     }
 
+    /// `PATCH /servers/{id}/members/{account_id}`: what was changed of a
+    /// member in one request, which the instance does whole or not at all
+    /// (architecture 7.5). `give` and `take` are the roles to give them and
+    /// to take away, by id: the member's other roles stay as the instance
+    /// has them, so a role someone else gave a moment ago is not taken by a
+    /// save made from a list read before it. A role to give that is
+    /// already held, or to take that is not, changes nothing. `title`, when
+    /// given, is their title, up to 32 characters once trimmed, empty to
+    /// clear it; `None` leaves it as it is. Each role must be one this
+    /// account manages, and a title is this account's own to set or that of
+    /// a member it manages ([`MemberSummary::can_manage`]). The member hears
+    /// of it at once and the server's other members through their account
+    /// logs. Returns the member as the server now shows them; the kept list
+    /// has them so too.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage or a
+    /// title that is not its to set; `INVALID_ARGUMENT` with `details.field`
+    /// `roles` (a role in both lists) or `title`; `RATE_LIMITED` for this
+    /// account's own title changed too often; `NOT_FOUND` for someone who
+    /// is not a member; transport failure. Nothing is changed then.
+    pub async fn change_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        give: &[String],
+        take: &[String],
+        title: Option<&str>,
+    ) -> Result<MemberSummary, ClientError> {
+        let ids = |roles: &[String]| {
+            roles
+                .iter()
+                .map(|id| parse_uuid(id))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let req = lumia_core::proto::UpdateMemberRequest {
+            add_role_ids: ids(give)?,
+            remove_role_ids: ids(take)?,
+            title: title.map(|t| t.trim().to_string()),
+            ..Default::default()
+        };
+        self.patch_member(server_id, account_id, &req).await
+    }
+
     /// `PATCH /servers/{id}/members/{account_id}`: the roles a member is to
     /// hold, the whole set, `Everyone` never among them. Each role given or
     /// taken must be one this account manages. The member hears of it at
     /// once and the server's other members through their account logs.
     /// Returns the member as the server now shows them; the kept list has
     /// them so too.
+    ///
+    /// Going, once the shells save through [`App::change_member`]: the
+    /// whole set is whatever the list drawn from held, so a role someone
+    /// else gave or took since is undone.
     ///
     /// # Errors
     /// `PERMISSION_DENIED` for a role this account may not manage;
@@ -3019,7 +3262,7 @@ impl App {
             roles: Some(lumia_core::proto::RoleIds { role_ids: ids }),
             ..Default::default()
         };
-        self.change_member(server_id, account_id, &req).await
+        self.patch_member(server_id, account_id, &req).await
     }
 
     /// A member's title in a server, up to 32 characters once trimmed; an
@@ -3054,10 +3297,10 @@ impl App {
             title: Some(title.trim().to_string()),
             ..Default::default()
         };
-        self.change_member(server_id, account_id, &req).await
+        self.patch_member(server_id, account_id, &req).await
     }
 
-    async fn change_member(
+    async fn patch_member(
         &self,
         server_id: &str,
         account_id: &str,
@@ -3092,36 +3335,91 @@ impl App {
     }
 
     /// The roles, title and kind of `members` written into the kept list of
-    /// their server; answers those the list has, as the server shows them.
+    /// their server, a row each, and noted for a read of that list in
+    /// flight; answers those the list has, as the server shows them.
     fn keep_members(
         &self,
         server_id: &str,
         members: &[lumia_core::proto::Member],
     ) -> Vec<MemberSummary> {
-        let Some(mut all) = self
-            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
-            .ok()
-            .flatten()
-        else {
-            return Vec::new();
-        };
-        let Some(list) = all.get_mut(server_id) else {
-            return Vec::new();
-        };
-        let mut changed = Vec::new();
-        for member in members {
-            let now = member_summary(member, None);
-            if let Some(kept) = list.iter_mut().find(|k| k.account_id == now.account_id) {
-                kept.role_ids = now.role_ids;
-                kept.title = now.title;
-                kept.guest = now.guest;
-                changed.push(kept.clone());
-            }
-        }
-        if !changed.is_empty() {
-            self.keep(KEPT_MEMBERS, &all);
-        }
+        let changes: Vec<MemberChange> = members
+            .iter()
+            .map(|member| {
+                let now = member_summary(member, None);
+                MemberChange::Standing {
+                    account_id: now.account_id,
+                    role_ids: now.role_ids,
+                    title: now.title,
+                    guest: now.guest,
+                }
+            })
+            .collect();
+        let changed = self.change_kept_members(Some(server_id), &changes);
         self.dressed(server_id, changed)
+    }
+
+    /// Carries `changes` out on the kept member lists, of `server_id` or of
+    /// every server (a person's name is the same in each), and notes them
+    /// for the reads of those lists in flight. The lock is held from each
+    /// member's read to its write ([`App::write`]), so two changes made at
+    /// once both stand. Answers the members changed, as they are now kept.
+    /// Best effort, as everything kept is: a store that fails costs an
+    /// offline launch its newest tags and nothing else.
+    fn change_kept_members(
+        &self,
+        server_id: Option<&str>,
+        changes: &[MemberChange],
+    ) -> Vec<MemberSummary> {
+        if changes.is_empty() {
+            return Vec::new();
+        }
+        // Whether or not the list kept has them: a list being read may.
+        let note = |inner: &mut Inner| {
+            for (reading, reads) in &mut inner.member_reads {
+                if server_id.is_none_or(|server_id| server_id == reading) {
+                    reads.told.extend_from_slice(changes);
+                }
+            }
+        };
+        let written = self.write(|inner| {
+            note(inner);
+            let mut changed = Vec::new();
+            let _ = inner.reader.transaction(|store: &SqliteStore| {
+                for change in changes {
+                    let account_id = change.account_id();
+                    let kept: Vec<(String, String)> = match server_id {
+                        Some(server_id) => store
+                            .kept_member(server_id, account_id)?
+                            .map(|member| (server_id.to_string(), member))
+                            .into_iter()
+                            .collect(),
+                        None => store.kept_memberships(account_id)?,
+                    };
+                    for (server_id, member) in kept {
+                        if matches!(change, MemberChange::Gone { .. }) {
+                            store.drop_kept_member(&server_id, account_id)?;
+                            continue;
+                        }
+                        // One this build cannot read is left for the next list.
+                        let Ok(mut member) = serde_json::from_str::<MemberSummary>(&member) else {
+                            continue;
+                        };
+                        change.apply(&mut member);
+                        if let Ok(json) = serde_json::to_string(&member) {
+                            store.keep_member(&server_id, account_id, &json)?;
+                        }
+                        changed.push(member);
+                    }
+                }
+                Ok::<_, StoreError>(())
+            });
+            Ok(changed)
+        });
+        // A store that could not be written still has its readers told.
+        written.unwrap_or_else(|_| {
+            note(&mut self.lock());
+            Vec::new()
+        })
     }
 
     /// `DELETE /servers/{id}/members/{account_id}`: removes a member from
@@ -3140,16 +3438,12 @@ impl App {
         let server = wire::display(&parse_uuid(server_id)?);
         let account = wire::display(&parse_uuid(account_id)?);
         self.api.remove_member(&server, &account).await?;
-        if let Some(mut all) = self
-            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
-            .ok()
-            .flatten()
-        {
-            if let Some(list) = all.get_mut(server_id) {
-                list.retain(|m| m.account_id != account_id);
-                self.keep(KEPT_MEMBERS, &all);
-            }
-        }
+        self.change_kept_members(
+            Some(server_id),
+            &[MemberChange::Gone {
+                account_id: account_id.to_string(),
+            }],
+        );
         Ok(())
     }
 
@@ -3224,62 +3518,75 @@ impl App {
     }
 
     /// A server's roles as they now are, in the kept snapshot; a role no
-    /// longer listed is dropped from this account's own and from the kept
-    /// members (specs/authorization.md 6.4). What this account may do to
-    /// each is worked out from what the snapshot said of it, until the next
-    /// one says it fresh.
+    /// longer listed is dropped from this account's own, and from the kept
+    /// members as they are read ([`ServerSummary::dress`];
+    /// specs/authorization.md 6.4). What this account may do to each is
+    /// worked out from what the snapshot said of it, until the next one
+    /// says it fresh.
     fn keep_roles(&self, server_id: &str, roles: &[lumia_core::proto::Role]) {
         let listed: HashSet<String> = roles.iter().map(|r| wire::display(&r.role_id)).collect();
-        if let Ok(Some(mut snapshot)) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT) {
-            if let Some(server) = snapshot
-                .servers
-                .iter_mut()
-                .find(|s| s.server_id == server_id)
-            {
-                server.role_ids.retain(|id| listed.contains(id));
-                let own: Vec<Vec<u8>> = server
-                    .role_ids
-                    .iter()
-                    .filter_map(|id| parse_uuid(id).ok())
-                    .collect();
-                let standing = Standing::kept(
-                    server.is_owner,
-                    server.can_manage_roles,
-                    crate::roles::highest(&own, roles),
-                );
-                server.roles = crate::roles::summaries(roles, &standing);
-                self.keep(KEPT_SNAPSHOT, &snapshot);
-            }
-        }
-        if let Ok(Some(mut all)) = self.kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS) {
-            if let Some(list) = all.get_mut(server_id) {
-                for member in list.iter_mut() {
-                    member.role_ids.retain(|id| listed.contains(id));
-                }
-                self.keep(KEPT_MEMBERS, &all);
-            }
-        }
+        self.change_kept_server(server_id, |server| {
+            server.role_ids.retain(|id| listed.contains(id));
+            let own: Vec<Vec<u8>> = server
+                .role_ids
+                .iter()
+                .filter_map(|id| parse_uuid(id).ok())
+                .collect();
+            let standing = Standing::kept(
+                server.is_owner,
+                server.can_manage_roles,
+                server.can_manage_members,
+                crate::roles::highest(&own, roles),
+            );
+            server.roles = crate::roles::summaries(roles, &standing);
+            true
+        });
     }
 
     /// Which of the two a server's tags show, in the kept snapshot; whether
     /// that changed.
     fn keep_tag_titles(&self, server_id: &str, titles: bool) -> bool {
-        let Ok(Some(mut snapshot)) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT) else {
-            return false;
-        };
-        let Some(server) = snapshot
-            .servers
-            .iter_mut()
-            .find(|s| s.server_id == server_id)
-        else {
-            return false;
-        };
-        if server.tag_titles == titles {
-            return false;
-        }
-        server.tag_titles = titles;
-        self.keep(KEPT_SNAPSHOT, &snapshot);
-        true
+        self.change_kept_server(server_id, |server| {
+            let changed = server.tag_titles != titles;
+            server.tag_titles = titles;
+            changed
+        })
+    }
+
+    /// Changes a server of the kept snapshot in place: `change` says
+    /// whether it changed anything, and that is answered. The lock is held
+    /// from the snapshot's read to its write ([`App::write`]), so a change
+    /// made from the account log and one made by a call at the same moment
+    /// both stand.
+    fn change_kept_server(
+        &self,
+        server_id: &str,
+        change: impl FnOnce(&mut ServerSummary) -> bool,
+    ) -> bool {
+        let changed = self.write(|inner| {
+            let kept = inner.reader.meta_get(KEPT_SNAPSHOT)?;
+            let Some(mut snapshot) = kept
+                .filter(|json| !json.is_empty())
+                .and_then(|json| serde_json::from_str::<SnapshotSummary>(&json).ok())
+            else {
+                return Ok(false);
+            };
+            let Some(server) = snapshot
+                .servers
+                .iter_mut()
+                .find(|s| s.server_id == server_id)
+            else {
+                return Ok(false);
+            };
+            if !change(server) {
+                return Ok(false);
+            }
+            if let Ok(json) = serde_json::to_string(&snapshot) {
+                inner.reader.set_meta(KEPT_SNAPSHOT, &json)?;
+            }
+            Ok(true)
+        });
+        changed.unwrap_or(false)
     }
 
     /// `POST /servers/{id}/dms`: the 1:1 server DM with a member of the
@@ -3495,26 +3802,32 @@ impl App {
         // Each is tried whatever became of the one before, and the client
         // stops presenting the pair either way: a store that refuses one
         // delete must not leave the other token to open the app signed in.
-        let (tokens, kept) = {
+        let tokens = {
             let mut inner = self.lock();
             let access = inner.keys.delete("access_token");
             let refresh = inner.keys.delete("refresh_token");
-            // What was kept of the account for an offline launch goes with
-            // it, and its account log and unsent commands: the next account
-            // to sign in here starts its own log from the beginning, and
-            // sends nothing of this one's. On the store the loop holds when
-            // it is back, or through the reader on the same file.
-            let snapshot = inner.reader.meta_set(KEPT_SNAPSHOT, "");
-            let members = inner.reader.meta_set(KEPT_MEMBERS, "");
-            // Its drafts go with the log, and none typed is kept after.
+            // A member list still being read is not kept when it arrives,
+            // and nothing typed is kept from here on: said before the
+            // store is asked to forget, so nothing lands in it after.
+            inner.member_reads.clear();
+            inner.member_reads_forgotten += 1;
             inner.drafts_closed = true;
-            let log = inner
-                .store
-                .as_ref()
-                .unwrap_or(&inner.reader)
-                .forget_account();
-            (access.and(refresh), snapshot.and(members).and(log))
+            access.and(refresh)
         };
+        // What was kept of the account for an offline launch goes with it,
+        // and its account log, its unsent commands and its drafts: the next
+        // account to sign in here starts its own log from the beginning,
+        // and sends nothing of this one's. Through the reader, on the file
+        // the loop's store is on. Each is tried whatever became of the one
+        // before, and what went stays gone.
+        let kept = self
+            .write(|inner| {
+                let snapshot = inner.reader.set_meta(KEPT_SNAPSHOT, "");
+                let members = inner.reader.forget_kept_members();
+                let log = inner.reader.forget_account();
+                Ok(snapshot.and(members).and(log))
+            })
+            .and_then(|forgotten| Ok(forgotten?));
         self.api.clear_tokens();
         // Signed out because a call heard this device was revoked: it
         // erases now, not at the next sign-in.
@@ -3667,7 +3980,44 @@ impl App {
     /// it costs an offline launch and nothing else.
     fn keep<T: Serialize>(&self, key: &str, value: &T) {
         if let Ok(json) = serde_json::to_string(value) {
-            let _ = self.lock().reader.meta_set(key, &json);
+            let _ = self.write(|inner| Ok(inner.reader.set_meta(key, &json)?));
+        }
+    }
+
+    /// Writes to the instance store through the reader's connection:
+    /// `change` runs holding this client's lock and the store's write lock
+    /// together, in one transaction, kept when it answers `Ok` and undone
+    /// when it answers `Err`. While another connection holds the store's
+    /// write lock (the gateway loop applying a batch, the DM engine,
+    /// another process) this waits for it without holding this client's
+    /// lock: SQLite's own wait would be made holding it, and every other
+    /// call, a read on a shell's main thread among them, would stand behind
+    /// one write that was only waiting. Every write a call or the account
+    /// log makes here goes this way.
+    ///
+    /// # Errors
+    /// What `change` answers; a store still busy after [`BUSY_WAIT`], or
+    /// that fails otherwise, without `change` having run.
+    fn write<T>(
+        &self,
+        change: impl FnOnce(&mut Inner) -> Result<T, ClientError>,
+    ) -> Result<T, ClientError> {
+        let wait = i64::try_from(BUSY_WAIT.as_micros()).unwrap_or(i64::MAX);
+        let until = crate::time::now_micros().saturating_add(wait);
+        loop {
+            let mut inner = self.lock();
+            if inner.reader.begin_now()? {
+                let changed = change(&mut inner);
+                let ended = inner.reader.end(changed.is_ok());
+                return changed.and_then(|changed| Ok(ended.map(|()| changed)?));
+            }
+            drop(inner);
+            // A moment for whoever holds it; where there is no waiting (the
+            // web, where nothing else can hold it either) it is given up.
+            let waited = crate::time::pause(std::time::Duration::from_millis(1));
+            if !waited || crate::time::now_micros() >= until {
+                return Err(StoreError::Backend("the store is busy".into()).into());
+            }
         }
     }
 
@@ -3721,13 +4071,6 @@ impl App {
         reply: Option<&QuoteSummary>,
     ) -> Result<(), ClientError> {
         let id = parse_uuid(channel_id)?;
-        let inner = self.lock();
-        if inner.drafts_closed {
-            return Ok(());
-        }
-        if body.trim().is_empty() {
-            return Ok(inner.reader.clear_draft(&id)?);
-        }
         let mut end = body.len().min(DRAFT_MAX_BYTES);
         while !body.is_char_boundary(end) {
             end -= 1;
@@ -3735,9 +4078,23 @@ impl App {
         let reply = reply
             .and_then(|r| serde_json::to_string(r).ok())
             .unwrap_or_default();
-        Ok(inner
-            .reader
-            .set_draft(&id, &body[..end], &reply, crate::time::now_micros())?)
+        // Asked before the store is, which a save on the way out need not
+        // wait for; and again once it can be written, since the sign-out
+        // may have come while this waited.
+        if self.lock().drafts_closed {
+            return Ok(());
+        }
+        self.write(|inner| {
+            if inner.drafts_closed {
+                return Ok(());
+            }
+            if body.trim().is_empty() {
+                return Ok(inner.reader.clear_draft(&id)?);
+            }
+            Ok(inner
+                .reader
+                .set_draft(&id, &body[..end], &reply, crate::time::now_micros())?)
+        })
     }
 
     /// `GET /accounts/{id}`: another account's public profile, when
@@ -3763,7 +4120,10 @@ impl App {
 
     /// `GET /servers/{id}/members`: a server's members with their
     /// accounts, optionally filtered by a handle or nickname prefix. Every
-    /// page is read, up to [`MEMBER_PAGES`] of them.
+    /// page is read, up to [`MEMBER_PAGES`] of them. The unfiltered list is
+    /// kept ([`App::kept_members`]), with what the account log said of its
+    /// members while the pages were being read: a page read early is older
+    /// than that, and what the log says once it does not say again.
     ///
     /// # Errors
     /// On transport or API failure.
@@ -3772,6 +4132,8 @@ impl App {
         server_id: &str,
         query: &str,
     ) -> Result<Vec<MemberSummary>, ClientError> {
+        // The unfiltered list is what an offline launch names people from.
+        let read = query.is_empty().then(|| self.begin_member_read(server_id));
         let mut members: Vec<MemberSummary> = Vec::new();
         let mut cursor = String::new();
         for _ in 0..MEMBER_PAGES {
@@ -3785,21 +4147,86 @@ impl App {
                 break;
             }
         }
-        // The unfiltered list is what an offline launch names people from.
-        if query.is_empty() {
-            let mut all: HashMap<String, Vec<MemberSummary>> =
-                self.kept(KEPT_MEMBERS).ok().flatten().unwrap_or_default();
-            all.insert(server_id.to_string(), members.clone());
-            self.keep(KEPT_MEMBERS, &all);
+        if let Some(read) = &read {
+            members = self.keep_member_read(read, members);
         }
         Ok(self.dressed(server_id, members))
+    }
+
+    /// Begins a read of a server's member list: from here until it is
+    /// dropped, what is told of the server's members is noted for it.
+    fn begin_member_read(&self, server_id: &str) -> MemberRead<'_> {
+        let mut inner = self.lock();
+        let staleness = inner
+            .reader
+            .member_list_staleness(server_id)
+            .unwrap_or_default();
+        let forgotten = inner.member_reads_forgotten;
+        let reads = inner.member_reads.entry(server_id.to_string()).or_default();
+        reads.reading += 1;
+        MemberRead {
+            app: self,
+            server_id: server_id.to_string(),
+            from: reads.told.len(),
+            staleness,
+            forgotten,
+        }
+    }
+
+    /// Keeps the list `read` fetched in place of the server's kept one,
+    /// with what was told of its members since the read began carried out
+    /// on it first; answers the list as kept. The lock is held from the
+    /// last look at what was told to the write ([`App::write`]), so nothing
+    /// told lands between the two and is lost under the list.
+    fn keep_member_read(
+        &self,
+        read: &MemberRead<'_>,
+        mut members: Vec<MemberSummary>,
+    ) -> Vec<MemberSummary> {
+        let rows = |members: &[MemberSummary]| -> Vec<(String, String)> {
+            members
+                .iter()
+                .filter_map(|m| Some((m.account_id.clone(), serde_json::to_string(m).ok()?)))
+                .collect()
+        };
+        // Encoded before the lock is taken, which most reads then hold for
+        // the write alone: few are told anything meanwhile.
+        let mut encoded = rows(&members);
+        // Best effort, as everything kept is: a store that cannot be
+        // written leaves the list before, and the read is answered.
+        let _ = self.write(|inner| {
+            // The account signed out meanwhile: its lists are forgotten,
+            // and this one is not kept for whoever is here next.
+            if inner.member_reads_forgotten != read.forgotten {
+                return Ok(());
+            }
+            let Some(reads) = inner.member_reads.get(&read.server_id) else {
+                return Ok(());
+            };
+            let told = reads.told.get(read.from..).unwrap_or_default();
+            if !told.is_empty() {
+                MemberChange::replay(told, &mut members);
+                encoded = rows(&members);
+            }
+            inner
+                .reader
+                .keep_member_list(&read.server_id, &encoded, read.staleness)?;
+            Ok(())
+        });
+        members
     }
 
     /// `members` of a server as it shows them ([`ServerSummary::dress`]),
     /// by the snapshot last taken; as they are when it knows no such server.
     fn dressed(&self, server_id: &str, members: Vec<MemberSummary>) -> Vec<MemberSummary> {
         match self.kept_server(server_id) {
-            Some(server) => members.into_iter().map(|m| server.dress(m)).collect(),
+            Some(server) => {
+                let standing = server.standing();
+                members
+                    .into_iter()
+                    .map(|m| server.dress(&standing, m))
+                    .collect()
+            }
             None => members,
         }
     }
@@ -3818,52 +4245,113 @@ impl App {
     /// are, in every member list kept: an offline launch names them so.
     /// Each server's nickname and switches are its own and stay.
     fn keep_profiles(&self, profiles: &[AppEvent]) {
-        if profiles.is_empty() {
-            return;
-        }
-        let Some(mut all) = self
-            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        for profile in profiles {
-            let AppEvent::ProfileUpdated {
-                account_id,
-                handle,
-                display_name,
-                avatar_url,
-                pronouns,
-                bio,
-            } = profile
-            else {
-                continue;
-            };
-            for member in all.values_mut().flatten() {
-                if member.account_id == *account_id {
-                    member.handle.clone_from(handle);
-                    member.display_name.clone_from(display_name);
-                    member.avatar_url.clone_from(avatar_url);
-                    member.pronouns.clone_from(pronouns);
-                    member.bio.clone_from(bio);
-                }
-            }
-        }
-        self.keep(KEPT_MEMBERS, &all);
+        let changes: Vec<MemberChange> = profiles
+            .iter()
+            .filter_map(|profile| match profile {
+                AppEvent::ProfileUpdated {
+                    account_id,
+                    handle,
+                    display_name,
+                    avatar_url,
+                    pronouns,
+                    bio,
+                } => Some(MemberChange::Profile {
+                    account_id: account_id.clone(),
+                    handle: handle.clone(),
+                    display_name: display_name.clone(),
+                    avatar_url: avatar_url.clone(),
+                    pronouns: pronouns.clone(),
+                    bio: bio.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        self.change_kept_members(None, &changes);
     }
 
     /// The members last listed for a server, kept as [`App::kept_snapshot`]
-    /// is; empty when it was never listed.
+    /// is; empty when it was never listed. Each member is a row of the
+    /// store, so this reads one server's and no other's.
     ///
     /// # Errors
     /// On a store failure.
     pub fn kept_members(&self, server_id: &str) -> Result<Vec<MemberSummary>, ClientError> {
-        let all: Option<HashMap<String, Vec<MemberSummary>>> = self.kept(KEPT_MEMBERS)?;
-        let members = all
-            .and_then(|mut all| all.remove(server_id))
-            .unwrap_or_default();
+        let rows = self.lock().reader.kept_members(server_id)?;
+        // One this build cannot read is left out until the next list.
+        let members = rows
+            .iter()
+            .filter_map(|member| serde_json::from_str(member).ok())
+            .collect();
         Ok(self.dressed(server_id, members))
+    }
+
+    /// Reads again every kept member list that is said to be stale, one
+    /// server after another, and says [`AppEvent::TagsChanged`] to `sink`
+    /// for each as it is kept. A list is stale after the account log was
+    /// taken from a snapshot ([`GatewayEvent::AccountSnapshotTaken`]):
+    /// other members' roles and titles come only as account events, and the
+    /// ones skipped are never said again, so without this a kept list (and
+    /// a roster drawn from it) kept the roles and titles of before the
+    /// reconnect with nothing to say so. What says a list is stale is in
+    /// the store, so one that could not be read (no connection, the process
+    /// ended) is read at the next welcome.
+    fn refresh_stale_members(self: &Arc<Self>, sink: EventSink) {
+        {
+            let mut inner = self.lock();
+            if inner.members_refreshing {
+                inner.members_refresh_wanted = true;
+                return;
+            }
+            if !matches!(inner.reader.stale_member_lists(), Ok(stale) if !stale.is_empty()) {
+                return;
+            }
+            inner.members_refreshing = true;
+        }
+        let app = Arc::clone(self);
+        spawn(async move {
+            loop {
+                app.read_stale_members(&sink).await;
+                let mut inner = app.lock();
+                // More were said to be stale while these were read.
+                if !std::mem::take(&mut inner.members_refresh_wanted) {
+                    inner.members_refreshing = false;
+                    break;
+                }
+            }
+        });
+    }
+
+    /// One pass of [`App::refresh_stale_members`], and another while a pass
+    /// reads something and leaves something stale (a list said to be stale
+    /// again while it was being read).
+    async fn read_stale_members(&self, sink: &EventSink) {
+        // A few passes at most: a store that will not take what was read
+        // must not have the instance asked for ever.
+        for _ in 0..3 {
+            let stale = self.lock().reader.stale_member_lists().unwrap_or_default();
+            let mut read = false;
+            for server_id in stale {
+                match self.members(&server_id, "").await {
+                    Ok(_) => {
+                        read = true;
+                        sink(AppEvent::TagsChanged { server_id });
+                    }
+                    // The account is in the server no longer: nothing of it
+                    // is kept, and nothing is asked again.
+                    Err(ClientError::Api { code, .. })
+                        if code == "NOT_FOUND" || code == "PERMISSION_DENIED" =>
+                    {
+                        let _ =
+                            self.write(|inner| Ok(inner.reader.drop_member_list(&server_id)?));
+                    }
+                    // No connection: it stays stale for the next welcome.
+                    Err(_) => {}
+                }
+            }
+            if !read {
+                break;
+            }
+        }
     }
 
     /// The newest messages of a channel from the local store, oldest first,
@@ -4039,10 +4527,11 @@ impl App {
             while let Some(ev) = erx.next().await {
                 match &ev {
                     GatewayEvent::Notice(Notice::Welcomed(w)) => {
+                        let account = hex::encode(&w.account_id);
+                        let _ = app.write(|inner| {
+                            Ok(inner.reader.set_meta(gateway::ACCOUNT_META, &account)?)
+                        });
                         let mut inner = app.lock();
-                        let _ = inner
-                            .reader
-                            .meta_set(gateway::ACCOUNT_META, &hex::encode(&w.account_id));
                         inner.reads.me = w.account_id.clone();
                         inner.welcome = Some(w.clone());
                         drop(inner);
@@ -4067,8 +4556,21 @@ impl App {
                         drop(inner);
                         app.keep_profiles(&profiles_updated(events));
                     }
+                    // What the log would have said of the members kept was
+                    // skipped: every kept list is as old as the last
+                    // connection, and is read again below.
+                    GatewayEvent::AccountSnapshotTaken { .. } => {
+                        let _ = app.write(|inner| Ok(inner.reader.mark_member_lists_stale()?));
+                    }
                     _ => {}
                 }
+                // A welcome too: lists left stale by a connection that
+                // ended, or a process that did, before they were read.
+                let refresh = matches!(
+                    &ev,
+                    GatewayEvent::Notice(Notice::Welcomed(_))
+                        | GatewayEvent::AccountSnapshotTaken { .. }
+                );
                 let engine = app
                     .dm
                     .lock()
@@ -4153,6 +4655,9 @@ impl App {
                 for profile in profiles {
                     task_sink(profile);
                 }
+                if refresh {
+                    app.refresh_stale_members(Arc::clone(&task_sink));
+                }
             }
         });
         inner.commands = Some(tx);
@@ -4199,6 +4704,9 @@ impl App {
         inner.linking = None;
         inner.answers.clear();
         inner.drafts_closed = true;
+        // A member list still being read is not kept after the erasure.
+        inner.member_reads.clear();
+        inner.member_reads_forgotten += 1;
         // What says this device is to erase, kept until everything went: an
         // erase that did not finish is tried again (`erase_if_revoked`, and
         // at the next launch).
@@ -4318,12 +4826,11 @@ impl App {
             _ => "ONLINE",
         };
         let custom_status: String = custom_status.trim().chars().take(100).collect();
-        let watching = {
-            let inner = self.lock();
+        let watching = self.write(|inner| {
             inner.reader.set_meta(STATUS_META, status)?;
             inner.reader.set_meta(CUSTOM_STATUS_META, &custom_status)?;
-            inner.watching.clone()
-        };
+            Ok(inner.watching.clone())
+        })?;
         if self.started() {
             self.send_presence(status, &custom_status, watching)?;
         }
@@ -4668,7 +5175,61 @@ impl App {
         })
     }
 
-    /// Sends a message; returns the client-minted message id.
+    /// Writes a command to the outbox and tells the gateway loop it is
+    /// there. It is in the store before this returns, so a caller that then
+    /// forgets what it was made from (a composer clearing its draft) has
+    /// lost nothing if the process ends the moment after: the loop sends
+    /// what the outbox holds at its next welcome, on this launch or the
+    /// next, until the instance answers for it. Handed to the loop in
+    /// memory instead, it stayed there for as long as the instance could
+    /// not be reached.
+    ///
+    /// A message takes its conversation's draft with it, in the one
+    /// transaction, when the draft's words are the message's (blanks at
+    /// either end aside): were the two apart, a process ended between them
+    /// would come back with the message queued and its words still in the
+    /// composer, to be sent a second time. A draft of other words stays.
+    ///
+    /// # Errors
+    /// When not started, or on a store failure; nothing is queued then, and
+    /// the draft is as it was.
+    fn queue(&self, command: &Command) -> Result<(), ClientError> {
+        let running = |inner: &Inner| match &inner.commands {
+            Some(commands) if !commands.is_closed() => Ok(commands.clone()),
+            Some(_) => Err(ClientError::State("the gateway loop has stopped".into())),
+            None => Err(ClientError::State("not started".into())),
+        };
+        // Asked before the store is, so a send with no loop behind it is
+        // refused without a wait; and again once the row can be written.
+        running(&self.lock())?;
+        let commands = self.write(|inner| {
+            let commands = running(inner)?;
+            inner.reader.push_outbox(&lumia_core::store::OutboxEntry {
+                command_id: command.command_id.clone(),
+                channel_id: command.channel_id.clone(),
+                bytes: command.encode_to_vec(),
+            })?;
+            if let Some(command::Op::SendMessage(message)) = &command.op {
+                let typed = inner.reader.draft(&command.channel_id)?;
+                if typed.is_some_and(|(words, _)| words.trim() == message.body.trim()) {
+                    inner.reader.clear_draft(&command.channel_id)?;
+                }
+            }
+            Ok(commands)
+        })?;
+        // After the row is there to be read. A loop that ended in this
+        // moment sends it at the next start's welcome: it is queued, as
+        // this says by returning.
+        let _ = commands.unbounded_send(GatewayCommand::Outbox);
+        Ok(())
+    }
+
+    /// Sends a message; returns the client-minted message id. The message
+    /// is in the outbox when this returns, and goes when the instance can
+    /// be reached, on this launch or a later one. Its conversation's draft
+    /// ([`App::set_draft`]) is cleared with it, in the same write, when the
+    /// draft's words are the message's: a shell need not clear it, and one
+    /// that does loses nothing by it.
     ///
     /// # Errors
     /// When not started or the id is malformed.
@@ -4742,7 +5303,7 @@ impl App {
                 })
             })
             .transpose()?;
-        self.send_command(GatewayCommand::Send(Command {
+        self.queue(&Command {
             command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::SendMessage(SendMessage {
@@ -4753,7 +5314,7 @@ impl App {
                 card_urls,
                 ..Default::default()
             })),
-        }))?;
+        })?;
         self.sent_drafts(&attachments);
         Ok(wire::display(&id))
     }
@@ -4815,7 +5376,7 @@ impl App {
             })
             .collect::<Result<Vec<_>, ClientError>>()?;
         let id = wire::new_id();
-        self.send_command(GatewayCommand::Send(Command {
+        self.queue(&Command {
             command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::EditMessage(lumia_core::proto::EditMessage {
@@ -4825,7 +5386,7 @@ impl App {
                 remove_attachment_ids: removed,
                 cards,
             })),
-        }))?;
+        })?;
         Ok(wire::display(&id))
     }
 
@@ -4842,7 +5403,7 @@ impl App {
     ) -> Result<String, ClientError> {
         let channel = parse_uuid(channel_id)?;
         let id = wire::new_id();
-        self.send_command(GatewayCommand::Send(Command {
+        self.queue(&Command {
             command_id: id.clone(),
             channel_id: channel,
             op: Some(command::Op::DeleteMessage(
@@ -4850,7 +5411,7 @@ impl App {
                     message_id: parse_uuid(message_id)?,
                 },
             )),
-        }))?;
+        })?;
         Ok(wire::display(&id))
     }
 
@@ -4881,11 +5442,11 @@ impl App {
                 reaction,
             })
         };
-        self.send_command(GatewayCommand::Send(Command {
+        self.queue(&Command {
             command_id: wire::new_id(),
             channel_id: channel,
             op: Some(op),
-        }))
+        })
     }
 
     /// Every conversation's read state as this client counts it: the
@@ -6773,7 +7334,7 @@ impl App {
         if held.access.is_some() {
             // Whoever signs in over a held session may not be who typed
             // what it kept unsent.
-            let _ = self.lock().reader.forget_drafts();
+            let _ = self.write(|inner| Ok(inner.reader.forget_drafts()?));
             let _ = self.api.revoke(held).await;
         }
         Ok(())
@@ -7884,7 +8445,6 @@ mod read_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[allow(clippy::unwrap_used)]
 mod kept_tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -8008,7 +8568,11 @@ mod kept_tests {
     /// moderator there) and listed its members: 2 the moderator, 3 a helper with a title, 4
     /// with neither.
     fn app_with_roles() -> Arc<App> {
-        let app = app();
+        with_roles(app())
+    }
+
+    /// [`app_with_roles`], of an app already opened.
+    fn with_roles(app: Arc<App>) -> Arc<App> {
         let roles = [
             wire_role(10, "mods", 1, "sky"),
             wire_role(11, "helper", 2, "mint"),
@@ -8046,8 +8610,20 @@ mod kept_tests {
         .iter()
         .map(|m| member_summary(m, None))
         .collect();
-        app.keep(KEPT_MEMBERS, &HashMap::from([(uid(1), members)]));
+        keep_list(&app, &uid(1), &members);
         app
+    }
+
+    /// A server's member list, kept as a read of it keeps it.
+    fn keep_list(app: &App, server_id: &str, members: &[MemberSummary]) {
+        let rows: Vec<(String, String)> = members
+            .iter()
+            .map(|m| (m.account_id.clone(), serde_json::to_string(m).unwrap()))
+            .collect();
+        app.lock()
+            .reader
+            .keep_member_list(server_id, &rows, 0)
+            .unwrap();
     }
 
     fn tags(app: &App) -> Vec<Option<(String, String)>> {
@@ -8234,7 +8810,7 @@ mod kept_tests {
             r#"{"accountId":"a","handle":"ada","displayName":"Ada","nickname":"","pronouns":"","bio":""}"#,
         )
         .unwrap();
-        assert_eq!(server.dress(member).tag, None);
+        assert_eq!(server.dress(&server.standing(), member).tag, None);
     }
 
     fn snapshot() -> SnapshotSummary {
@@ -8552,6 +9128,564 @@ mod kept_tests {
         }
     }
 
+    /// What a request to [`answering`]'s instance is answered with.
+    type Answer = Box<dyn Fn(&str, &[u8]) -> (u16, Vec<u8>) + Send>;
+
+    /// An instance that answers each request with what `answer` makes of its
+    /// first line (lowercased) and its body: a status and a body.
+    fn answering(answer: Answer) -> String {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let ends = |r: &[u8]| r.windows(4).position(|w| w == b"\r\n\r\n");
+                while ends(&request).is_none() {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let head_end = ends(&request).map_or(request.len(), |at| at + 4);
+                let head = String::from_utf8_lossy(&request[..head_end]).to_lowercase();
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length: "))
+                    .and_then(|l| l.trim().parse().ok())
+                    .unwrap_or(0);
+                while request.len() < head_end + length {
+                    let n = stream.read(&mut chunk).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                }
+                let line = head.lines().next().unwrap_or_default().to_string();
+                let (status, body) = answer(&line, &request[head_end..]);
+                let head = format!(
+                    "HTTP/1.1 {status} OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(head.as_bytes()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+        base
+    }
+
+    /// A signed-in app on files of its own, against the instance at `base`.
+    fn app_on(base: &str, dir: &std::path::Path) -> Arc<App> {
+        let at = dir.to_path_buf();
+        std::fs::create_dir_all(&at).unwrap();
+        let opener: Opener = Arc::new(move |name| {
+            SqliteStore::open(&at.join(match name {
+                StoreName::Instance => "store.sqlite",
+                StoreName::Keys => "keys.sqlite",
+                StoreName::IdentityStore => "identity.sqlite",
+                StoreName::IdentityKeys => "identity-keys.sqlite",
+            }))
+        });
+        let app = App::open(base, Place::Native, opener).unwrap();
+        app.save_tokens(&pair("a", "r")).unwrap();
+        app
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("lumia-{name}-{}", uuid::Uuid::now_v7()))
+    }
+
+    /// A list is read a page at a time, and the account log goes on telling
+    /// of its members meanwhile: what it said of someone on a page already
+    /// read used to be written over by that page when the last one came.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn what_the_log_says_while_a_list_is_read_outlives_the_read() {
+        use lumia_core::proto::{Account, ListMembersResponse, MembersUpdated, PageResponse};
+
+        let told: Arc<std::sync::Mutex<Option<Arc<App>>>> = Arc::default();
+        let teller = Arc::clone(&told);
+        let page = |members: Vec<lumia_core::proto::Member>, next: &str| {
+            ListMembersResponse {
+                accounts: members
+                    .iter()
+                    .map(|m| Account {
+                        account_id: m.account_id.clone(),
+                        handle: format!("h{}", m.account_id[0]),
+                        ..Default::default()
+                    })
+                    .collect(),
+                members,
+                page: Some(PageResponse {
+                    next_cursor: next.into(),
+                }),
+            }
+            .encode_to_vec()
+        };
+        let base = answering(Box::new(move |line, _| {
+            if !line.contains("/members?") {
+                return (200, Vec::new());
+            }
+            if line.contains("cursor=two") {
+                // Between the pages the log says 3 was given a role and a
+                // title, 4 a role, and that 5 has a new name.
+                if let Some(app) = teller.lock().unwrap().clone() {
+                    app.keep_tags(&account_events(vec![
+                        account_event::Payload::MembersUpdated(MembersUpdated {
+                            server_id: vec![1; 16],
+                            members: vec![wire_member(3, &[10], "Lead"), wire_member(4, &[11], "")],
+                        }),
+                    ]));
+                    app.keep_profiles(&[AppEvent::ProfileUpdated {
+                        account_id: uid(5),
+                        handle: "h5".into(),
+                        display_name: "Renamed".into(),
+                        avatar_url: String::new(),
+                        pronouns: String::new(),
+                        bio: String::new(),
+                    }]);
+                }
+                return (
+                    200,
+                    page(vec![wire_member(4, &[], ""), wire_member(5, &[], "")], ""),
+                );
+            }
+            (
+                200,
+                page(
+                    vec![wire_member(2, &[10], ""), wire_member(3, &[11], "Designer")],
+                    "two",
+                ),
+            )
+        }));
+        let dir = scratch("members");
+        let app = app_on(&base, &dir);
+        // The list as it was kept before: the log's changes land in it.
+        app.members(&uid(1), "").await.unwrap();
+        *told.lock().unwrap() = Some(Arc::clone(&app));
+
+        let read = app.members(&uid(1), "").await.unwrap();
+        assert_eq!(read.len(), 4);
+        let kept = app.kept_members(&uid(1)).unwrap();
+        let of = |n: u8| kept.iter().find(|m| m.account_id == uid(n)).unwrap();
+        assert_eq!(
+            (of(3).role_ids.clone(), of(3).title.as_str()),
+            (vec![uid(10)], "Lead")
+        );
+        assert_eq!(of(4).role_ids, [uid(11)]);
+        assert_eq!(of(5).display_name, "Renamed");
+        // What the read answers is what is kept.
+        let answered = |n: u8| read.iter().find(|m| m.account_id == uid(n)).unwrap();
+        assert_eq!(answered(3).title, "Lead");
+        assert_eq!(answered(4).role_ids, [uid(11)]);
+        *told.lock().unwrap() = None;
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What an instance of [`answering`] was asked: each request's first
+    /// line and its body.
+    type Asked = Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+    /// An instance that notes what it is asked and answers `answer`.
+    fn noting(answer: Answer) -> (String, Asked) {
+        let asked = Asked::default();
+        let seen = Arc::clone(&asked);
+        let base = answering(Box::new(move |line, body| {
+            seen.lock().unwrap().push((line.to_string(), body.to_vec()));
+            answer(line, body)
+        }));
+        (base, asked)
+    }
+
+    fn draft(name: &str, permissions: &[&str]) -> RoleDraft {
+        RoleDraft {
+            name: name.into(),
+            color: "sky".into(),
+            hide_tag: false,
+            permissions: permissions.iter().map(|p| (*p).to_string()).collect(),
+        }
+    }
+
+    /// An editor left open sends what its person touched and nothing else,
+    /// so what someone else changed of the role meanwhile stands.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_role_is_saved_as_what_changed_of_it() {
+        use lumia_core::proto::{Permission, UpdateRoleRequest};
+
+        let (base, asked) = noting(Box::new(|_, _| (200, Vec::new())));
+        let dir = scratch("role");
+        let app = with_roles(app_on(&base, &dir));
+        let was = draft("mods", &["SEND_MESSAGES", "ATTACH_FILES"]);
+
+        // Saved as it opened: nothing is asked, and the snapshot kept answers.
+        let same = app
+            .change_role(&uid(1), &uid(10), &was, &was.clone())
+            .await
+            .unwrap();
+        assert_eq!(same.account_id, uid(2));
+        assert!(asked.lock().unwrap().is_empty());
+
+        // A rename, then a permission off and another on: each names its own.
+        let renamed = draft(" Moderators ", &["SEND_MESSAGES", "ATTACH_FILES"]);
+        app.change_role(&uid(1), &uid(10), &was, &renamed)
+            .await
+            .unwrap();
+        let switched = draft("mods", &["SEND_MESSAGES", "ADD_REACTIONS", "MANAGE_BOTS"]);
+        app.change_role(&uid(1), &uid(10), &was, &switched)
+            .await
+            .unwrap();
+
+        let asked = asked.lock().unwrap().clone();
+        let lines: Vec<&str> = asked.iter().map(|(line, _)| line.as_str()).collect();
+        let patch = format!(
+            "patch /api/v1/servers/{}/roles/{} http/1.1",
+            uid(1),
+            uid(10)
+        );
+        let snapshot = "get /api/v1/account/snapshot http/1.1";
+        assert_eq!(lines, [patch.as_str(), snapshot, patch.as_str(), snapshot]);
+        assert_eq!(
+            UpdateRoleRequest::decode(asked[0].1.as_slice()).unwrap(),
+            UpdateRoleRequest {
+                name: Some("Moderators".into()),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            UpdateRoleRequest::decode(asked[2].1.as_slice()).unwrap(),
+            UpdateRoleRequest {
+                grant: vec![Permission::AddReactions as i32],
+                revoke: vec![Permission::AttachFiles as i32],
+                ..Default::default()
+            }
+        );
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A member's roles are saved as those given and those taken, with the
+    /// title when there is one, in one request; the kept list has the answer.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_member_is_saved_as_what_changed_of_them() {
+        use lumia_core::proto::UpdateMemberRequest;
+
+        let (base, asked) = noting(Box::new(|_, _| {
+            (200, wire_member(3, &[10], "Lead").encode_to_vec())
+        }));
+        let dir = scratch("member");
+        let app = with_roles(app_on(&base, &dir));
+
+        let changed = app
+            .change_member(&uid(1), &uid(3), &[uid(10)], &[uid(11)], Some(" Lead "))
+            .await
+            .unwrap();
+        assert_eq!(
+            (changed.role_ids.clone(), changed.title.as_str()),
+            (vec![uid(10)], "Lead")
+        );
+        assert_eq!(changed.tag.map(|t| t.label), Some("mods".to_string()));
+        assert_eq!(tags(&app)[1], tagged("mods", "sky"));
+        // No title given: none is named, and theirs is left as it is.
+        app.change_member(&uid(1), &uid(3), &[], &[uid(11)], None)
+            .await
+            .unwrap();
+        assert!(app
+            .change_member(&uid(1), &uid(3), &["not an id".into()], &[], None)
+            .await
+            .is_err());
+
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 2);
+        assert_eq!(
+            asked[0].0,
+            format!(
+                "patch /api/v1/servers/{}/members/{} http/1.1",
+                uid(1),
+                uid(3)
+            )
+        );
+        assert_eq!(
+            UpdateMemberRequest::decode(asked[0].1.as_slice()).unwrap(),
+            UpdateMemberRequest {
+                add_role_ids: vec![vec![10; 16]],
+                remove_role_ids: vec![vec![11; 16]],
+                title: Some("Lead".into()),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            UpdateMemberRequest::decode(asked[1].1.as_slice()).unwrap(),
+            UpdateMemberRequest {
+                remove_role_ids: vec![vec![11; 16]],
+                ..Default::default()
+            }
+        );
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The account log was taken from a snapshot: what it would have said of
+    /// the members kept was never heard, so the lists are read again and the
+    /// open screens told, and one of a server the account has left is dropped.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_lists_the_log_skipped_past_are_read_again_and_said() {
+        use lumia_core::proto::{Account, Error as ApiError, ErrorCode, ListMembersResponse};
+
+        let here = uid(1);
+        let (base, asked) = noting(Box::new(move |line, _| {
+            if !line.contains(&format!("/servers/{here}/members?")) {
+                let gone = ApiError {
+                    code: ErrorCode::NotFound as i32,
+                    ..Default::default()
+                };
+                return (404, gone.encode_to_vec());
+            }
+            // 3 was given a role and a title while this device was away.
+            let members = vec![wire_member(2, &[10], ""), wire_member(3, &[10], "Lead")];
+            let list = ListMembersResponse {
+                accounts: members
+                    .iter()
+                    .map(|m| Account {
+                        account_id: m.account_id.clone(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                members,
+                page: None,
+            };
+            (200, list.encode_to_vec())
+        }));
+        let dir = scratch("stale");
+        let app = with_roles(app_on(&base, &dir));
+        keep_list(
+            &app,
+            &uid(5),
+            &[member_summary(&wire_member(2, &[], ""), None)],
+        );
+        let said: Arc<std::sync::Mutex<Vec<AppEvent>>> = Arc::default();
+        let hears = Arc::clone(&said);
+        let sink: EventSink = Arc::new(move |event| hears.lock().unwrap().push(event));
+
+        // Nothing is stale: nothing is asked.
+        app.read_stale_members(&sink).await;
+        assert!(asked.lock().unwrap().is_empty());
+
+        app.lock().reader.mark_member_lists_stale().unwrap();
+        assert_eq!(tags(&app)[1], tagged("helper", "mint"));
+        app.read_stale_members(&sink).await;
+        let kept = app.kept_members(&uid(1)).unwrap();
+        assert_eq!(kept.len(), 2);
+        assert_eq!(
+            (kept[1].title.as_str(), kept[1].role_ids.clone()),
+            ("Lead", vec![uid(10)])
+        );
+        assert!(matches!(
+            said.lock().unwrap().as_slice(),
+            [AppEvent::TagsChanged { server_id }] if *server_id == uid(1)
+        ));
+        assert!(app.kept_members(&uid(5)).unwrap().is_empty());
+        assert!(app.lock().reader.stale_member_lists().unwrap().is_empty());
+        // Each list was asked for once.
+        assert_eq!(asked.lock().unwrap().len(), 2);
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write waits for the store's write lock while someone else holds it
+    /// (the gateway loop applying a batch, another process). It used to wait
+    /// holding the client's own lock, so every other call, a read on the
+    /// main thread among them, stood behind one draft being saved.
+    #[test]
+    fn a_write_waiting_for_the_store_holds_up_no_other_call() {
+        use std::time::{Duration, Instant};
+
+        let dir = scratch("busy");
+        let app = app_on("http://127.0.0.1:9", &dir);
+        let id = "01890000-0000-7000-8000-000000000031";
+        app.set_draft(id, "first", None).unwrap();
+
+        let other = rusqlite::Connection::open(dir.join("store.sqlite")).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let saving = {
+            let app = Arc::clone(&app);
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                app.set_draft(id, "second", None).unwrap();
+                started.elapsed()
+            })
+        };
+        // The save is waiting by now; what else is asked is answered at once.
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        assert_eq!(app.draft(id).unwrap().unwrap().body, "first");
+        assert_eq!(app.badge(), 0);
+        assert!(app.kept_members("s").unwrap().is_empty());
+        let asked = started.elapsed();
+        std::thread::sleep(Duration::from_millis(300));
+        other.execute_batch("COMMIT;").unwrap();
+        let saved = saving.join().unwrap();
+
+        assert!(asked < Duration::from_millis(100), "{asked:?}");
+        assert!(saved >= Duration::from_millis(350), "{saved:?}");
+        assert_eq!(app.draft(id).unwrap().unwrap().body, "second");
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A send that returned is in the store: a composer that then clears its
+    /// draft has lost nothing if the process ends before the instance is
+    /// reached, which while a device is offline is as long as it is offline.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn what_is_sent_is_in_the_outbox_when_the_call_returns() {
+        // Nothing listens here: the loop never connects.
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let dir = scratch("outbox");
+        let app = app_on(&format!("http://127.0.0.1:{port}"), &dir);
+        // What a process that ended would leave: the file, read from outside.
+        let left = SqliteStore::open(&dir.join("store.sqlite")).unwrap();
+        let queued = || -> Vec<Command> {
+            let entries = left.outbox().unwrap();
+            entries
+                .iter()
+                .map(|e| Command::decode(e.bytes.as_slice()).unwrap())
+                .collect()
+        };
+        let channel = "01890000-0000-7000-8000-000000000031";
+        let message = "01890000-0000-7000-8000-000000000032";
+
+        // Not started: the caller is told, nothing waits to go later, and
+        // what was typed is still in the composer.
+        app.set_draft(channel, "hello ", None).unwrap();
+        assert!(matches!(
+            app.send_message(channel, "hello"),
+            Err(ClientError::State(_))
+        ));
+        assert!(queued().is_empty());
+        assert_eq!(app.draft(channel).unwrap().unwrap().body, "hello ");
+
+        app.start(&[], Arc::new(|_| {})).unwrap();
+        let sent = app.send_message(channel, "hello").unwrap();
+        let now = queued();
+        assert_eq!(now.len(), 1);
+        assert_eq!(wire::display(&now[0].command_id), sent);
+        assert!(matches!(
+            &now[0].op,
+            Some(command::Op::SendMessage(m)) if m.body == "hello"
+        ));
+        // Its draft went with it, in the same write: a process that ends
+        // here does not come back with both. A draft of other words stays,
+        // as does another conversation's of the same.
+        assert_eq!(app.draft(channel).unwrap(), None);
+        app.set_draft(channel, "something else", None).unwrap();
+        app.set_draft(message, "again", None).unwrap();
+        let again = app.send_message(channel, "again").unwrap();
+        assert_eq!(app.draft(channel).unwrap().unwrap().body, "something else");
+        assert_eq!(app.draft(message).unwrap().unwrap().body, "again");
+        // An edit, a delete and a reaction wait the same way, in order.
+        let edited = app.edit_message(channel, message, "hullo", &[]).unwrap();
+        let deleted = app.delete_message(channel, message).unwrap();
+        app.react(channel, message, "👍", false).unwrap();
+        let ids: Vec<String> = queued()
+            .iter()
+            .map(|c| wire::display(&c.command_id))
+            .collect();
+        assert_eq!(ids[..4], [sent, again, edited, deleted]);
+        assert_eq!(ids.len(), 5);
+
+        // The loop stopped (the app closed): they are there for the next.
+        app.stop();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.lock().store.is_none() {
+            assert!(std::time::Instant::now() < until, "the loop did not end");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(queued().len(), 5);
+        // Whoever signs in next sends nothing of this account's.
+        app.sign_out().await.unwrap();
+        assert!(queued().is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Measured, not asserted: what one change costs with two large servers kept.
+    #[test]
+    #[ignore = "a measurement: run with --ignored --nocapture"]
+    fn the_cost_of_one_change_among_twenty_thousand_kept_members() {
+        let dir = scratch("cost");
+        let app = app_on("http://127.0.0.1:9", &dir);
+        let member = |server: u8, n: u32| {
+            let mut id = vec![server; 16];
+            id[12..].copy_from_slice(&n.to_be_bytes());
+            MemberSummary {
+                account_id: wire::display(&id),
+                handle: format!("member{n}"),
+                display_name: format!("Member Number {n}"),
+                pronouns: "they/them".into(),
+                bio: "Writes software, climbs on weekends, and is here for the release notes."
+                    .into(),
+                avatar_url: format!("/api/v1/avatars/{}", "0123456789abcdef".repeat(4)),
+                role_ids: vec![uid(10), uid(11)],
+                title: "Staff Engineer".into(),
+                ..Default::default()
+            }
+        };
+        for server in [1u8, 2] {
+            let members: Vec<MemberSummary> = (0..10_000).map(|n| member(server, n)).collect();
+            let started = std::time::Instant::now();
+            keep_list(&app, &uid(server), &members);
+            eprintln!("a list of 10,000 kept in {:?}", started.elapsed());
+        }
+
+        let updated = |members: std::ops::Range<u32>| {
+            account_events(vec![account_event::Payload::MembersUpdated(
+                lumia_core::proto::MembersUpdated {
+                    server_id: vec![1; 16],
+                    members: members
+                        .map(|n| {
+                            let mut account_id = vec![1u8; 16];
+                            account_id[12..].copy_from_slice(&n.to_be_bytes());
+                            lumia_core::proto::Member {
+                                server_id: vec![1; 16],
+                                account_id,
+                                title: "Principal".into(),
+                                ..Default::default()
+                            }
+                        })
+                        .collect(),
+                },
+            )])
+        };
+        for (what, event) in [
+            ("one member", updated(5_000..5_001)),
+            ("200 members", updated(5_000..5_200)),
+        ] {
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                app.keep_tags(&event);
+                eprintln!("one MembersUpdated of {what}: {:?}", started.elapsed());
+            }
+        }
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            let read = app.kept_members(&uid(1)).unwrap();
+            eprintln!(
+                "kept_members of one server ({}): {:?}",
+                read.len(),
+                started.elapsed()
+            );
+        }
+        assert_eq!(app.kept_members(&uid(1)).unwrap()[5_000].title, "Principal");
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A phone signs in with a password and is then linked, which signs it
     /// in again: the first session used to stay alive on the instance with
     /// no client holding it, and signing out revoked only the second.
@@ -8685,13 +9819,12 @@ mod kept_tests {
             panic!("{profiles:?}");
         };
         let ada = account_id.clone();
-        let mut all = HashMap::new();
-        all.insert(
-            "s".to_string(),
-            vec![member(&ada, "Ada", ""), member("grace", "Grace", "")],
+        keep_list(
+            &app,
+            "s",
+            &[member(&ada, "Ada", ""), member("grace", "Grace", "")],
         );
-        all.insert("t".to_string(), vec![member(&ada, "Ada", "Countess")]);
-        app.keep(KEPT_MEMBERS, &all);
+        keep_list(&app, "t", &[member(&ada, "Ada", "Countess")]);
         app.keep_profiles(&profiles);
         let s = app.kept_members("s").unwrap();
         assert_eq!(s[0].display_name, "Ada Lovelace");
@@ -8718,11 +9851,27 @@ mod kept_tests {
             avatar_url: String::new(),
             ..Default::default()
         };
-        let all: HashMap<String, Vec<MemberSummary>> =
-            HashMap::from([("s".to_string(), vec![member])]);
-        app.keep(KEPT_MEMBERS, &all);
+        keep_list(&app, "s", &[member]);
         assert_eq!(app.kept_members("s").unwrap()[0].pronouns, "she/her");
         assert!(app.kept_members("other").unwrap().is_empty());
+    }
+
+    /// A store from before each member had a row holds every server's list
+    /// as one value: it is dropped at open, and nothing is read from it.
+    #[test]
+    fn the_lists_kept_as_one_value_are_dropped_at_open() {
+        let dir = scratch("one-value");
+        let app = app_on("http://127.0.0.1:9", &dir);
+        app.lock()
+            .reader
+            .meta_set("kept_members", r#"{"s":[{"accountId":"a"}]}"#)
+            .unwrap();
+        drop(app);
+        let app = app_on("http://127.0.0.1:9", &dir);
+        assert_eq!(app.lock().reader.meta_get("kept_members").unwrap(), None);
+        assert!(app.kept_members("s").unwrap().is_empty());
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

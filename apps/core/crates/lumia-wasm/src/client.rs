@@ -16,6 +16,7 @@ use lumia_client::app::{
     App, AttachmentInput, BlobSummary, EventSink, MentionSummary, MessageSummary, Opener,
     PixelsInput, Place, QuoteSummary, StoreName,
 };
+use lumia_client::roles::RoleDraft;
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
 use lumia_core::proto::PushKind;
@@ -377,9 +378,42 @@ impl Client {
         )
     }
 
+    /// What an editor changed of a role, and nothing else of it: `was` is
+    /// the role as the editor opened on it and `now` what it holds at Save,
+    /// each `{name, color, hideTag, permissions}` with the offered
+    /// permissions switched on by their wire names. The difference is what
+    /// is sent; what the editor did not touch stays as the instance has it,
+    /// whatever someone else changed meanwhile. An editor saved as it
+    /// opened asks nothing. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// As `createRole`; `PERMISSION_DENIED` for a role this account may not
+    /// manage; a draft that is not one.
+    #[wasm_bindgen(js_name = changeRole)]
+    pub async fn change_role(
+        &self,
+        server_id: String,
+        role_id: String,
+        was: JsValue,
+        now: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let draft = |value: JsValue| {
+            from_js::<RoleDraft>(value)?.ok_or_else(|| JsError::new("a role draft is required"))
+        };
+        let (was, now) = (draft(was)?, draft(now)?);
+        to_js(
+            &self
+                .app
+                .change_role(&server_id, &role_id, &was, &now)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// A role's name, colour, tag switch and permissions, whole; a
     /// permission no editor offers is kept as the role has it, and of
     /// `Everyone` only the permissions change. The snapshot as it then is.
+    /// Going, once the page saves through `changeRole`.
     ///
     /// # Errors
     /// As `createRole`; `PERMISSION_DENIED` for a role this account may not
@@ -444,8 +478,38 @@ impl Client {
         )
     }
 
+    /// What was changed of a member, in one request the instance does whole
+    /// or not at all: the roles to give them (`give`) and to take away
+    /// (`take`), by id, their other roles left as the instance has them,
+    /// and their title when `title` is a string (empty clears it;
+    /// `undefined` or `null` leaves it as it is). The member as the server
+    /// now shows them.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage or a
+    /// title that is not its to set; `INVALID_ARGUMENT` with `details.field`
+    /// `roles` or `title`; `NOT_FOUND` for someone who is not a member.
+    #[wasm_bindgen(js_name = changeMember)]
+    pub async fn change_member(
+        &self,
+        server_id: String,
+        account_id: String,
+        give: Vec<String>,
+        take: Vec<String>,
+        title: Option<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .change_member(&server_id, &account_id, &give, &take, title.as_deref())
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// The roles a member is to hold, the whole set. The member as the
-    /// server now shows them.
+    /// server now shows them. Going, once the page saves through
+    /// `changeMember`.
     ///
     /// # Errors
     /// `PERMISSION_DENIED` for a role this account may not manage;
