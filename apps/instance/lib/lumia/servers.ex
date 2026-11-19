@@ -54,8 +54,9 @@ defmodule Lumia.Servers do
   # A role's name and a member's title (authorization 3.5 and 10).
   @label_max 32
 
-  # The design system's tones, each with a ground and an ink in both themes.
-  @tones ~w(peach blue purple mint amber sky stone green indigo)
+  # A role's colour is one of the design system's tones, as a rail folder's
+  # is: each has a ground and an ink in both themes.
+  @tones Lumia.Rails.tones()
 
   # ---- Servers ---------------------------------------------------------------
 

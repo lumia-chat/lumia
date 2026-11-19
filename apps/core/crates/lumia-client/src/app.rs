@@ -36,6 +36,7 @@ use crate::dm::{DmEngine, Outcome};
 use crate::futures_channel::mpsc;
 use crate::gateway::{self, GatewayCommand, GatewayEvent};
 use crate::identity::Device;
+use crate::roles::{PermissionGroup, RoleSummary, Standing, TagSummary};
 use crate::sqlite::{DmStatus, SqliteStore};
 use crate::writer::{WriterGuard, WriterLock};
 use crate::ClientError;
@@ -102,7 +103,7 @@ pub struct InstanceSummary {
 }
 
 /// A server the account belongs to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSummary {
     pub server_id: String,
@@ -154,21 +155,60 @@ pub struct ServerSummary {
     pub channel_adds_by_invitation: bool,
     #[serde(default)]
     pub server_dms_off: bool,
+    /// The server's owner, whom a profile card and the settings' member
+    /// list mark (architecture 7.5).
+    #[serde(default)]
+    pub owner_account_id: String,
+    /// Whether this account is that owner.
+    #[serde(default)]
+    pub is_owner: bool,
+    /// Whether it may create roles and put them in order (`MANAGE_ROLES`);
+    /// which roles it may change is each role's `can_manage`.
+    #[serde(default)]
+    pub can_manage_roles: bool,
+    /// Whether it may remove members and set their titles
+    /// (`MANAGE_MEMBERS`); which members is each member's `can_manage`.
+    #[serde(default)]
+    pub can_manage_members: bool,
+    /// Whether the tag beside a name there is the member's title; false,
+    /// the default, it is the member's role (architecture 7.5).
+    #[serde(default)]
+    pub tag_titles: bool,
+    /// The server's roles, highest first, `Everyone` last.
+    #[serde(default)]
+    pub roles: Vec<RoleSummary>,
+    /// The offered permissions this account may switch on for a role, by
+    /// their wire names: the ones it holds itself.
+    #[serde(default)]
+    pub grantable: Vec<String>,
+    /// This account's own roles there, and its own title, empty for none.
+    #[serde(default)]
+    pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub title: String,
+    /// Whether it is a guest there: it has a title and is given no roles.
+    #[serde(default)]
+    pub guest: bool,
 }
 
 impl ServerSummary {
     /// The server as the snapshot says it, with what `memberships` (the
-    /// account's own) says this account may do there.
-    fn of(server: &lumia_core::proto::Server, memberships: &[lumia_core::proto::Member]) -> Self {
+    /// account's own) and `roles` (every server's) say this account may do
+    /// there.
+    fn of(
+        server: &lumia_core::proto::Server,
+        memberships: &[lumia_core::proto::Member],
+        roles: &[lumia_core::proto::Role],
+    ) -> Self {
         use lumia_core::proto::Permission;
         let own = memberships.iter().find(|m| m.server_id == server.server_id);
-        let holds = |wanted: Permission| {
-            own.is_some_and(|m| {
-                m.permissions
-                    .iter()
-                    .any(|p| *p == wanted as i32 || *p == Permission::Administrator as i32)
-            })
-        };
+        let roles: Vec<lumia_core::proto::Role> = roles
+            .iter()
+            .filter(|r| r.server_id == server.server_id)
+            .cloned()
+            .collect();
+        let standing = Standing::of(server, own, &roles);
+        let holds = |wanted: Permission| own.is_some() && standing.holds(wanted);
         Self {
             server_id: wire::display(&server.server_id),
             name: server.name.clone(),
@@ -185,7 +225,56 @@ impl ServerSummary {
             can_manage_messages: holds(Permission::ManageMessages),
             channel_adds_by_invitation: own.is_some_and(|m| m.channel_adds_by_invitation),
             server_dms_off: own.is_some_and(|m| m.server_dms_off),
+            owner_account_id: wire::display(&server.owner_account_id),
+            is_owner: standing.is_owner(),
+            can_manage_roles: holds(Permission::ManageRoles),
+            can_manage_members: holds(Permission::ManageMembers),
+            tag_titles: crate::roles::tags_are_titles(server),
+            roles: crate::roles::summaries(&roles, &standing),
+            grantable: standing.grantable(),
+            role_ids: own
+                .map(|m| m.role_ids.iter().map(|r| wire::display(r)).collect())
+                .unwrap_or_default(),
+            title: own.map(|m| m.title.clone()).unwrap_or_default(),
+            guest: own.is_some_and(|m| m.kind == lumia_core::proto::MembershipKind::Guest as i32),
         }
+    }
+
+    /// This account's highest role there, by its position; `None` holding none.
+    fn highest(&self) -> Option<u32> {
+        crate::roles::highest_of(&self.role_ids, &self.roles)
+    }
+
+    /// Whether this account may remove `member` from the server and set
+    /// their title: the instance's rule (specs/authorization.md 3.3).
+    fn manages(&self, member: &MemberSummary) -> bool {
+        if member.account_id == self.owner_account_id {
+            return false;
+        }
+        if self.is_owner {
+            return true;
+        }
+        let theirs = crate::roles::highest_of(&member.role_ids, &self.roles);
+        self.can_manage_members
+            && match (self.highest(), theirs) {
+                (None, _) => false,
+                (Some(_), None) => true,
+                (Some(mine), Some(theirs)) => mine < theirs,
+            }
+    }
+
+    /// `member` as this server shows them: its tag, whether it is the owner,
+    /// and whether this account may manage it.
+    fn dress(&self, mut member: MemberSummary) -> MemberSummary {
+        member.tag = crate::roles::tag(
+            self.tag_titles,
+            &self.roles,
+            &member.role_ids,
+            &member.title,
+        );
+        member.owner = member.account_id == self.owner_account_id;
+        member.can_manage = self.manages(&member);
+        member
     }
 }
 
@@ -541,7 +630,7 @@ impl SnapshotSummary {
 }
 
 /// A person: a member of a server, or a public profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemberSummary {
     pub account_id: String,
@@ -565,6 +654,29 @@ pub struct MemberSummary {
     pub channel_adds_by_invitation: bool,
     #[serde(default)]
     pub server_dms_off: bool,
+    /// Their roles in the server listed, by id, and their title there,
+    /// empty for none (architecture 7.5). Empty for a public profile.
+    #[serde(default)]
+    pub role_ids: Vec<String>,
+    #[serde(default)]
+    pub title: String,
+    /// Whether they are a guest there: a title, and no roles offered.
+    #[serde(default)]
+    pub guest: bool,
+    /// Whether they own the server listed.
+    #[serde(default)]
+    pub owner: bool,
+    /// The tag beside their name there: their role or their title, as the
+    /// server shows, or none. Worked out when the list is read
+    /// ([`App::members`], [`App::kept_members`]) from the snapshot last
+    /// taken, so a shell reads the list again when
+    /// [`AppEvent::TagsChanged`] says to.
+    #[serde(default)]
+    pub tag: Option<TagSummary>,
+    /// Whether this account may set their title and remove them from the
+    /// server; its own title is its own whatever this says.
+    #[serde(default)]
+    pub can_manage: bool,
 }
 
 /// A message as the local store holds it.
@@ -1184,6 +1296,16 @@ pub enum AppEvent {
         pronouns: String,
         bio: String,
     },
+    /// What a member's tag is in a server may have changed, after the
+    /// `AccountApplied` it came in: the server's roles, some members' roles
+    /// or titles, or which of the two the server shows (architecture 7.5).
+    /// What is kept has it already: a shell reads the server's members
+    /// again ([`App::kept_members`]) for their tags, and takes the snapshot
+    /// again as it does on any `AccountApplied`, which says afresh what
+    /// this account may do there.
+    TagsChanged {
+        server_id: String,
+    },
     /// A link session moved (`LinkSessionUpdated` on this account's log,
     /// identity spec 4.2.1), after the `AccountApplied` it came in: this
     /// device's own as the new device ([`App::link_progress`]) or one that
@@ -1477,6 +1599,29 @@ fn event_summary(e: &Event) -> EventSummary {
         seq: e.seq,
         kind: kind.into(),
         message,
+    }
+}
+
+/// A member of a server with its account, before the server dresses it
+/// ([`ServerSummary::dress`]).
+fn member_summary(
+    m: &lumia_core::proto::Member,
+    account: Option<&lumia_core::proto::Account>,
+) -> MemberSummary {
+    MemberSummary {
+        account_id: wire::display(&m.account_id),
+        handle: account.map(|a| a.handle.clone()).unwrap_or_default(),
+        display_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
+        nickname: m.nickname.clone(),
+        pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
+        bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
+        avatar_url: account.map(|a| a.avatar_url.clone()).unwrap_or_default(),
+        channel_adds_by_invitation: m.channel_adds_by_invitation,
+        server_dms_off: m.server_dms_off,
+        role_ids: m.role_ids.iter().map(|r| wire::display(r)).collect(),
+        title: m.title.clone(),
+        guest: m.kind == lumia_core::proto::MembershipKind::Guest as i32,
+        ..Default::default()
     }
 }
 
@@ -2533,7 +2678,10 @@ impl App {
             can_start_dms: true,
             can_mention_everyone: true,
             can_manage_messages: true,
-            ..ServerSummary::of(&s, &[])
+            can_manage_roles: true,
+            can_manage_members: true,
+            is_owner: true,
+            ..ServerSummary::of(&s, &[], &[])
         })
     }
 
@@ -2711,6 +2859,427 @@ impl App {
             .update_membership(&wire::display(&server_id), &req)
             .await?;
         self.snapshot().await
+    }
+
+    /// The permissions a role's editor offers, under their headings: the
+    /// ones that do something today, the same on every shell (architecture
+    /// 7.5). Which of them this account may switch on in a server is that
+    /// server's [`ServerSummary::grantable`].
+    #[must_use]
+    pub fn role_permissions() -> Vec<PermissionGroup> {
+        crate::roles::offered()
+    }
+
+    /// `POST /servers/{id}/roles`: a new role, which the instance places
+    /// last above `Everyone` (architecture 7.5). `color` is one of
+    /// [`crate::roles::TONES`] or empty; `hide_tag` keeps it from being a
+    /// member's tag; `permissions` are the offered ones switched on, by
+    /// their wire names. Every member hears of it through the account log.
+    /// Returns the account's snapshot as it then is, the server's roles in
+    /// it.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_ROLES` there, or for a permission
+    /// this account does not hold; `INVALID_ARGUMENT` with `details.field`
+    /// `name` (empty, over 32 characters, or `everyone`) or `color`;
+    /// `ALREADY_EXISTS` for a name another role has, whatever its capitals;
+    /// transport failure.
+    pub async fn create_role(
+        &self,
+        server_id: &str,
+        name: &str,
+        color: &str,
+        hide_tag: bool,
+        permissions: &[String],
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let role = lumia_core::proto::Role {
+            name: name.trim().to_string(),
+            color: color.to_string(),
+            hide_tag,
+            permissions: crate::roles::saved_permissions(permissions, &[]),
+            ..Default::default()
+        };
+        self.api
+            .create_role(&wire::display(&server_id), role)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `PUT /servers/{id}/roles/{role_id}`: the role's name, colour, tag
+    /// switch and permissions, whole, as [`App::create_role`] takes them. A
+    /// permission no editor offers yet is kept as the role has it. Of
+    /// `Everyone` only the permissions change. Its place is never changed
+    /// here ([`App::reorder_roles`]). Returns the account's snapshot as it
+    /// then is.
+    ///
+    /// # Errors
+    /// As [`App::create_role`]; `PERMISSION_DENIED` for a role this account
+    /// may not manage; `NOT_FOUND` for a role the server does not have.
+    pub async fn update_role(
+        &self,
+        server_id: &str,
+        role_id: &str,
+        name: &str,
+        color: &str,
+        hide_tag: bool,
+        permissions: &[String],
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server = wire::display(&parse_uuid(server_id)?);
+        let id = parse_uuid(role_id)?;
+        let held = self
+            .api
+            .roles(&server)
+            .await?
+            .roles
+            .into_iter()
+            .find(|r| r.role_id == id)
+            .map(|r| r.permissions)
+            .ok_or_else(|| ClientError::State(format!("no such role: {role_id}")))?;
+        let role = lumia_core::proto::Role {
+            name: name.trim().to_string(),
+            color: color.to_string(),
+            hide_tag,
+            permissions: crate::roles::saved_permissions(permissions, &held),
+            ..Default::default()
+        };
+        self.api
+            .update_role(&server, &wire::display(&id), role)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `DELETE /servers/{id}/roles/{role_id}`: the role is gone, from
+    /// whoever held it too. Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage, and for
+    /// `Everyone`; transport failure.
+    pub async fn delete_role(
+        &self,
+        server_id: &str,
+        role_id: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let role_id = parse_uuid(role_id)?;
+        self.api
+            .delete_role(&wire::display(&server_id), &wire::display(&role_id))
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `PUT /servers/{id}/role-order`: the server's roles in the order of
+    /// `role_ids`, every role but `Everyone` once, highest first. For
+    /// anyone but the owner, every role at or above this account's highest
+    /// keeps its place: a shell moves only roles whose `can_manage` is set.
+    /// Returns the account's snapshot as it then is.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` `role_ids` for an order that
+    /// is not the server's roles, each once (a role made or deleted
+    /// elsewhere since the list was drawn); `PERMISSION_DENIED`; transport
+    /// failure.
+    pub async fn reorder_roles(
+        &self,
+        server_id: &str,
+        role_ids: &[String],
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        let ids = role_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.api
+            .reorder_roles(&wire::display(&server_id), ids)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// `PATCH /servers/{id}/members/{account_id}`: the roles a member is to
+    /// hold, the whole set, `Everyone` never among them. Each role given or
+    /// taken must be one this account manages. The member hears of it at
+    /// once and the server's other members through their account logs.
+    /// Returns the member as the server now shows them; the kept list has
+    /// them so too.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage;
+    /// `NOT_FOUND` for someone who is not a member; transport failure.
+    pub async fn set_member_roles(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        role_ids: &[String],
+    ) -> Result<MemberSummary, ClientError> {
+        let ids = role_ids
+            .iter()
+            .map(|id| parse_uuid(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let req = lumia_core::proto::UpdateMemberRequest {
+            roles: Some(lumia_core::proto::RoleIds { role_ids: ids }),
+            ..Default::default()
+        };
+        self.change_member(server_id, account_id, &req).await
+    }
+
+    /// A member's title in a server, up to 32 characters once trimmed; an
+    /// empty one clears it (architecture 7.5). This account's own is its
+    /// own to set (`PATCH /servers/{id}/membership`); someone else's takes
+    /// `MANAGE_MEMBERS` and a member below this account
+    /// ([`MemberSummary::can_manage`]). Returns the member as the server now
+    /// shows them.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` `title`; `PERMISSION_DENIED`;
+    /// `NOT_FOUND` for someone who is not a member; transport failure.
+    pub async fn set_member_title(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        title: &str,
+    ) -> Result<MemberSummary, ClientError> {
+        let server = wire::display(&parse_uuid(server_id)?);
+        let own = self
+            .kept::<SnapshotSummary>(KEPT_SNAPSHOT)?
+            .is_some_and(|s| s.account_id == account_id);
+        if own {
+            let req = lumia_core::proto::UpdateMembershipRequest {
+                title: Some(title.trim().to_string()),
+                ..Default::default()
+            };
+            let member = self.api.update_membership(&server, &req).await?;
+            return self.changed_member(server_id, &member).await;
+        }
+        let req = lumia_core::proto::UpdateMemberRequest {
+            title: Some(title.trim().to_string()),
+            ..Default::default()
+        };
+        self.change_member(server_id, account_id, &req).await
+    }
+
+    async fn change_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        req: &lumia_core::proto::UpdateMemberRequest,
+    ) -> Result<MemberSummary, ClientError> {
+        let server = wire::display(&parse_uuid(server_id)?);
+        let account = wire::display(&parse_uuid(account_id)?);
+        let member = self.api.update_member(&server, &account, req).await?;
+        self.changed_member(server_id, &member).await
+    }
+
+    /// `member` as the instance now has it, written into the kept list of
+    /// its server and answered as the server shows it. One the list does
+    /// not have is asked for by its account.
+    async fn changed_member(
+        &self,
+        server_id: &str,
+        member: &lumia_core::proto::Member,
+    ) -> Result<MemberSummary, ClientError> {
+        if let Some(kept) = self
+            .keep_members(server_id, std::slice::from_ref(member))
+            .pop()
+        {
+            return Ok(kept);
+        }
+        let account = self.api.account(&wire::display(&member.account_id)).await?;
+        let summary = member_summary(member, Some(&account));
+        Ok(self
+            .dressed(server_id, vec![summary])
+            .pop()
+            .unwrap_or_default())
+    }
+
+    /// The roles, title and kind of `members` written into the kept list of
+    /// their server; answers those the list has, as the server shows them.
+    fn keep_members(
+        &self,
+        server_id: &str,
+        members: &[lumia_core::proto::Member],
+    ) -> Vec<MemberSummary> {
+        let Some(mut all) = self
+            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
+            .ok()
+            .flatten()
+        else {
+            return Vec::new();
+        };
+        let Some(list) = all.get_mut(server_id) else {
+            return Vec::new();
+        };
+        let mut changed = Vec::new();
+        for member in members {
+            let now = member_summary(member, None);
+            if let Some(kept) = list.iter_mut().find(|k| k.account_id == now.account_id) {
+                kept.role_ids = now.role_ids;
+                kept.title = now.title;
+                kept.guest = now.guest;
+                changed.push(kept.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.keep(KEPT_MEMBERS, &all);
+        }
+        self.dressed(server_id, changed)
+    }
+
+    /// `DELETE /servers/{id}/members/{account_id}`: removes a member from
+    /// the server, which takes `MANAGE_MEMBERS` and a member below this
+    /// account ([`MemberSummary::can_manage`]), never the owner. The kept
+    /// list no longer has them.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED`; `NOT_FOUND` for someone who is not a member;
+    /// transport failure.
+    pub async fn remove_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+    ) -> Result<(), ClientError> {
+        let server = wire::display(&parse_uuid(server_id)?);
+        let account = wire::display(&parse_uuid(account_id)?);
+        self.api.remove_member(&server, &account).await?;
+        if let Some(mut all) = self
+            .kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS)
+            .ok()
+            .flatten()
+        {
+            if let Some(list) = all.get_mut(server_id) {
+                list.retain(|m| m.account_id != account_id);
+                self.keep(KEPT_MEMBERS, &all);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the tag beside a member's name in a server is their title;
+    /// false, their role (architecture 7.5; roles by default). Every member
+    /// hears of it through the account log. Returns the account's snapshot
+    /// as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER` there; transport failure.
+    pub async fn set_tag_titles(
+        &self,
+        server_id: &str,
+        titles: bool,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .set_tag_titles(&wire::display(&server_id), titles)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// What an account batch says of roles, titles and tags, written into
+    /// what is kept (the snapshot's servers, the member lists), so a tag is
+    /// right before the instance is asked anything: a server's roles
+    /// (`RolesUpdated`), members' roles and titles (`MembersUpdated`, and
+    /// `MembershipUpdated` for this account's own), and which of the two a
+    /// server shows (`ServerUpdated`). Answers a
+    /// [`AppEvent::TagsChanged`] for each server it touched.
+    fn keep_tags(&self, events: &[lumia_core::proto::AccountEvent]) -> Vec<AppEvent> {
+        let mut touched: Vec<String> = Vec::new();
+        let mut touch = |server_id: String| {
+            if !touched.contains(&server_id) {
+                touched.push(server_id);
+            }
+        };
+        for event in events {
+            match &event.payload {
+                Some(account_event::Payload::RolesUpdated(r)) => {
+                    let server_id = wire::display(&r.server_id);
+                    self.keep_roles(&server_id, &r.roles);
+                    touch(server_id);
+                }
+                Some(account_event::Payload::MembersUpdated(m)) => {
+                    let server_id = wire::display(&m.server_id);
+                    self.keep_members(&server_id, &m.members);
+                    touch(server_id);
+                }
+                // This account's own, which its log has at once.
+                Some(account_event::Payload::MembershipUpdated(u)) => {
+                    if let Some(member) = &u.member {
+                        let server_id = wire::display(&member.server_id);
+                        self.keep_members(&server_id, std::slice::from_ref(member));
+                        touch(server_id);
+                    }
+                }
+                Some(account_event::Payload::ServerUpdated(u)) => {
+                    if let Some(server) = &u.server {
+                        let server_id = wire::display(&server.server_id);
+                        if self.keep_tag_titles(&server_id, crate::roles::tags_are_titles(server)) {
+                            touch(server_id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        touched
+            .into_iter()
+            .map(|server_id| AppEvent::TagsChanged { server_id })
+            .collect()
+    }
+
+    /// A server's roles as they now are, in the kept snapshot; a role no
+    /// longer listed is dropped from this account's own and from the kept
+    /// members (specs/authorization.md 6.4). What this account may do to
+    /// each is worked out from what the snapshot said of it, until the next
+    /// one says it fresh.
+    fn keep_roles(&self, server_id: &str, roles: &[lumia_core::proto::Role]) {
+        let listed: HashSet<String> = roles.iter().map(|r| wire::display(&r.role_id)).collect();
+        if let Ok(Some(mut snapshot)) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT) {
+            if let Some(server) = snapshot
+                .servers
+                .iter_mut()
+                .find(|s| s.server_id == server_id)
+            {
+                server.role_ids.retain(|id| listed.contains(id));
+                let own: Vec<Vec<u8>> = server
+                    .role_ids
+                    .iter()
+                    .filter_map(|id| parse_uuid(id).ok())
+                    .collect();
+                let standing = Standing::kept(
+                    server.is_owner,
+                    server.can_manage_roles,
+                    crate::roles::highest(&own, roles),
+                );
+                server.roles = crate::roles::summaries(roles, &standing);
+                self.keep(KEPT_SNAPSHOT, &snapshot);
+            }
+        }
+        if let Ok(Some(mut all)) = self.kept::<HashMap<String, Vec<MemberSummary>>>(KEPT_MEMBERS) {
+            if let Some(list) = all.get_mut(server_id) {
+                for member in list.iter_mut() {
+                    member.role_ids.retain(|id| listed.contains(id));
+                }
+                self.keep(KEPT_MEMBERS, &all);
+            }
+        }
+    }
+
+    /// Which of the two a server's tags show, in the kept snapshot; whether
+    /// that changed.
+    fn keep_tag_titles(&self, server_id: &str, titles: bool) -> bool {
+        let Ok(Some(mut snapshot)) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT) else {
+            return false;
+        };
+        let Some(server) = snapshot
+            .servers
+            .iter_mut()
+            .find(|s| s.server_id == server_id)
+        else {
+            return false;
+        };
+        if server.tag_titles == titles {
+            return false;
+        }
+        server.tag_titles = titles;
+        self.keep(KEPT_SNAPSHOT, &snapshot);
+        true
     }
 
     /// `POST /servers/{id}/dms`: the 1:1 server DM with a member of the
@@ -2973,7 +3542,7 @@ impl App {
             servers: snap
                 .servers
                 .iter()
-                .map(|s| ServerSummary::of(s, &snap.memberships))
+                .map(|s| ServerSummary::of(s, &snap.memberships, &snap.roles))
                 .collect(),
             channels: snap.channels.iter().map(ChannelSummary::of).collect(),
             pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
@@ -3188,6 +3757,7 @@ impl App {
             avatar_url: a.avatar_url,
             channel_adds_by_invitation: false,
             server_dms_off: false,
+            ..Default::default()
         })
     }
 
@@ -3208,17 +3778,7 @@ impl App {
             let page = self.api.members(server_id, query, &cursor).await?;
             members.extend(page.members.iter().map(|m| {
                 let account = page.accounts.iter().find(|a| a.account_id == m.account_id);
-                MemberSummary {
-                    account_id: wire::display(&m.account_id),
-                    handle: account.map(|a| a.handle.clone()).unwrap_or_default(),
-                    display_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
-                    nickname: m.nickname.clone(),
-                    pronouns: account.map(|a| a.pronouns.clone()).unwrap_or_default(),
-                    bio: account.map(|a| a.bio.clone()).unwrap_or_default(),
-                    avatar_url: account.map(|a| a.avatar_url.clone()).unwrap_or_default(),
-                    channel_adds_by_invitation: m.channel_adds_by_invitation,
-                    server_dms_off: m.server_dms_off,
-                }
+                member_summary(m, account)
             }));
             cursor = page.page.map(|p| p.next_cursor).unwrap_or_default();
             if cursor.is_empty() {
@@ -3232,7 +3792,26 @@ impl App {
             all.insert(server_id.to_string(), members.clone());
             self.keep(KEPT_MEMBERS, &all);
         }
-        Ok(members)
+        Ok(self.dressed(server_id, members))
+    }
+
+    /// `members` of a server as it shows them ([`ServerSummary::dress`]),
+    /// by the snapshot last taken; as they are when it knows no such server.
+    fn dressed(&self, server_id: &str, members: Vec<MemberSummary>) -> Vec<MemberSummary> {
+        match self.kept_server(server_id) {
+            Some(server) => members.into_iter().map(|m| server.dress(m)).collect(),
+            None => members,
+        }
+    }
+
+    /// A server of the snapshot last taken.
+    fn kept_server(&self, server_id: &str) -> Option<ServerSummary> {
+        self.kept::<SnapshotSummary>(KEPT_SNAPSHOT)
+            .ok()
+            .flatten()?
+            .servers
+            .into_iter()
+            .find(|s| s.server_id == server_id)
     }
 
     /// The people of `profiles` ([`AppEvent::ProfileUpdated`]) as they now
@@ -3281,9 +3860,10 @@ impl App {
     /// On a store failure.
     pub fn kept_members(&self, server_id: &str) -> Result<Vec<MemberSummary>, ClientError> {
         let all: Option<HashMap<String, Vec<MemberSummary>>> = self.kept(KEPT_MEMBERS)?;
-        Ok(all
+        let members = all
             .and_then(|mut all| all.remove(server_id))
-            .unwrap_or_default())
+            .unwrap_or_default();
+        Ok(self.dressed(server_id, members))
     }
 
     /// The newest messages of a channel from the local store, oldest first,
@@ -3563,6 +4143,7 @@ impl App {
                 let profiles = match &ev {
                     GatewayEvent::AccountApplied(events) => {
                         let mut after = profiles_updated(events);
+                        after.extend(app.keep_tags(events));
                         after.extend(link_sessions_updated(events));
                         after
                     }
@@ -6927,8 +7508,7 @@ mod mention_tests {
             pronouns: String::new(),
             bio: String::new(),
             avatar_url: String::new(),
-            channel_adds_by_invitation: false,
-            server_dms_off: false,
+            ..Default::default()
         }
     }
 
@@ -7385,6 +7965,278 @@ mod kept_tests {
         ));
     }
 
+    /// A uuid of one digit, as the wire spells ids.
+    fn uid(n: u8) -> String {
+        wire::display(&[n; 16])
+    }
+
+    fn wire_role(n: u8, name: &str, position: u32, color: &str) -> lumia_core::proto::Role {
+        lumia_core::proto::Role {
+            role_id: vec![n; 16],
+            server_id: vec![1; 16],
+            name: name.into(),
+            position,
+            color: color.into(),
+            is_everyone: name == "@everyone",
+            ..Default::default()
+        }
+    }
+
+    fn wire_member(n: u8, roles: &[u8], title: &str) -> lumia_core::proto::Member {
+        lumia_core::proto::Member {
+            server_id: vec![1; 16],
+            account_id: vec![n; 16],
+            role_ids: roles.iter().map(|r| vec![*r; 16]).collect(),
+            title: title.into(),
+            ..Default::default()
+        }
+    }
+
+    fn account_events(
+        payloads: Vec<account_event::Payload>,
+    ) -> Vec<lumia_core::proto::AccountEvent> {
+        payloads
+            .into_iter()
+            .map(|payload| lumia_core::proto::AccountEvent {
+                payload: Some(payload),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// An app that has taken a snapshot of server 1 (owned by account 9, this account 2 a
+    /// moderator there) and listed its members: 2 the moderator, 3 a helper with a title, 4
+    /// with neither.
+    fn app_with_roles() -> Arc<App> {
+        let app = app();
+        let roles = [
+            wire_role(10, "mods", 1, "sky"),
+            wire_role(11, "helper", 2, "mint"),
+            wire_role(99, "@everyone", 1_000_000, ""),
+        ];
+        let server = lumia_core::proto::Server {
+            server_id: vec![1; 16],
+            name: "Acme".into(),
+            owner_account_id: vec![9; 16],
+            ..Default::default()
+        };
+        let own = lumia_core::proto::Member {
+            permissions: vec![
+                lumia_core::proto::Permission::ManageRoles as i32,
+                lumia_core::proto::Permission::ManageMembers as i32,
+            ],
+            ..wire_member(2, &[10], "")
+        };
+        let snapshot = SnapshotSummary {
+            account_id: uid(2),
+            servers: vec![ServerSummary::of(
+                &server,
+                std::slice::from_ref(&own),
+                &roles,
+            )],
+            ..snapshot()
+        };
+        app.keep(KEPT_SNAPSHOT, &snapshot);
+        let members: Vec<MemberSummary> = [
+            own,
+            wire_member(3, &[11], "Designer"),
+            wire_member(4, &[], ""),
+            wire_member(9, &[], "Founder"),
+        ]
+        .iter()
+        .map(|m| member_summary(m, None))
+        .collect();
+        app.keep(KEPT_MEMBERS, &HashMap::from([(uid(1), members)]));
+        app
+    }
+
+    fn tags(app: &App) -> Vec<Option<(String, String)>> {
+        app.kept_members(&uid(1))
+            .unwrap()
+            .into_iter()
+            .map(|m| m.tag.map(|t| (t.label, t.color)))
+            .collect()
+    }
+
+    fn tagged(label: &str, color: &str) -> Option<(String, String)> {
+        Some((label.to_string(), color.to_string()))
+    }
+
+    #[test]
+    fn kept_members_are_read_as_their_server_shows_them() {
+        let app = app_with_roles();
+        let members = app.kept_members(&uid(1)).unwrap();
+        assert_eq!(
+            tags(&app),
+            [tagged("mods", "sky"), tagged("helper", "mint"), None, None]
+        );
+        // The owner is marked and is nobody's to manage; the moderator manages those below
+        // it, not itself.
+        let owner: Vec<bool> = members.iter().map(|m| m.owner).collect();
+        assert_eq!(owner, [false, false, false, true]);
+        let managed: Vec<bool> = members.iter().map(|m| m.can_manage).collect();
+        assert_eq!(managed, [false, true, true, false]);
+
+        let server = app.kept_server(&uid(1)).unwrap();
+        assert!(server.can_manage_roles && server.can_manage_members && !server.is_owner);
+        assert_eq!(server.role_ids, [uid(10)]);
+        let manages: Vec<(String, bool)> = server
+            .roles
+            .iter()
+            .map(|r| (r.name.clone(), r.can_manage))
+            .collect();
+        assert_eq!(
+            manages,
+            [
+                ("mods".to_string(), false),
+                ("helper".to_string(), true),
+                ("Everyone".to_string(), true)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_server_that_shows_titles_tags_by_title_once_it_says_so() {
+        let app = app_with_roles();
+        let updated = |tag: lumia_core::proto::MemberTag| {
+            account_events(vec![account_event::Payload::ServerUpdated(
+                lumia_core::proto::ServerUpdated {
+                    server: Some(lumia_core::proto::Server {
+                        server_id: vec![1; 16],
+                        member_tag: tag as i32,
+                        ..Default::default()
+                    }),
+                },
+            )])
+        };
+        // As it was: nothing to draw again.
+        assert!(app
+            .keep_tags(&updated(lumia_core::proto::MemberTag::Role))
+            .is_empty());
+
+        let changed = app.keep_tags(&updated(lumia_core::proto::MemberTag::Title));
+        assert!(matches!(
+            changed.as_slice(),
+            [AppEvent::TagsChanged { server_id }] if *server_id == uid(1)
+        ));
+        assert_eq!(
+            tags(&app),
+            [None, tagged("Designer", ""), None, tagged("Founder", "")]
+        );
+    }
+
+    #[test]
+    fn members_whose_roles_or_title_changed_are_kept_as_they_now_are() {
+        let app = app_with_roles();
+        let changed = app.keep_tags(&account_events(vec![
+            account_event::Payload::MembersUpdated(lumia_core::proto::MembersUpdated {
+                server_id: vec![1; 16],
+                // 4 is given a role; 3 loses theirs; 7 is nobody the list has.
+                members: vec![
+                    wire_member(4, &[11], "New"),
+                    wire_member(3, &[], "Designer"),
+                    wire_member(7, &[10], ""),
+                ],
+            }),
+            account_event::Payload::MembersUpdated(lumia_core::proto::MembersUpdated {
+                server_id: vec![1; 16],
+                members: vec![wire_member(9, &[10], "Founder")],
+            }),
+        ]));
+        // One server, said once.
+        assert_eq!(changed.len(), 1);
+        assert_eq!(
+            tags(&app),
+            [
+                tagged("mods", "sky"),
+                None,
+                tagged("helper", "mint"),
+                tagged("mods", "sky")
+            ]
+        );
+        let members = app.kept_members(&uid(1)).unwrap();
+        assert_eq!(members.len(), 4);
+        assert_eq!(members[2].title, "New");
+    }
+
+    #[test]
+    fn this_accounts_own_roles_and_title_are_kept_from_its_own_log() {
+        let app = app_with_roles();
+        let changed = app.keep_tags(&account_events(vec![
+            account_event::Payload::MembershipUpdated(lumia_core::proto::MembershipUpdated {
+                member: Some(wire_member(2, &[11], "Lead")),
+            }),
+        ]));
+        assert_eq!(changed.len(), 1);
+        let me = &app.kept_members(&uid(1)).unwrap()[0];
+        assert_eq!(me.title, "Lead");
+        assert_eq!(me.tag.clone().map(|t| t.label), Some("helper".to_string()));
+    }
+
+    #[test]
+    fn a_servers_roles_replace_the_ones_kept_and_a_role_gone_is_nobodys() {
+        let app = app_with_roles();
+        // helper is deleted, mods is renamed and recoloured, and a role is made above it.
+        let changed = app.keep_tags(&account_events(vec![account_event::Payload::RolesUpdated(
+            lumia_core::proto::RolesUpdated {
+                server_id: vec![1; 16],
+                roles: vec![
+                    wire_role(12, "admin", 1, "peach"),
+                    wire_role(10, "moderators", 2, "amber"),
+                    wire_role(99, "@everyone", 1_000_000, ""),
+                ],
+            },
+        )]));
+        assert_eq!(changed.len(), 1);
+        assert_eq!(
+            tags(&app),
+            [tagged("moderators", "amber"), None, None, None]
+        );
+        assert!(app.kept_members(&uid(1)).unwrap()[1].role_ids.is_empty());
+
+        let server = app.kept_server(&uid(1)).unwrap();
+        let manages: Vec<(String, bool)> = server
+            .roles
+            .iter()
+            .map(|r| (r.name.clone(), r.can_manage))
+            .collect();
+        assert_eq!(
+            manages,
+            [
+                ("admin".to_string(), false),
+                ("moderators".to_string(), false),
+                ("Everyone".to_string(), true)
+            ]
+        );
+
+        // Its own role deleted: it holds none, and manages only Everyone's permissions.
+        app.keep_tags(&account_events(vec![account_event::Payload::RolesUpdated(
+            lumia_core::proto::RolesUpdated {
+                server_id: vec![1; 16],
+                roles: vec![
+                    wire_role(12, "admin", 1, "peach"),
+                    wire_role(99, "@everyone", 1_000_000, ""),
+                ],
+            },
+        )]));
+        let server = app.kept_server(&uid(1)).unwrap();
+        assert!(server.role_ids.is_empty());
+        assert!(!server.roles[0].can_manage && server.roles[1].can_manage);
+    }
+
+    #[test]
+    fn a_snapshot_kept_before_roles_reads_as_a_server_with_none() {
+        let old = r#"{"accountId":"a","handle":"ada","displayName":"Ada","servers":[{"serverId":"s","name":"Acme"}],"channels":[],"pendingRequests":[]}"#;
+        let snapshot: SnapshotSummary = serde_json::from_str(old).unwrap();
+        let server = &snapshot.servers[0];
+        assert!(server.roles.is_empty() && !server.tag_titles && !server.can_manage_roles);
+        let member: MemberSummary = serde_json::from_str(
+            r#"{"accountId":"a","handle":"ada","displayName":"Ada","nickname":"","pronouns":"","bio":""}"#,
+        )
+        .unwrap();
+        assert_eq!(server.dress(member).tag, None);
+    }
+
     fn snapshot() -> SnapshotSummary {
         SnapshotSummary {
             account_id: "a".into(),
@@ -7406,6 +8258,7 @@ mod kept_tests {
                 can_manage_messages: false,
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
+                ..Default::default()
             }],
             channels: vec![ChannelSummary {
                 channel_id: "c".into(),
@@ -7811,8 +8664,7 @@ mod kept_tests {
             pronouns: String::new(),
             bio: String::new(),
             avatar_url: String::new(),
-            channel_adds_by_invitation: false,
-            server_dms_off: false,
+            ..Default::default()
         };
         let event = lumia_core::proto::AccountEvent {
             payload: Some(account_event::Payload::ProfileUpdated(
@@ -7864,8 +8716,7 @@ mod kept_tests {
             pronouns: "she/her".into(),
             bio: String::new(),
             avatar_url: String::new(),
-            channel_adds_by_invitation: false,
-            server_dms_off: false,
+            ..Default::default()
         };
         let all: HashMap<String, Vec<MemberSummary>> =
             HashMap::from([("s".to_string(), vec![member])]);

@@ -425,6 +425,7 @@ pub(crate) fn servers_sample(state: &mut State) {
         avatar_url: String::new(),
         channel_adds_by_invitation: false,
         server_dms_off: false,
+        ..Default::default()
     };
     state.receive(&Update::SignedIn(Ok(())));
     state.receive(&Update::Snapshot(Ok(SnapshotSummary {
@@ -448,6 +449,7 @@ pub(crate) fn servers_sample(state: &mut State) {
                 server_dms_off: false,
                 can_mention_everyone: false,
                 can_manage_messages: false,
+                ..Default::default()
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -464,6 +466,7 @@ pub(crate) fn servers_sample(state: &mut State) {
                 server_dms_off: false,
                 can_mention_everyone: false,
                 can_manage_messages: false,
+                ..Default::default()
             },
         ],
         channels: vec![
@@ -762,6 +765,7 @@ mod staged {
             avatar_url: String::new(),
             channel_adds_by_invitation: false,
             server_dms_off: false,
+            ..Default::default()
         }
     }
 
@@ -818,6 +822,7 @@ mod staged {
                 server_dms_off: false,
                 can_mention_everyone: false,
                 can_manage_messages: false,
+                ..Default::default()
             }],
             channels: vec![
                 channel("general", "acme", "general", "", &[]),
@@ -1179,6 +1184,7 @@ pub fn bodies(state: &mut State) {
             server_dms_off: false,
             can_mention_everyone: false,
             can_manage_messages: false,
+            ..Default::default()
         }],
         channels: vec![ChannelSummary {
             channel_id: "general".into(),
@@ -1208,6 +1214,7 @@ pub fn bodies(state: &mut State) {
         avatar_url: String::new(),
         channel_adds_by_invitation: false,
         server_dms_off: false,
+        ..Default::default()
     };
     state.receive(&Update::Members {
         server_id: "acme".into(),

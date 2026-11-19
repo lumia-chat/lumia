@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use lumia_client::app::{self, App, EventSink, Opener, Place, StoreName};
 use lumia_client::body;
+use lumia_client::roles;
 use lumia_client::sqlite::SqliteStore;
 use lumia_client::ClientError;
 use lumia_core::proto::PushKind;
@@ -160,6 +161,115 @@ pub struct ServerSummary {
     /// invitations; nobody may start a server DM with it.
     pub channel_adds_by_invitation: bool,
     pub server_dms_off: bool,
+    /// The server's owner, whom a profile card and the settings' member
+    /// list mark (architecture 7.5), and whether this account is it.
+    pub owner_account_id: String,
+    pub is_owner: bool,
+    /// Whether it may create roles and put them in order (`MANAGE_ROLES`);
+    /// which roles it may change is each role's `can_manage`.
+    pub can_manage_roles: bool,
+    /// Whether it may remove members and set their titles
+    /// (`MANAGE_MEMBERS`); which members is each member's `can_manage`.
+    pub can_manage_members: bool,
+    /// Whether the tag beside a name there is the member's title; false,
+    /// their role.
+    pub tag_titles: bool,
+    /// The server's roles, highest first, `Everyone` last.
+    pub roles: Vec<RoleSummary>,
+    /// The offered permissions this account may switch on for a role, by
+    /// their wire names.
+    pub grantable: Vec<String>,
+    /// This account's own roles there, its own title (empty for none), and
+    /// whether it is a guest there.
+    pub role_ids: Vec<String>,
+    pub title: String,
+    pub guest: bool,
+}
+
+/// A role of a server (architecture 7.5).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RoleSummary {
+    pub role_id: String,
+    /// "Everyone" for the role every member holds.
+    pub name: String,
+    /// One of the nine tones a rail folder may have, or empty for none.
+    pub color: String,
+    /// Lower is higher; the list a server gives is already in order.
+    pub position: u32,
+    pub is_everyone: bool,
+    /// Never a member's tag ("Show as tag" off).
+    pub hide_tag: bool,
+    /// Every permission it grants, by its wire name.
+    pub permissions: Vec<String>,
+    /// Whether this account may change it, delete it, give it and take it
+    /// away; of `Everyone`, whether it may change its permissions.
+    pub can_manage: bool,
+}
+
+impl From<roles::RoleSummary> for RoleSummary {
+    fn from(r: roles::RoleSummary) -> Self {
+        Self {
+            role_id: r.role_id,
+            name: r.name,
+            color: r.color,
+            position: r.position,
+            is_everyone: r.is_everyone,
+            hide_tag: r.hide_tag,
+            permissions: r.permissions,
+            can_manage: r.can_manage,
+        }
+    }
+}
+
+/// The tag beside a member's name: a role in its colour, or a title in none.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TagSummary {
+    pub label: String,
+    /// One of the nine tones, or empty for the plain chip.
+    pub color: String,
+}
+
+impl From<roles::TagSummary> for TagSummary {
+    fn from(t: roles::TagSummary) -> Self {
+        Self {
+            label: t.label,
+            color: t.color,
+        }
+    }
+}
+
+/// A heading of a role's editor and the permissions under it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PermissionGroup {
+    pub title: String,
+    pub permissions: Vec<PermissionChoice>,
+}
+
+/// A permission a role's editor offers.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PermissionChoice {
+    /// Its wire name, as a role's `permissions` has it.
+    pub name: String,
+    pub label: String,
+    /// What it allows, in a line.
+    pub detail: String,
+}
+
+impl From<roles::PermissionGroup> for PermissionGroup {
+    fn from(g: roles::PermissionGroup) -> Self {
+        Self {
+            title: g.title,
+            permissions: g
+                .permissions
+                .into_iter()
+                .map(|p| PermissionChoice {
+                    name: p.name,
+                    label: p.label,
+                    detail: p.detail,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// What a server's files take (specs/media.md 4.5).
@@ -196,6 +306,16 @@ impl From<app::ServerSummary> for ServerSummary {
             can_manage_messages: s.can_manage_messages,
             channel_adds_by_invitation: s.channel_adds_by_invitation,
             server_dms_off: s.server_dms_off,
+            owner_account_id: s.owner_account_id,
+            is_owner: s.is_owner,
+            can_manage_roles: s.can_manage_roles,
+            can_manage_members: s.can_manage_members,
+            tag_titles: s.tag_titles,
+            roles: s.roles.into_iter().map(Into::into).collect(),
+            grantable: s.grantable,
+            role_ids: s.role_ids,
+            title: s.title,
+            guest: s.guest,
         }
     }
 }
@@ -477,6 +597,20 @@ pub struct MemberSummary {
     /// False for a public profile.
     pub channel_adds_by_invitation: bool,
     pub server_dms_off: bool,
+    /// Their roles in the server listed, by id, and their title there,
+    /// empty for none (architecture 7.5). Empty for a public profile.
+    pub role_ids: Vec<String>,
+    pub title: String,
+    /// Whether they are a guest there (a title, and no roles offered), and
+    /// whether they own the server.
+    pub guest: bool,
+    pub owner: bool,
+    /// The tag beside their name there, their role or their title as the
+    /// server shows, or none; read the list again when `TagsChanged` says to.
+    pub tag: Option<TagSummary>,
+    /// Whether this account may set their title and remove them from the
+    /// server; its own title is its own whatever this says.
+    pub can_manage: bool,
 }
 
 impl From<app::MemberSummary> for MemberSummary {
@@ -491,6 +625,12 @@ impl From<app::MemberSummary> for MemberSummary {
             avatar_url: m.avatar_url,
             channel_adds_by_invitation: m.channel_adds_by_invitation,
             server_dms_off: m.server_dms_off,
+            role_ids: m.role_ids,
+            title: m.title,
+            guest: m.guest,
+            owner: m.owner,
+            tag: m.tag.map(Into::into),
+            can_manage: m.can_manage,
         }
     }
 }
@@ -1397,6 +1537,13 @@ pub enum ClientEvent {
         pronouns: String,
         bio: String,
     },
+    /// What a member's tag is in a server may have changed, after the
+    /// `AccountApplied` it came in (architecture 7.5): its roles, some
+    /// members' roles or titles, or which of the two it shows. Read the
+    /// server's members again (`kept_members`) for their tags.
+    TagsChanged {
+        server_id: String,
+    },
     /// A link session moved, after the `AccountApplied` it came in: this
     /// device's own as the new device, or one that prompts here.
     LinkSessionUpdated {
@@ -1585,6 +1732,7 @@ impl From<app::AppEvent> for ClientEvent {
                 pronouns,
                 bio,
             },
+            E::TagsChanged { server_id } => Self::TagsChanged { server_id },
             E::LinkSessionUpdated { session_id } => Self::LinkSessionUpdated { session_id },
             E::Acked { command_id, seq } => Self::Acked { command_id, seq },
             E::Error {
@@ -1907,6 +2055,17 @@ pub fn placeholder_image(placeholder: Vec<u8>) -> Option<Pixels> {
         width: p.width,
         height: p.height,
     })
+}
+
+/// The permissions a role's editor offers, under their headings: the same
+/// on every shell (architecture 7.5). Which of them this account may switch
+/// on in a server is that server's `grantable`.
+#[uniffi::export]
+pub fn role_permissions() -> Vec<PermissionGroup> {
+    App::role_permissions()
+        .into_iter()
+        .map(Into::into)
+        .collect()
 }
 
 /// The words of the recovery phrase's wordlist that begin with `prefix`, at
@@ -2291,6 +2450,132 @@ impl Client {
                 server_dms_off,
             ))?
             .into())
+    }
+
+    /// A new role in a server, placed last above `Everyone` (architecture
+    /// 7.5): `color` one of the nine tones or empty, `hide_tag` for one that
+    /// is never a member's tag, `permissions` the offered ones switched on.
+    /// Returns the snapshot as it then is.
+    pub fn create_role(
+        &self,
+        server_id: String,
+        name: String,
+        color: String,
+        hide_tag: bool,
+        permissions: Vec<String>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .create_role(&server_id, &name, &color, hide_tag, &permissions),
+            )?
+            .into())
+    }
+
+    /// A role's name, colour, tag switch and permissions, whole; a
+    /// permission no editor offers is kept as the role has it, and of
+    /// `Everyone` only the permissions change. Returns the snapshot as it
+    /// then is.
+    pub fn update_role(
+        &self,
+        server_id: String,
+        role_id: String,
+        name: String,
+        color: String,
+        hide_tag: bool,
+        permissions: Vec<String>,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.update_role(
+                &server_id,
+                &role_id,
+                &name,
+                &color,
+                hide_tag,
+                &permissions,
+            ))?
+            .into())
+    }
+
+    /// Deletes a role, from whoever held it too. Returns the snapshot as it
+    /// then is.
+    pub fn delete_role(&self, server_id: String, role_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.delete_role(&server_id, &role_id))?
+            .into())
+    }
+
+    /// A server's roles in the order of `role_ids`: every role but
+    /// `Everyone` once, highest first. Returns the snapshot as it then is.
+    pub fn reorder_roles(&self, server_id: String, role_ids: Vec<String>) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.reorder_roles(&server_id, &role_ids))?
+            .into())
+    }
+
+    /// The roles a member is to hold, the whole set. Returns the member as
+    /// the server now shows them.
+    pub fn set_member_roles(
+        &self,
+        server_id: String,
+        account_id: String,
+        role_ids: Vec<String>,
+    ) -> Res<MemberSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .set_member_roles(&server_id, &account_id, &role_ids),
+            )?
+            .into())
+    }
+
+    /// A member's title in a server, up to 32 characters; empty clears it.
+    /// This account's own is its own to set. Returns the member as the
+    /// server now shows them.
+    pub fn set_member_title(
+        &self,
+        server_id: String,
+        account_id: String,
+        title: String,
+    ) -> Res<MemberSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_member_title(&server_id, &account_id, &title))?
+            .into())
+    }
+
+    /// Removes a member from a server (`MANAGE_MEMBERS`, and a member below
+    /// this account).
+    pub fn remove_member(&self, server_id: String, account_id: String) -> Res<()> {
+        Ok(self
+            .runtime
+            .block_on(self.app.remove_member(&server_id, &account_id))?)
+    }
+
+    /// Whether the tag beside a member's name in a server is their title;
+    /// false, their role. Returns the snapshot as it then is.
+    pub fn set_tag_titles(&self, server_id: String, titles: bool) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.set_tag_titles(&server_id, titles))?
+            .into())
+    }
+
+    /// The members last listed for a server, from the local store, each
+    /// with its tag as the server now shows it; empty when it was never
+    /// listed.
+    pub fn kept_members(&self, server_id: String) -> Res<Vec<MemberSummary>> {
+        Ok(self
+            .app
+            .kept_members(&server_id)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     /// `POST /servers/{id}/dms`: the 1:1 server DM with a member, started
@@ -2711,6 +2996,10 @@ impl Client {
                 avatar_url: m.avatar_url,
                 channel_adds_by_invitation: m.channel_adds_by_invitation,
                 server_dms_off: m.server_dms_off,
+                role_ids: m.role_ids,
+                title: m.title,
+                guest: m.guest,
+                ..Default::default()
             })
             .collect();
         app::find_mentions(&body, &members, everyone)

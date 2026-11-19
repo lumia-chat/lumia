@@ -282,6 +282,7 @@ pub fn channel_members(
                     avatar_url: String::new(),
                     channel_adds_by_invitation: false,
                     server_dms_off: false,
+                    ..Default::default()
                 })
         })
         .collect();

@@ -106,6 +106,7 @@ fn snapshot_with_server(id: &str, name: &str) -> SnapshotSummary {
         server_dms_off: false,
         can_mention_everyone: false,
         can_manage_messages: false,
+        ..Default::default()
     });
     snapshot
         .channels
@@ -228,6 +229,7 @@ fn a_server_is_created_by_name_and_opens_once_the_snapshot_lists_it() {
             server_dms_off: false,
             can_mention_everyone: false,
             can_manage_messages: false,
+            ..Default::default()
         })),
     );
     assert!(!rt.state.server_forms.add.creating);
@@ -306,6 +308,7 @@ fn someone_who_went_elsewhere_is_not_pulled_into_the_server_they_made() {
             server_dms_off: false,
             can_mention_everyone: false,
             can_manage_messages: false,
+            ..Default::default()
         })),
     );
     snapshot_arrives(&mut rt, snapshot_with_server("ours", "Our place"));
@@ -514,6 +517,7 @@ fn a_server_with_no_channel_says_where_to_add_one() {
         server_dms_off: false,
         can_mention_everyone: false,
         can_manage_messages: false,
+        ..Default::default()
     });
     state.receive(&Update::Snapshot(Ok(snapshot)));
     let mut rt = runtime(state);

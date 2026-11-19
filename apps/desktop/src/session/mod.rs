@@ -1457,9 +1457,13 @@ impl Session {
                 avatar_url: avatar_url.clone(),
                 channel_adds_by_invitation: false,
                 server_dms_off: false,
+                ..Default::default()
             }),
             // Linking's to follow (`State::link_session_moved`).
             AppEvent::LinkSessionUpdated { .. } => {}
+            // Nothing here draws a tag yet (plan step 11): when the shell does,
+            // this is where it reads the server's members again.
+            AppEvent::TagsChanged { .. } => {}
             AppEvent::Error {
                 command_id,
                 message,

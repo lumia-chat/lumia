@@ -81,7 +81,8 @@ pub struct MentionQuery {
 pub enum Choice {
     Everyone,
     Member {
-        member: MemberSummary,
+        /// Boxed: a member, with its roles and its tag, is far larger than the other row.
+        member: Box<MemberSummary>,
         /// In the channel; one who is not is marked so.
         inside: bool,
     },
@@ -462,7 +463,10 @@ impl State {
             .chain(
                 people
                     .into_iter()
-                    .map(|(inside, _, member)| Choice::Member { member, inside }),
+                    .map(|(inside, _, member)| Choice::Member {
+                        member: Box::new(member),
+                        inside,
+                    }),
             )
             .take(LIST_ROWS)
             .collect()

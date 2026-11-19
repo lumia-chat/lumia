@@ -200,6 +200,7 @@ pub fn snapshot() -> SnapshotSummary {
                 server_dms_off: false,
                 can_mention_everyone: false,
                 can_manage_messages: false,
+                ..Default::default()
             },
             ServerSummary {
                 server_id: "garden".into(),
@@ -216,6 +217,7 @@ pub fn snapshot() -> SnapshotSummary {
                 server_dms_off: false,
                 can_mention_everyone: false,
                 can_manage_messages: false,
+                ..Default::default()
             },
         ],
         channels: vec![
@@ -241,6 +243,7 @@ pub fn member(id: &str, handle: &str, name: &str) -> MemberSummary {
         avatar_url: String::new(),
         channel_adds_by_invitation: false,
         server_dms_off: false,
+        ..Default::default()
     }
 }
 

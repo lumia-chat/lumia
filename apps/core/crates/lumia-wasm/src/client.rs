@@ -338,6 +338,204 @@ impl Client {
         )
     }
 
+    /// The permissions a role's editor offers, under their headings
+    /// (`[{title, permissions: [{name, label, detail}]}]`): the same on every
+    /// shell (architecture 7.5). Which of them this account may switch on in
+    /// a server is that server's `grantable`.
+    ///
+    /// # Errors
+    /// Never, in practice: the list is the core's own.
+    #[wasm_bindgen(js_name = rolePermissions)]
+    pub fn role_permissions(&self) -> Result<JsValue, JsError> {
+        to_js(&App::role_permissions())
+    }
+
+    /// A new role in a server, placed last above `Everyone` (architecture
+    /// 7.5): `color` one of the nine tones or empty, `hide_tag` for one that
+    /// is never a member's tag, `permissions` the offered ones switched on,
+    /// by their wire names. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_ROLES` or for a permission this
+    /// account lacks; `INVALID_ARGUMENT` with `details.field` `name` or
+    /// `color`; `ALREADY_EXISTS` for a name another role has.
+    #[wasm_bindgen(js_name = createRole)]
+    pub async fn create_role(
+        &self,
+        server_id: String,
+        name: String,
+        color: String,
+        hide_tag: bool,
+        permissions: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .create_role(&server_id, &name, &color, hide_tag, &permissions)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// A role's name, colour, tag switch and permissions, whole; a
+    /// permission no editor offers is kept as the role has it, and of
+    /// `Everyone` only the permissions change. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// As `createRole`; `PERMISSION_DENIED` for a role this account may not
+    /// manage.
+    #[wasm_bindgen(js_name = updateRole)]
+    pub async fn update_role(
+        &self,
+        server_id: String,
+        role_id: String,
+        name: String,
+        color: String,
+        hide_tag: bool,
+        permissions: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .update_role(&server_id, &role_id, &name, &color, hide_tag, &permissions)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// Deletes a role, from whoever held it too. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage, and for
+    /// `Everyone`.
+    #[wasm_bindgen(js_name = deleteRole)]
+    pub async fn delete_role(
+        &self,
+        server_id: String,
+        role_id: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .delete_role(&server_id, &role_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// A server's roles in the order of `role_ids`: every role but
+    /// `Everyone` once, highest first. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` `role_ids` for an order that
+    /// is not the server's roles; `PERMISSION_DENIED`.
+    #[wasm_bindgen(js_name = reorderRoles)]
+    pub async fn reorder_roles(
+        &self,
+        server_id: String,
+        role_ids: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .reorder_roles(&server_id, &role_ids)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// The roles a member is to hold, the whole set. The member as the
+    /// server now shows them.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role this account may not manage;
+    /// `NOT_FOUND` for someone who is not a member.
+    #[wasm_bindgen(js_name = setMemberRoles)]
+    pub async fn set_member_roles(
+        &self,
+        server_id: String,
+        account_id: String,
+        role_ids: Vec<String>,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_member_roles(&server_id, &account_id, &role_ids)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// A member's title in a server, up to 32 characters; empty clears it.
+    /// This account's own is its own to set. The member as the server now
+    /// shows them.
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` `title`; `PERMISSION_DENIED`.
+    #[wasm_bindgen(js_name = setMemberTitle)]
+    pub async fn set_member_title(
+        &self,
+        server_id: String,
+        account_id: String,
+        title: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_member_title(&server_id, &account_id, &title)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// Removes a member from a server (`MANAGE_MEMBERS`, and a member below
+    /// this account).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED`; `NOT_FOUND` for someone who is not a member.
+    #[wasm_bindgen(js_name = removeMember)]
+    pub async fn remove_member(
+        &self,
+        server_id: String,
+        account_id: String,
+    ) -> Result<(), JsError> {
+        self.app
+            .remove_member(&server_id, &account_id)
+            .await
+            .map_err(js_api)
+    }
+
+    /// Whether the tag beside a member's name in a server is their title;
+    /// false, their role. The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`.
+    #[wasm_bindgen(js_name = setTagTitles)]
+    pub async fn set_tag_titles(
+        &self,
+        server_id: String,
+        titles: bool,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .set_tag_titles(&server_id, titles)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// The members last listed for a server, from the local store, each
+    /// with its tag as the server now shows it; empty when it was never
+    /// listed. What a page reads again when `tagsChanged` says to.
+    ///
+    /// # Errors
+    /// On a store failure.
+    #[wasm_bindgen(js_name = keptMembers)]
+    pub fn kept_members(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.kept_members(&server_id).map_err(js)?)
+    }
+
     /// How long a server keeps its attachments in days (0 for ever), and
     /// whether a full one lets its oldest go; one left out stays
     /// (specs/media.md 4.5). The snapshot as it then is.

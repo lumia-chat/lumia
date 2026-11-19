@@ -486,6 +486,334 @@ async fn owner_and_member(base: &str) -> (Device, Device, String, String) {
     (owner, member, server.server_id, member_id)
 }
 
+fn tags_changed(server: &str) -> impl Fn(&AppEvent) -> Option<()> + '_ {
+    move |event| match event {
+        AppEvent::TagsChanged { server_id } => (server_id == server).then_some(()),
+        _ => None,
+    }
+}
+
+/// Whether `check` comes true within `within`: what is kept follows the account log, which
+/// a job on the instance writes a moment after the change.
+async fn settles(within: Duration, check: impl Fn() -> bool) -> bool {
+    let until = Instant::now() + within;
+    loop {
+        if check() {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A member's tag in a device's kept list of a server, as `(label, colour)`.
+fn kept_tag(device: &Device, server_id: &str, account_id: &str) -> Option<(String, String)> {
+    device
+        .app
+        .kept_members(server_id)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.account_id == account_id)
+        .and_then(|m| m.tag)
+        .map(|t| (t.label, t.color))
+}
+
+fn denied<T: std::fmt::Debug>(result: &Result<T, ClientError>, wanted: &str) -> bool {
+    matches!(result, Err(ClientError::Api { code, .. }) if code == wanted)
+}
+
+/// Roles and titles from two devices (architecture 7.5): the owner makes roles and puts
+/// them in order, gives one to a member, and the member's device hears of it and tags them;
+/// a title is the member's own; the server chooses which of the two a tag shows; a member
+/// with `MANAGE_ROLES` manages what is below it and nothing else; a kick.
+#[tokio::test(flavor = "multi_thread")]
+async fn roles_and_titles_reach_every_member() {
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, member_id) = owner_and_member(&base).await;
+    let server_of = |snapshot: lumia_client::app::SnapshotSummary| {
+        snapshot
+            .servers
+            .into_iter()
+            .find(|s| s.server_id == server_id)
+            .expect("the account is in the server")
+    };
+    let role_names = |server: &lumia_client::app::ServerSummary| -> Vec<String> {
+        server.roles.iter().map(|r| r.name.clone()).collect()
+    };
+    let role_id = |server: &lumia_client::app::ServerSummary, name: &str| -> String {
+        server
+            .roles
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.role_id.clone())
+            .expect("the server has the role")
+    };
+    let wire = |names: &[&str]| -> Vec<String> { names.iter().map(|n| (*n).to_string()).collect() };
+    let within = Duration::from_secs(15);
+
+    // A new server has Everyone and nothing else; a role made lands last above it.
+    let mine = server_of(owner.app.snapshot().await.unwrap());
+    assert_eq!(role_names(&mine), ["Everyone"]);
+    assert!(mine.is_owner && mine.can_manage_roles && mine.can_manage_members);
+    assert_eq!(mine.grantable.len(), 14);
+    owner
+        .app
+        .create_role(
+            &server_id,
+            "  Mods ",
+            "sky",
+            false,
+            &wire(&["MANAGE_ROLES", "MANAGE_MEMBERS", "SEND_MESSAGES"]),
+        )
+        .await
+        .unwrap();
+    let mine = server_of(
+        owner
+            .app
+            .create_role(&server_id, "Helper", "mint", false, &[])
+            .await
+            .unwrap(),
+    );
+    assert_eq!(role_names(&mine), ["Mods", "Helper", "Everyone"]);
+    assert!(mine.roles.iter().all(|r| r.can_manage));
+    let mut granted = mine.roles[0].permissions.clone();
+    granted.sort();
+    assert_eq!(granted, ["MANAGE_MEMBERS", "MANAGE_ROLES", "SEND_MESSAGES"]);
+    let (mods, helper) = (role_id(&mine, "Mods"), role_id(&mine, "Helper"));
+
+    // A name another role has, whatever its capitals; a colour that is no tone.
+    let taken = owner
+        .app
+        .create_role(&server_id, "mods", "", false, &[])
+        .await;
+    assert!(denied(&taken, "ALREADY_EXISTS"), "{taken:?}");
+    let colour = owner
+        .app
+        .create_role(&server_id, "Loud", "#ff0000", false, &[])
+        .await;
+    assert!(denied(&colour, "INVALID_ARGUMENT"), "{colour:?}");
+
+    // The owner puts them in another order and back.
+    let swapped = server_of(
+        owner
+            .app
+            .reorder_roles(&server_id, &[helper.clone(), mods.clone()])
+            .await
+            .unwrap(),
+    );
+    assert_eq!(role_names(&swapped), ["Helper", "Mods", "Everyone"]);
+    owner
+        .app
+        .reorder_roles(&server_id, &[mods.clone(), helper.clone()])
+        .await
+        .unwrap();
+
+    // The member lists the server's people: nobody has a tag yet. The search finds by name.
+    let listed = member.app.members(&server_id, "").await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|m| m.tag.is_none()));
+    assert_eq!(listed.iter().filter(|m| m.owner).count(), 1);
+    let found = owner.app.members(&server_id, "MEMBER").await.unwrap();
+    assert_eq!(
+        found.len(),
+        1,
+        "the query keeps those whose handle begins with it"
+    );
+    assert_eq!(found[0].account_id, member_id);
+    assert!(found[0].can_manage, "the owner manages a member");
+
+    // The owner's device listens too, with the server's people listed.
+    let owner_from = owner.seen();
+    owner.start(&[]).unwrap();
+    owner
+        .wait_for(owner_from, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the owner is welcomed");
+    owner.app.members(&server_id, "").await.unwrap();
+
+    // The owner gives the member a role: both devices hear and tag them.
+    let from = member.seen();
+    let given = owner
+        .app
+        .set_member_roles(&server_id, &member_id, std::slice::from_ref(&helper))
+        .await
+        .unwrap();
+    assert_eq!(given.role_ids, std::slice::from_ref(&helper));
+    member
+        .wait_for(from, within, tags_changed(&server_id))
+        .await
+        .expect("the member's device hears that tags changed");
+    let helper_tag = Some(("Helper".to_string(), "mint".to_string()));
+    for device in [&member, &owner] {
+        assert!(
+            settles(within, || kept_tag(device, &server_id, &member_id)
+                == helper_tag)
+            .await,
+            "{:?}",
+            kept_tag(device, &server_id, &member_id)
+        );
+    }
+    let theirs = server_of(member.app.snapshot().await.unwrap());
+    assert_eq!(theirs.role_ids, std::slice::from_ref(&helper));
+    assert!(!theirs.can_manage_roles && theirs.roles.iter().all(|r| !r.can_manage));
+
+    // A title is the member's own; someone else's is not theirs to set.
+    let titled = member
+        .app
+        .set_member_title(&server_id, &member_id, "  Staff Engineer ")
+        .await
+        .unwrap();
+    assert_eq!(titled.title, "Staff Engineer");
+    let owner_id = owner.app.snapshot().await.unwrap().account_id;
+    let not_theirs = member
+        .app
+        .set_member_title(&server_id, &owner_id, "Nope")
+        .await;
+    assert!(denied(&not_theirs, "PERMISSION_DENIED"), "{not_theirs:?}");
+    let long = member
+        .app
+        .set_member_title(&server_id, &member_id, &"a".repeat(33))
+        .await;
+    assert!(denied(&long, "INVALID_ARGUMENT"), "{long:?}");
+
+    // The server shows titles: on both devices the tag is the title, in no colour. The
+    // owner's device has the member's title from its account log alone.
+    let showing = server_of(owner.app.set_tag_titles(&server_id, true).await.unwrap());
+    assert!(showing.tag_titles);
+    let title_tag = Some(("Staff Engineer".to_string(), String::new()));
+    for device in [&member, &owner] {
+        assert!(
+            settles(within, || kept_tag(device, &server_id, &member_id)
+                == title_tag)
+            .await,
+            "{:?}",
+            kept_tag(device, &server_id, &member_id)
+        );
+    }
+    assert!(server_of(member.app.snapshot().await.unwrap()).tag_titles);
+    owner.app.set_tag_titles(&server_id, false).await.unwrap();
+
+    // A moderator manages what is below it and nothing else.
+    owner
+        .app
+        .set_member_roles(&server_id, &member_id, std::slice::from_ref(&mods))
+        .await
+        .unwrap();
+    let theirs = server_of(member.app.snapshot().await.unwrap());
+    assert!(theirs.can_manage_roles && theirs.can_manage_members && !theirs.is_owner);
+    let manages: Vec<bool> = theirs.roles.iter().map(|r| r.can_manage).collect();
+    assert_eq!(manages, [false, true, true]);
+    // What it may grant is what it holds: its role's, and Everyone's.
+    assert_eq!(
+        theirs.grantable,
+        [
+            "MANAGE_ROLES",
+            "MANAGE_MEMBERS",
+            "VIEW_CHANNEL",
+            "READ_HISTORY",
+            "SEND_MESSAGES",
+            "ATTACH_FILES",
+            "ADD_REACTIONS",
+            "START_SERVER_DMS"
+        ]
+    );
+    let theirs = server_of(
+        member
+            .app
+            .create_role(&server_id, "Made", "", true, &wire(&["SEND_MESSAGES"]))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(role_names(&theirs), ["Mods", "Helper", "Made", "Everyone"]);
+    let made = role_id(&theirs, "Made");
+    let lifted = member
+        .app
+        .reorder_roles(&server_id, &[made.clone(), mods.clone(), helper.clone()])
+        .await;
+    assert!(denied(&lifted, "PERMISSION_DENIED"), "{lifted:?}");
+    let below = server_of(
+        member
+            .app
+            .reorder_roles(&server_id, &[mods.clone(), made.clone(), helper.clone()])
+            .await
+            .unwrap(),
+    );
+    assert_eq!(role_names(&below), ["Mods", "Made", "Helper", "Everyone"]);
+    let more = member
+        .app
+        .update_role(
+            &server_id,
+            &helper,
+            "Helper",
+            "mint",
+            false,
+            &wire(&["MANAGE_SERVER"]),
+        )
+        .await;
+    assert!(denied(&more, "PERMISSION_DENIED"), "{more:?}");
+    let own = member
+        .app
+        .update_role(&server_id, &mods, "Mods", "sky", false, &[])
+        .await;
+    assert!(denied(&own, "PERMISSION_DENIED"), "{own:?}");
+    let recoloured = server_of(
+        member
+            .app
+            .update_role(
+                &server_id,
+                &helper,
+                "Helpers",
+                "amber",
+                true,
+                &wire(&["SEND_MESSAGES"]),
+            )
+            .await
+            .unwrap(),
+    );
+    let helpers = recoloured
+        .roles
+        .iter()
+        .find(|r| r.role_id == helper)
+        .unwrap();
+    assert_eq!(
+        (
+            helpers.name.as_str(),
+            helpers.color.as_str(),
+            helpers.hide_tag
+        ),
+        ("Helpers", "amber", true)
+    );
+
+    // A role deleted is gone from the member's device too.
+    owner.app.delete_role(&server_id, &made).await.unwrap();
+    let kept_roles = || {
+        let kept = member.app.kept_snapshot().unwrap().map(server_of);
+        kept.map(|server| role_names(&server)).unwrap_or_default()
+    };
+    assert!(
+        settles(within, || kept_roles() == ["Mods", "Helpers", "Everyone"]).await,
+        "{:?}",
+        kept_roles()
+    );
+
+    // Nobody removes the owner; the owner removes the member.
+    let owner_out = member.app.remove_member(&server_id, &owner_id).await;
+    assert!(denied(&owner_out, "PERMISSION_DENIED"), "{owner_out:?}");
+    owner.app.members(&server_id, "").await.unwrap();
+    owner
+        .app
+        .remove_member(&server_id, &member_id)
+        .await
+        .unwrap();
+    let left = owner.app.kept_members(&server_id).unwrap();
+    assert_eq!(left.len(), 1);
+    assert!(left[0].owner);
+    let gone = member.app.snapshot().await.unwrap();
+    assert!(gone.servers.iter().all(|s| s.server_id != server_id));
+}
+
 fn names(snapshot: &lumia_client::app::SnapshotSummary, server_id: &str) -> Vec<String> {
     snapshot
         .channels

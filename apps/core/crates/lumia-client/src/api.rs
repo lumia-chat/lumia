@@ -67,6 +67,9 @@ use lumia_core::proto::{
     PutHistoryManifestRequest, PutIdentityBackupRequest, RespondDmRequestRequest,
     SendDmRequestRequest, SignedHistoryManifest,
 };
+use lumia_core::proto::{
+    ListRolesResponse, MemberTag, ReorderRolesRequest, Role, UpdateMemberRequest, UpsertRoleRequest,
+};
 use lumia_core::proto::{ReauthOidcStartRequest, ReauthOidcStartResponse, RebindIdentityRequest};
 use prost::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -1638,6 +1641,166 @@ impl Api {
             .send(
                 reqwest::Method::PATCH,
                 &format!("/api/v1/servers/{server_id}/membership"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `GET /servers/{id}/roles`: the server's roles in order, `@everyone` last.
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a server it is not in; transport failure.
+    pub async fn roles(&self, server_id: &str) -> Result<ListRolesResponse, ClientError> {
+        self.get(&format!("/api/v1/servers/{server_id}/roles"))
+            .await
+    }
+
+    /// `POST /servers/{id}/roles`: a new role, placed last above `@everyone`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_ROLES` or for a permission the
+    /// caller lacks; `INVALID_ARGUMENT` with `details.field` `name` or
+    /// `color`; `ALREADY_EXISTS` for a name another role has; transport
+    /// failure.
+    pub async fn create_role(&self, server_id: &str, role: Role) -> Result<Role, ClientError> {
+        self.post(
+            &format!("/api/v1/servers/{server_id}/roles"),
+            &UpsertRoleRequest { role: Some(role) },
+        )
+        .await
+    }
+
+    /// `PUT /servers/{id}/roles/{role_id}`: the role's name, colour, tag
+    /// switch and permissions, whole.
+    ///
+    /// # Errors
+    /// As [`Api::create_role`]; `PERMISSION_DENIED` for a role the caller
+    /// may not manage.
+    pub async fn update_role(
+        &self,
+        server_id: &str,
+        role_id: &str,
+        role: Role,
+    ) -> Result<Role, ClientError> {
+        let req = UpsertRoleRequest { role: Some(role) };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PUT,
+                &format!("/api/v1/servers/{server_id}/roles/{role_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /servers/{id}/roles/{role_id}`.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role the caller may not manage, and for
+    /// `@everyone`; transport failure.
+    pub async fn delete_role(&self, server_id: &str, role_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/servers/{server_id}/roles/{role_id}"),
+            None,
+        )
+        .await
+    }
+
+    /// `PUT /servers/{id}/role-order`: every role but `@everyone`, highest
+    /// first (16 bytes each).
+    ///
+    /// # Errors
+    /// `INVALID_ARGUMENT` with `details.field` `role_ids` for an order that
+    /// is not the server's roles, each once; `PERMISSION_DENIED` without
+    /// `MANAGE_ROLES` or for an order that moves a role at or above the
+    /// caller's highest; transport failure.
+    pub async fn reorder_roles(
+        &self,
+        server_id: &str,
+        role_ids: Vec<Vec<u8>>,
+    ) -> Result<ListRolesResponse, ClientError> {
+        let req = ReorderRolesRequest { role_ids };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PUT,
+                &format!("/api/v1/servers/{server_id}/role-order"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PATCH /servers/{id}/members/{account_id}`: a member's roles, its
+    /// title, or both; what `req` leaves out is left as it is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` for a role the caller may not manage or a member
+    /// whose title is not the caller's to set; `INVALID_ARGUMENT` with
+    /// `details.field` `roles` or `title`; transport failure.
+    pub async fn update_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+        req: &UpdateMemberRequest,
+    ) -> Result<Member, ClientError> {
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}/members/{account_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /servers/{id}/members/{account_id}`: the member out of the
+    /// server; the caller itself to leave.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_MEMBERS`, for a member not below
+    /// the caller, and for the owner; transport failure.
+    pub async fn remove_member(
+        &self,
+        server_id: &str,
+        account_id: &str,
+    ) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/servers/{server_id}/members/{account_id}"),
+            None,
+        )
+        .await
+    }
+
+    /// `PATCH /servers/{id}` with only what the tag beside a member's name
+    /// shows there: its title, or (false) its role (architecture 7.5).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_SERVER`; transport failure.
+    pub async fn set_tag_titles(
+        &self,
+        server_id: &str,
+        titles: bool,
+    ) -> Result<Server, ClientError> {
+        let tag = if titles {
+            MemberTag::Title
+        } else {
+            MemberTag::Role
+        };
+        let req = UpdateServerRequest {
+            member_tag: Some(tag as i32),
+            ..Default::default()
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}"),
                 Some(req.encode_to_vec()),
                 None,
             )

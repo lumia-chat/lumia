@@ -1535,7 +1535,7 @@ const PERMISSIONS: { heading: string; items: { id: string; name: string; caption
       { id: "administrator", name: "Administrator", caption: "Everything below, in every channel. A channel’s own permissions do not limit it." },
       { id: "manage_server", name: "Manage server", caption: "Change the server’s name, picture and settings." },
       { id: "manage_roles", name: "Manage roles", caption: "Create, change and delete roles below their own highest, and give them to members." },
-      { id: "manage_channels", name: "Manage channels", caption: "Create, change and delete channels, and add or remove people in them." },
+      { id: "manage_channels", name: "Manage channels", caption: "Create channels, and add people to them or remove them." },
       { id: "manage_members", name: "Manage members", caption: "Kick members below them and change those members’ titles." },
       { id: "create_invites", name: "Create invites", caption: "Make invite links and send invitations to join the server." },
     ],
