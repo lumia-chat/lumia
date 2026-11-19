@@ -11,7 +11,7 @@ import { Match, Show, Switch, createEffect, createMemo, createResource, createSi
 import { Button, Card, ChannelHeader, Checkbox, PictureChoices, SectionList, SegmentedTabs, TagSketch, TextField, type IconName } from "../design/components";
 import { ClientError, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import { usageWords } from "../client/media";
-import { TAG_CHOICES, TAG_NOTE, rolesCount, settingsSections, type SettingsSection } from "../client/roles";
+import { TAG_CHOICES, TAG_HEADING, TAG_NOTE, TAG_SUBTITLE, rolesCount, settingsSections, type SettingsSection } from "../client/roles";
 import { avatarSrc, client, membersKept, membersQuery, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
 import { DefaultChannelsCard } from "./channels";
@@ -332,10 +332,10 @@ function OverviewSection(props: { server: ServerSummary; snapshot: SnapshotSumma
           </Button>
         </form>
       </Card>
-      <Card title="Tag beside names" subtitle="What shows beside a member’s name in messages and in the member list.">
+      <Card title={TAG_HEADING} subtitle={TAG_SUBTITLE}>
         <div class="auth__form">
           <PictureChoices
-            label="Tag beside names"
+            label={TAG_HEADING}
             class="lu-pictiles--two"
             value={props.server.tagTitles ? "titles" : "roles"}
             onChange={(shows) => void chooseTag(shows)}

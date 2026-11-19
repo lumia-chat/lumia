@@ -208,7 +208,17 @@ export const EVERYONE_SUBTITLE = "What every member may do before any role adds 
 export const TITLE_HINT = "Up to 32 characters. A title grants nothing.";
 export const GUEST_ROLES_NOTE = "Guests aren’t given roles.";
 export const DELETE_ROLE_HINT = "Its members lose what it allowed. This can’t be undone.";
+export const TAG_HEADING = "Tag beside names";
+export const TAG_SUBTITLE = "What shows beside a member’s name in messages and in the member list.";
 export const TAG_NOTE = "A profile shows a member’s title and roles either way.";
+/** Where a role's holders would be listed, and where its picker's members would be. */
+export const NOBODY_HOLDS = "Nobody holds this role yet.";
+export const EVERYONE_HOLDS = "Everyone who can hold this role already does.";
+/** A search that found nobody, in Members and in "Add members". */
+export const NO_MEMBER_MATCHES = "No member matches that.";
+export const READING_MEMBERS = "Reading the members…";
+/** On a profile card, under Roles, for a member who holds none where they may be given some. */
+export const NO_ROLES = "No roles";
 export const TAG_CHOICES = {
   roles: { label: "Roles", caption: "Each member’s highest role that is shown as a tag, in the role’s colour." },
   titles: { label: "Titles", caption: "Each member’s title, in no colour. A member without a title has no tag." },

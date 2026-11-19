@@ -39,8 +39,12 @@ import type { MenuPoint } from "../client/menus";
 import {
   ADMINISTRATOR,
   DELETE_ROLE_HINT,
+  EVERYONE_HOLDS,
   EVERYONE_SUBTITLE,
   LABEL_MAX,
+  NOBODY_HOLDS,
+  NO_MEMBER_MATCHES,
+  READING_MEMBERS,
   ROLES_HINT,
   ROLES_HINT_MENU,
   TITLE_HINT,
@@ -474,7 +478,7 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
               {holdersError()}
             </p>
           </Show>
-          <Show when={holding().length > 0} fallback={<p class="lu-roleedit__hint">Nobody holds this role yet.</p>}>
+          <Show when={holding().length > 0} fallback={<p class="lu-roleedit__hint">{NOBODY_HOLDS}</p>}>
             <div class="lu-roleedit__holders">
               <MemberList
                 sections={[
@@ -582,7 +586,7 @@ function AddHolders(props: { server: ServerSummary; role: RoleSummary; members: 
       <Pop title="Add members" subtitle={`To ${props.role.name}.`}>
         <div class="lu-pop__form">
           <SearchField label="Find a member" value={filter()} onInput={(e) => setFilter(e.currentTarget.value)} />
-          <Show when={candidates().length > 0} fallback={<p class="auth__note">{filter().trim() ? "No member matches that." : "Everyone who can hold this role already does."}</p>}>
+          <Show when={candidates().length > 0} fallback={<p class="auth__note">{filter().trim() ? NO_MEMBER_MATCHES : EVERYONE_HOLDS}</p>}>
             <ul class="lu-picklist" aria-label="Members to add">
               <For each={candidates()}>{(m) => <PickRow name={memberName(m)} initials={initialsOf(memberName(m))} src={avatarSrc(m.avatarUrl)} tone={toneFor(m.accountId)} checked={chosen().includes(m.accountId)} onPick={() => toggle(m.accountId)} />}</For>
             </ul>
@@ -657,12 +661,12 @@ export function MembersSection(props: { server: ServerSummary; members: MemberSu
           {props.error}
         </p>
       </Show>
-      <Show when={props.members} fallback={<Show when={!props.error}><p class="auth__note" role="status">Reading the members…</p></Show>}>
+      <Show when={props.members} fallback={<Show when={!props.error}><p class="auth__note" role="status">{READING_MEMBERS}</p></Show>}>
         <Roster
           members={entries()}
           open={opened()?.accountId}
           onToggle={(m) => setOpen(open() === m.id ? undefined : m.id)}
-          empty={query().trim() ? "No member matches that." : undefined}
+          empty={query().trim() ? NO_MEMBER_MATCHES : undefined}
           editor={() => (
             // By who it is, not by the object: the list read again leaves what is being typed.
             <Show when={opened()?.accountId} keyed>
