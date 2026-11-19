@@ -182,14 +182,52 @@ export function offersAny(offers: MemberOffers): boolean {
   return offers.roles || !!offers.rolesNote || offers.title || offers.kick;
 }
 
-/** The word beside a name on a card and in Members: this account, the server's owner, or a guest. */
+/** The word beside a name on a card and in Members: the server's owner, or a guest. */
 export function memberMark(member: Pick<MemberSummary, "owner" | "guest">): "Owner" | "Guest" | undefined {
   return member.owner ? "Owner" : member.guest ? "Guest" : undefined;
+}
+
+/**
+ * The words beside the name on a profile card, in order: "You" on this
+ * account's own, then who they are to the server the card was opened in.
+ * Both are said of this account where both are so, on every shell: "You"
+ * and "Owner", or "You" and "Guest". At Home there is no member, and no
+ * second word.
+ */
+export function cardMarks(me: boolean, member: Pick<MemberSummary, "owner" | "guest"> | undefined): string[] {
+  const mark = member && memberMark(member);
+  return [...(me ? ["You"] : []), ...(mark ? [mark] : [])];
 }
 
 /** A member's tag as a message and a member row draw it: its words, on its tone or the plain chip. */
 export function tagOf(tag: TagSummary | null | undefined): { label: string; tone: RoleTone | "neutral" } | undefined {
   return tag?.label ? { label: tag.label, tone: toneOf(tag.color) ?? "neutral" } : undefined;
+}
+
+type Dressing = Pick<ServerSummary, "serverId" | "roles" | "tagTitles" | "ownerAccountId" | "isOwner" | "canManageMembers" | "roleIds">;
+
+/**
+ * The servers of `now` whose members `was` dressed otherwise. The core
+ * works out each member's tag, `owner` and `canManage` when their list is
+ * read, from the snapshot it last took: the server's roles, which of the
+ * two a tag shows, its owner, and this account's standing there. So when a
+ * snapshot changes any of those, the members the page holds are read again
+ * (`membersKept`), as the desktop shell does. A `tagsChanged` alone comes
+ * before the snapshot that says what this account may now do: given a role
+ * with Manage members, every member would stay `canManage: false`.
+ */
+export function redressed(was: { servers: Dressing[] } | undefined, now: { servers: Dressing[] }): string[] {
+  if (!was) return [];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  return now.servers
+    .filter((server) => {
+      const old = was.servers.find((s) => s.serverId === server.serverId);
+      return (
+        !!old &&
+        (!same(old.roles, server.roles) || !same(old.roleIds, server.roleIds) || old.tagTitles !== server.tagTitles || old.ownerAccountId !== server.ownerAccountId || old.isOwner !== server.isOwner || old.canManageMembers !== server.canManageMembers)
+      );
+    })
+    .map((server) => server.serverId);
 }
 
 /** Members whose name, handle or title has `query` in it, whatever its capitals; all of them for nothing typed. */
@@ -245,10 +283,17 @@ export function administratorQuestion(serverName: string, roleName: string, held
   return lines;
 }
 
-/** What is asked before a role is deleted: the lines under "Delete Moderator?". */
+/**
+ * What is asked before a role is deleted: the lines under "Delete
+ * Moderator?". How many hold it is said only when it is known: while the
+ * members are being read, or could not be, nothing is said of them, since
+ * "Nobody holds this role." would be said of one forty hold.
+ */
 export function deleteQuestion(held: number | undefined): string[] {
-  const first = !held ? "Nobody holds this role." : held === 1 ? "1 member holds this role. They lose what it allowed." : `${held.toLocaleString("en-US")} members hold this role. They lose what it allowed.`;
-  return [first, "This can’t be undone."];
+  const last = "This can’t be undone.";
+  if (held === undefined) return [last];
+  const first = held === 0 ? "Nobody holds this role." : held === 1 ? "1 member holds this role. They lose what it allowed." : `${held.toLocaleString("en-US")} members hold this role. They lose what it allowed.`;
+  return [first, last];
 }
 
 interface Refusal {
@@ -267,7 +312,7 @@ export function roleRefusal(err: unknown, serverName: string): string {
   if (r.code === "PERMISSION_DENIED") return "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give.";
   if (r.code === "ALREADY_EXISTS") return `Another role in ${serverName} has that name.`;
   if (r.code === "NOT_FOUND") return "That role is gone. Someone deleted it.";
-  if (r.code === "INVALID_ARGUMENT" && r.details?.field === "name") return "A role’s name is 1 to 32 characters, and can’t be “everyone”.";
+  if (r.code === "INVALID_ARGUMENT" && r.details?.field === "name") return "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.";
   if (r.code === "INVALID_ARGUMENT" && r.details?.field === "color") return "A role’s colour is one of the nine, or none.";
   if (r.code === "INVALID_ARGUMENT" && r.details?.field === "role_ids") return "The roles changed while you were moving one. Try again.";
   if (r.code === "FAILED_PRECONDITION") return "This server has as many roles as it can hold.";
@@ -280,6 +325,8 @@ export function memberRefusal(err: unknown): string {
   if (r.code === "PERMISSION_DENIED") return "That isn’t yours to change. They may be at or above your own highest role.";
   if (r.code === "NOT_FOUND") return "They are no longer a member.";
   if (r.code === "FAILED_PRECONDITION") return "A member can’t hold that many roles.";
-  if (r.code === "INVALID_ARGUMENT" && r.details?.field === "title") return "A title is up to 32 characters, on one line.";
+  if (r.code === "INVALID_ARGUMENT" && r.details?.field === "title") return "A title is up to 32 characters on one line, with no hidden characters.";
+  // A member's own title, changed more often than the instance takes in an hour.
+  if (r.code === "RATE_LIMITED") return "You’ve changed your title too many times this hour. Try again later.";
   return r.message ?? String(err);
 }

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { RoleSummary } from "./bridge";
+import { ClientError, type RoleSummary } from "./bridge";
 import {
   administratorQuestion,
+  cardMarks,
   deleteQuestion,
   draftOf,
   holders,
@@ -12,6 +13,7 @@ import {
   memberRefusal,
   movedBefore,
   offersAny,
+  redressed,
   roleChoices,
   roleRefusal,
   rolesCount,
@@ -136,7 +138,12 @@ describe("the editor", () => {
     expect(administratorQuestion("Acme", "Moderator", 0)).toHaveLength(1);
     expect(deleteQuestion(3)).toEqual(["3 members hold this role. They lose what it allowed.", "This can’t be undone."]);
     expect(deleteQuestion(1)[0]).toBe("1 member holds this role. They lose what it allowed.");
-    expect(deleteQuestion(0)[0]).toBe("Nobody holds this role.");
+    expect(deleteQuestion(0)).toEqual(["Nobody holds this role.", "This can’t be undone."]);
+  });
+  test("a role is not said to be nobody's while who holds it is not known", () => {
+    // The members still being read, or not read at all.
+    expect(holders(ACME[1]!, undefined)).toBeUndefined();
+    expect(deleteQuestion(undefined)).toEqual(["This can’t be undone."]);
   });
 });
 
@@ -178,6 +185,33 @@ describe("a member", () => {
     expect(memberMark({ owner: false, guest: true })).toBe("Guest");
     expect(memberMark({ owner: false, guest: false })).toBeUndefined();
   });
+  test("this account's own card says “You” and who it is to the server, both", () => {
+    expect(cardMarks(true, { owner: true, guest: false })).toEqual(["You", "Owner"]);
+    expect(cardMarks(true, { owner: false, guest: true })).toEqual(["You", "Guest"]);
+    expect(cardMarks(true, { owner: false, guest: false })).toEqual(["You"]);
+    expect(cardMarks(false, { owner: true, guest: false })).toEqual(["Owner"]);
+    expect(cardMarks(false, { owner: false, guest: false })).toEqual([]);
+    // At Home, or before the server's members are read.
+    expect(cardMarks(true, undefined)).toEqual(["You"]);
+    expect(cardMarks(false, undefined)).toEqual([]);
+  });
+  test("a snapshot that dresses a server's members otherwise names it, to read them again", () => {
+    const acme = { serverId: "acme", roles: ACME, tagTitles: false, ownerAccountId: "ryan", isOwner: false, canManageMembers: false, roleIds: ["eng"] };
+    const other = { ...acme, serverId: "other" };
+    const was = { servers: [acme, other] };
+    expect(redressed(was, { servers: [{ ...acme, roles: [...ACME], roleIds: ["eng"] }, other] })).toEqual([]);
+    // Given a role with Manage members: this account's roles there and what it may do, though no role changed.
+    expect(redressed(was, { servers: [{ ...acme, roleIds: ["eng", "mod"], canManageMembers: true }, other] })).toEqual(["acme"]);
+    expect(redressed(was, { servers: [{ ...acme, roleIds: ["eng", "mod"] }, other] })).toEqual(["acme"]);
+    expect(redressed(was, { servers: [acme, { ...other, canManageMembers: true }] })).toEqual(["other"]);
+    // A role renamed, recoloured, moved or no longer this account's to manage; the other of the two as the tag; another owner.
+    expect(redressed(was, { servers: [{ ...acme, roles: ACME.map((r) => (r.roleId === "eng" ? { ...r, name: "Engineering" } : r)) }, other] })).toEqual(["acme"]);
+    expect(redressed(was, { servers: [{ ...acme, roles: [ACME[1]!, ACME[0]!, ...ACME.slice(2)] }, other] })).toEqual(["acme"]);
+    expect(redressed(was, { servers: [{ ...acme, tagTitles: true }, { ...other, ownerAccountId: "maya", isOwner: true }] })).toEqual(["acme", "other"]);
+    // The first snapshot, and a server just joined: their members have not been read by another.
+    expect(redressed(undefined, was)).toEqual([]);
+    expect(redressed({ servers: [acme] }, was)).toEqual([]);
+  });
   test("a tag on its tone or the plain chip", () => {
     expect(tagOf({ label: "Moderator", color: "green" })).toEqual({ label: "Moderator", tone: "green" });
     expect(tagOf({ label: "Staff Engineer", color: "" })).toEqual({ label: "Staff Engineer", tone: "neutral" });
@@ -200,14 +234,20 @@ describe("a member", () => {
 describe("refusals", () => {
   test("a role's", () => {
     expect(roleRefusal({ code: "ALREADY_EXISTS" }, "Acme")).toBe("Another role in Acme has that name.");
-    expect(roleRefusal({ code: "INVALID_ARGUMENT", details: { field: "name" } }, "Acme")).toContain("1 to 32 characters");
+    expect(roleRefusal({ code: "INVALID_ARGUMENT", details: { field: "name" } }, "Acme")).toBe("A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.");
     expect(roleRefusal({ code: "INVALID_ARGUMENT", details: { field: "role_ids" } }, "Acme")).toContain("Try again");
     expect(roleRefusal({ code: "PERMISSION_DENIED" }, "Acme")).toContain("isn’t yours to change");
     expect(roleRefusal(new Error("transport: offline"), "Acme")).toBe("transport: offline");
   });
   test("a member's", () => {
     expect(memberRefusal({ code: "NOT_FOUND" })).toBe("They are no longer a member.");
-    expect(memberRefusal({ code: "INVALID_ARGUMENT", details: { field: "title" } })).toContain("32 characters");
+    expect(memberRefusal({ code: "INVALID_ARGUMENT", details: { field: "title" } })).toBe("A title is up to 32 characters on one line, with no hidden characters.");
+    expect(memberRefusal({ code: "RATE_LIMITED" })).toBe("You’ve changed your title too many times this hour. Try again later.");
     expect(memberRefusal("nope")).toBe("nope");
+  });
+  test("as the worker reports them: the code and the field read from the core's words", () => {
+    expect(memberRefusal(new ClientError("api error RATE_LIMITED: too many title changes"))).toBe("You’ve changed your title too many times this hour. Try again later.");
+    expect(memberRefusal(new ClientError("api error INVALID_ARGUMENT: title details=field=title"))).toBe("A title is up to 32 characters on one line, with no hidden characters.");
+    expect(roleRefusal(new ClientError("api error INVALID_ARGUMENT: name details=field=name"), "Acme")).toContain("no hidden characters");
   });
 });

@@ -15,7 +15,7 @@ import { avatarSrc, channelMembersQuery, client, connection, customStatusOf, mem
 import { channelRefusal, dmRefusal } from "./channels";
 import { offeredWays, personOffers, type MenuPoint, type PersonOffer, type PersonWay } from "../client/menus";
 import { useNames } from "../client/names";
-import { memberMark, memberOffers, rolesHeld, settingsSections } from "../client/roles";
+import { cardMarks, memberOffers, rolesHeld, settingsSections } from "../client/roles";
 import { initialsOf, toneFor } from "./app";
 import { messagePerson } from "./home";
 import { FolderSettingsPop, RailMenu } from "./rail";
@@ -506,7 +506,7 @@ function PersonCard(props: OverlayProps & { accountId: string; note?: string }) 
         src={photoOf(props.accountId)}
         tone={toneFor(props.accountId)}
         handle={handle()}
-        tag={me() ? "You" : member() && memberMark(member()!)}
+        tag={cardMarks(me(), member())}
         title={member()?.title || undefined}
         roles={props.server && member() ? rolesHeld(props.server.roles, member()!.roleIds) : undefined}
         edit={edits()}

@@ -286,6 +286,17 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
     setSaved(false);
     setDraft({ ...draft(), ...part });
   };
+  // A role just made is opened before the snapshot with it has been drawn, so its editor begins with no role to
+  // read and takes the role's fields when it comes: otherwise it held a new role's empty ones, and a save from it
+  // wrote those over what was just made. A new role's own editor never has one; making it opens another.
+  createEffect(
+    on(
+      () => !!props.role,
+      (has, had) => {
+        if (has && had === false) setDraft(draftOf(props.role));
+      },
+    ),
+  );
   const [groups] = createResource(offeredPermissions);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");

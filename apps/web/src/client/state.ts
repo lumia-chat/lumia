@@ -9,6 +9,7 @@ import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSumma
 import type { DraftStore } from "./drafts";
 import { type Ended, endedNotice } from "./ended";
 import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
+import { redressed } from "./roles";
 
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: Infinity, retry: false } },
@@ -530,6 +531,9 @@ export function snapshotQuery() {
       const showing = (s?: SnapshotSummary) => new Map((s?.servers ?? []).map((v) => [v.serverId, v.showDeleted]));
       const was = showing(before);
       if (before && snapshot.servers.some((v) => was.get(v.serverId) !== v.showDeleted)) void queryClient.invalidateQueries({ queryKey: ["messages"] });
+      // A server whose roles changed, or where this account now stands otherwise: its members are read again from what the
+      // core keeps, which dresses them by this snapshot. The `tagsChanged` before it read them by the one before (architecture 7.5).
+      for (const serverId of redressed(before, snapshot)) void membersKept(serverId);
       return snapshot;
     },
   })));
@@ -551,13 +555,13 @@ export function readStatesQuery() {
   })));
 }
 
-/** Reads a conversation through `seq` and takes the counts the instance answers with. */
 /** Where composers' drafts are kept: the core's store in this browser (`drafts.ts`). */
 export const draftStore: DraftStore = {
   read: (id) => client().draft(id),
   keep: (id, body, reply) => client().setDraft(id, body, reply),
 };
 
+/** Reads a conversation through `seq` and takes the counts the instance answers with. */
 export async function markRead(channelId: string, seq: number): Promise<void> {
   await client().markRead(channelId, seq);
   await queryClient.invalidateQueries({ queryKey: ["readStates"] });
@@ -735,11 +739,13 @@ export function membersQuery(serverId: () => string | undefined) {
 
 /**
  * A server's members read again from what the core keeps, where the page
- * holds them: after `tagsChanged`, and after a change of this account's
- * own making, whose answer the core has kept (architecture 7.5). A tag is
- * worked out when the list is read, so this is how a tag follows a role
- * renamed, a title set or the server showing the other of the two. A list
- * the core never kept is left to the query.
+ * holds them: after `tagsChanged`, after a snapshot that dresses them
+ * otherwise (`redressed`), and after a change of this account's own
+ * making, whose answer the core has kept (architecture 7.5). A tag, and
+ * whether a member is this account's to manage, are worked out when the
+ * list is read, so this is how they follow a role renamed, a title set,
+ * the server showing the other of the two, or a role given to this
+ * account. A list the core never kept is left to the query.
  */
 export async function membersKept(serverId: string): Promise<void> {
   if (!queryClient.getQueryData(["members", serverId])) return;

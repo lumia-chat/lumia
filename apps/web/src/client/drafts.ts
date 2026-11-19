@@ -11,6 +11,14 @@
 // nothing, which clears what was kept, and so does an emptied field. The
 // files waiting over the composer are not kept, and nothing here is sent
 // to the instance.
+//
+// The store answers later, and may not answer. Until it has, the field is
+// empty because nothing was put in it, which is no change to keep; words
+// typed meanwhile are the conversation's, kept like any others, and an
+// answer that comes after they were kept or sent is of a draft they took
+// the place of. A read that fails leaves what is kept alone. Words whose
+// send failed after their conversation left the composer go back to that
+// conversation's draft (`unsent`), never into the field on screen.
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
 import type { QuoteSummary } from "./bridge";
 
@@ -29,6 +37,16 @@ export interface DraftStore {
   keep: (conversationId: string, body: string, reply: QuoteSummary | null) => Promise<void>;
 }
 
+/**
+ * What is said on screen when a send failed in a conversation that is no
+ * longer the one there: why, and where the message waits (`where` is
+ * "#general", or "your conversation with Ada").
+ */
+export function keptElsewhere(why: string, where: string): string {
+  const said = why.trim();
+  return `${/[.!?…]$/.test(said) ? said : said + "."} Your message is kept in ${where}.`;
+}
+
 const NOTHING: Held = { body: "", reply: null };
 /** What the store makes of a composer's words: blank ones keep nothing, the reply neither. */
 const kept = (held: Held): string => (held.body.trim() ? JSON.stringify([held.body, held.reply]) : "");
@@ -44,6 +62,8 @@ export class DraftKeeper {
   private timer: unknown;
   /** What the store holds of each conversation, as last read or kept. */
   private stored = new Map<string, string>();
+  /** The read of each conversation's kept draft that has not answered. */
+  private reading = new Map<string, object>();
 
   constructor(
     private store: DraftStore,
@@ -51,15 +71,25 @@ export class DraftKeeper {
     private ms = KEEP_AFTER_MS,
   ) {}
 
-  /** A conversation's kept draft; none when nothing is kept or the store cannot be read. */
+  /**
+   * A conversation's kept draft, to put in its empty field. None when
+   * nothing is kept, when the store cannot be read, and when words were
+   * kept or sent there while it was being read: those took its place.
+   */
   async read(id: string): Promise<Held | null> {
+    const asked = {};
+    this.reading.set(id, asked);
+    let held: Held | null = null;
     try {
-      const held = await this.store.read(id);
-      this.stored.set(id, held ? kept(held) : "");
-      return held;
+      held = await this.store.read(id);
     } catch {
-      return null;
+      // What it holds is not known and none of it is in the field. An empty field is then no change to keep, as
+      // over a store that holds nothing, so a kept draft stays for the next read; words typed are kept over it.
     }
+    if (this.reading.get(id) !== asked) return null;
+    this.reading.delete(id);
+    this.stored.set(id, held ? kept(held) : "");
+    return held;
   }
 
   /** The composer of conversation `id` holds `held` now. */
@@ -67,7 +97,9 @@ export class DraftKeeper {
     // Another conversation's words still waiting are kept before these take their place.
     if (this.waiting && this.waiting.id !== id) this.flush();
     this.stop();
-    if (this.stored.get(id) === kept(held)) {
+    const next = kept(held);
+    // A field with no words in it while its kept draft is still being read was not emptied: the draft has yet to be put in it.
+    if (this.stored.get(id) === next || (!next && this.reading.has(id))) {
       this.waiting = null;
       return;
     }
@@ -89,7 +121,19 @@ export class DraftKeeper {
       this.stop();
       this.waiting = null;
     }
+    // A kept draft still being read was never in the field: what was sent took its place.
+    this.reading.delete(id);
     this.write(id, NOTHING);
+  }
+
+  /**
+   * Conversation `id`'s words did not go after all, and it is no longer
+   * under the composer: they are its draft again, unless words typed
+   * there since are.
+   */
+  unsent(id: string, held: Held) {
+    if (this.stored.get(id)) return;
+    this.write(id, held);
   }
 
   private stop() {
@@ -100,6 +144,8 @@ export class DraftKeeper {
   private write(id: string, held: Held) {
     const next = kept(held);
     if (this.stored.get(id) === next) return;
+    // A read still out answers with what these words take the place of.
+    this.reading.delete(id);
     this.stored.set(id, next);
     // A store that refuses costs the draft and nothing else.
     void this.store.keep(id, held.body, held.reply).catch(() => this.stored.delete(id));
@@ -110,31 +156,39 @@ export class DraftKeeper {
  * Gives a composer its conversation's draft and keeps what is typed in it.
  * `held` is what the composer holds; `restore` puts a kept draft in it and
  * `empty` clears it for another conversation. Answers `sent`, to call when
- * the conversation's words go.
+ * the conversation's words go, and `unsent`, to call when they did not go
+ * after all: true when it kept them as the draft of their conversation,
+ * which has left the composer, and false when that conversation is still
+ * under it, where the field takes them back.
  */
-export function keepDrafts(opts: { store: DraftStore; conversation: Accessor<string | undefined>; held: Accessor<Held>; restore: (held: Held) => void; empty: () => void }): { sent: (conversationId: string) => void } {
+export function keepDrafts(opts: { store: DraftStore; conversation: Accessor<string | undefined>; held: Accessor<Held>; restore: (held: Held) => void; empty: () => void }): {
+  sent: (conversationId: string) => void;
+  unsent: (conversationId: string, held: Held) => boolean;
+} {
   const keeper = new DraftKeeper(opts.store);
-  // The conversation whose kept draft has been read: until then nothing typed is kept over it.
-  const [read, setRead] = createSignal<string>();
+  // The conversation the field's words belong to: the one under the composer, from when the field was emptied for
+  // it. Until then the field still holds the words of the one that left, which are not this one's to keep.
+  const [under, setUnder] = createSignal<string>();
+  let gone = false;
   createEffect(
     on(opts.conversation, (id) => {
       // The one that left keeps what it held, and the field is the next one's.
       keeper.flush();
-      setRead(undefined);
       opts.empty();
+      setUnder(id);
       if (!id) return;
       void keeper.read(id).then((held) => {
-        if (opts.conversation() !== id) return;
-        // Words typed before the answer came stay: they are this conversation's now.
-        if (held && !opts.held().body) opts.restore(held);
-        setRead(id);
+        if (!held || gone || opts.conversation() !== id) return;
+        // Words typed before the answer came stay: they are this conversation's now. So does a reply chosen by then.
+        const now = opts.held();
+        if (!now.body.trim()) opts.restore(now.reply ? { body: held.body, reply: now.reply } : held);
       });
     }),
   );
   createEffect(() => {
     const id = opts.conversation();
     const held = opts.held();
-    if (id && read() === id) keeper.changed(id, held);
+    if (id && under() === id) keeper.changed(id, held);
   });
   // A hidden page may never come back: a phone's browser, a closed tab.
   const hidden = () => {
@@ -147,6 +201,14 @@ export function keepDrafts(opts: { store: DraftStore; conversation: Accessor<str
     document.removeEventListener("visibilitychange", hidden);
     window.removeEventListener("pagehide", going);
     keeper.flush();
+    gone = true;
   });
-  return { sent: (id) => keeper.sent(id) };
+  return {
+    sent: (id) => keeper.sent(id),
+    unsent: (id, held) => {
+      if (!gone && under() === id && opts.conversation() === id) return false;
+      keeper.unsent(id, held);
+      return true;
+    },
+  };
 }

@@ -33,7 +33,7 @@ import { preferences } from "../client/preferences";
 import { PreferencesPage } from "./preferences";
 import { addPasskey, passkeysAvailable } from "../client/passkeys";
 import { initialsOf, toneFor } from "./app";
-import { keepDrafts } from "../client/drafts";
+import { keepDrafts, keptElsewhere } from "../client/drafts";
 import type { MenuPoint } from "../client/menus";
 import { Compose, Timeline, createMarkRead, keptItems, quoteOf, thrownRefusal, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
 import { attachFiles, filesForSend, filesSent, hasFiles, stripOf } from "./media";
@@ -426,6 +426,7 @@ function Conversation(props: HomeProps) {
     const body = draft().trim();
     if (!id || (!body && !hasFiles(id))) return;
     const reply = replying();
+    const where = title();
     setDraft("");
     setError("");
     setReplying(null);
@@ -439,10 +440,17 @@ function Conversation(props: HomeProps) {
       await client().dmSendWithMedia(id, body, reply ? quoteOf(reply) : null, files.ids, []);
       filesSent(files.keys);
     } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      // A send can wait on an upload while another conversation comes under the composer: the words are then the
+      // draft of the one they were written in, and the one on screen is told where they are, not handed them.
+      if (drafts.unsent(id, { body, reply: reply ? quoteOf(reply) : null })) {
+        setError(keptElsewhere(why, `your conversation with ${where}`));
+        return;
+      }
       // The text comes back to the composer unless something new was typed meanwhile.
       setDraft((d) => d || body);
       if (reply) setReplying((r) => r ?? reply);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(why);
     }
   };
   const react = (item: TimelineItem, emoji: string, remove: boolean) => {

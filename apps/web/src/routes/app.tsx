@@ -46,7 +46,7 @@ import { avatarSrc, channelMembersQuery, checkPush, client, commandError, connec
 import { useNames } from "../client/names";
 import { tagOf } from "../client/roles";
 import { preferences, setAsideHidden } from "../client/preferences";
-import { keepDrafts } from "../client/drafts";
+import { keepDrafts, keptElsewhere } from "../client/drafts";
 import type { MenuPoint } from "../client/menus";
 import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home";
 import { Overlay, myStatusDot, type Over } from "./menus";
@@ -440,10 +440,17 @@ function Frame() {
         if (outside.length) setNote({ kind: "outside", channelId: id, channel: ch.name, ids: outside });
       }
     } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      // A send can wait on an upload while another conversation comes under the composer: the words are then the
+      // draft of the one they were written in, and the one on screen is told where they are, not handed them.
+      if (drafts.unsent(id, { body, reply: reply ? quoteOf(reply) : null })) {
+        setError(keptElsewhere(why, ch.kind === "TEXT" ? "#" + ch.name : `your conversation with ${nameOf(partnerOf(ch))}`));
+        return;
+      }
       // The text comes back to the composer unless something new was typed meanwhile.
       setDraft((d) => d || body);
       if (reply) setReplying((r) => r ?? reply);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(why);
     }
   };
   /** Adds those a send mentioned to the channel; those who take adds as invitations are invited. */

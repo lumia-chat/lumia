@@ -16,6 +16,7 @@ import type { BodyBlock, MessageRoom } from "../client/bridge";
 import { fitSize, mediaGrid } from "../client/media";
 import { VIEW_FIT, held, maxScale, ownSize, panBy, pressed as pressedAt, viewFrame, wheelFactor, zoomAt, zoomStep, type View } from "../client/viewer";
 import { menuKey, onRects, placedAt, type MenuPoint } from "../client/menus";
+import { LABEL_MAX, TITLE_HINT, membersCount } from "../client/roles";
 
 export type Tone = "peach" | "blue" | "purple" | "mint" | "amber" | "sky" | "stone" | "green" | "indigo";
 export type Status = "online" | "away" | "dnd";
@@ -2394,7 +2395,9 @@ export function Viewer(props: ViewerProps) {
           if (e.pointerType === "touch") fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
           // A second finger makes it a pinch, which ends in no press.
           drag = { x: e.clientX, y: e.clientY, moved: fingers.size > 1 ? Infinity : 0, down: true };
-          if (view().scale > 1) e.currentTarget.setPointerCapture(e.pointerId);
+          // Held by the stage whatever the zoom, so the release reaches it wherever it happens: one over the bar or
+          // outside the window would otherwise leave the press down, and the picture following the pointer once zoomed.
+          e.currentTarget.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
           if (fingers.size > 1 && fingers.has(e.pointerId)) {
@@ -2408,6 +2411,11 @@ export function Viewer(props: ViewerProps) {
             return;
           }
           if (!drag?.down) return;
+          // A mouse that moves with no button held was let go where the stage did not hear of it.
+          if (e.pointerType === "mouse" && !(e.buttons & 1)) {
+            drag.down = false;
+            return;
+          }
           if (fingers.has(e.pointerId)) fingers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
           const dx = e.clientX - drag.x;
           const dy = e.clientY - drag.y;
@@ -4026,8 +4034,8 @@ export interface ProfileCardProps {
   src?: string;
   tone?: Tone;
   handle?: string;
-  /** A word beside the name: "You", "New", and in a server "Owner" or "Guest". */
-  tag?: string;
+  /** The words beside the name, a tag each: "You", "New", and in a server "Owner" or "Guest". The viewer's own card in a server says both: "You" and "Owner". */
+  tag?: string | string[];
   /** Their title in the server the card was opened in, under the name (architecture 7.5). */
   title?: string;
   /** Every role they hold there, highest first, each in its tone; one with no colour is on the plain chip. */
@@ -4070,9 +4078,7 @@ export function ProfileCard(props: ProfileCardProps) {
             <h2 id={hid} class="lu-pcard__name">
               {props.name}
             </h2>
-            <Show when={props.tag}>
-              <Tag tone="accent">{props.tag}</Tag>
-            </Show>
+            <For each={[props.tag ?? []].flat()}>{(word) => <Tag tone="accent">{word}</Tag>}</For>
           </div>
           <Show when={props.title || props.edit?.title}>
             <p class="lu-pcard__title">
@@ -4674,10 +4680,6 @@ function Grip() {
   );
 }
 
-function membersWords(n: number): string {
-  return n === 1 ? "1 member" : `${n.toLocaleString("en-US")} members`;
-}
-
 export interface RoleEntry {
   id: string;
   name: string;
@@ -4729,7 +4731,7 @@ export function RoleList(props: RoleListProps) {
         <span class="lu-role__name">{r.name}</span>
         <span class="lu-role__meta">
           <Show when={r.members !== undefined}>
-            <span>{membersWords(r.members ?? 0)}</span>
+            <span>{membersCount(r.members ?? 0)}</span>
           </Show>
           <Show when={r.untagged}>
             <span class="lu-role__untagged">
@@ -4966,8 +4968,8 @@ export function MemberEdit(props: MemberEditProps) {
         </Show>
         <Show when={props.title !== undefined}>
           <div class="lu-memberedit__part">
-            <TextField label="Title" value={props.title} maxLength={32} placeholder="No title" autocomplete="off" onInput={(e) => props.onTitle?.(e.currentTarget.value)} />
-            <p class="lu-memberedit__hint">Up to 32 characters. A title grants nothing.</p>
+            <TextField label="Title" value={props.title} maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" onInput={(e) => props.onTitle?.(e.currentTarget.value)} />
+            <p class="lu-memberedit__hint">{TITLE_HINT}</p>
           </div>
         </Show>
       </div>

@@ -112,7 +112,7 @@ import {
   type TagTone,
 } from "../design/components";
 import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
-import { ROLES_HINT } from "../client/roles";
+import { LABEL_MAX, ROLES_HINT, TITLE_HINT, roleNameHint } from "../client/roles";
 import { endedNotice } from "../client/ended";
 import { LinkPromptCard } from "./link";
 import { MessagesPreview, PreferencesView } from "./preferences";
@@ -1625,8 +1625,8 @@ function RoleEditor(props: { role?: RoleEntry; on: string[]; withheld?: string[]
       <Show when={has("identity") && !everyone()}>
         <div class="lu-roleedit__part">
           <div class="lu-roleedit__field">
-            <TextField label="Name" value={name()} maxLength={32} placeholder="Moderator" autocomplete="off" onInput={(e) => setName(e.currentTarget.value)} />
-            <p class="lu-roleedit__hint">1 to 32 characters. No other role in Acme can have the same name.</p>
+            <TextField label="Name" value={name()} maxLength={LABEL_MAX} placeholder="Moderator" autocomplete="off" onInput={(e) => setName(e.currentTarget.value)} />
+            <p class="lu-roleedit__hint">{roleNameHint("Acme")}</p>
           </div>
           <div class="lu-roleedit__field">
             <span class="lu-roleedit__legend">Colour</span>
@@ -1946,8 +1946,8 @@ function ProfileCardBoard() {
             </Pop>
             <Pop title="Title" subtitle="Devon Park in Acme">
               <form class="lu-pop__form" onSubmit={(e) => e.preventDefault()}>
-                <TextField label="Title" value="Staff Engineer" maxLength={32} placeholder="No title" autocomplete="off" />
-                <p class="lu-pop__note">Up to 32 characters. A title grants nothing.</p>
+                <TextField label="Title" value="Staff Engineer" maxLength={LABEL_MAX} placeholder="No title" autocomplete="off" />
+                <p class="lu-pop__note">{TITLE_HINT}</p>
                 <div class="lu-pop__actions">
                   <Button size="md">Cancel</Button>
                   <Button variant="primary" size="md" type="submit">

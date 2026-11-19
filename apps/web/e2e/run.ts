@@ -1254,6 +1254,11 @@ async function rolesStep(which: string, stamp: number) {
   lumia(memberDir, "instance", "add", instance);
   lumia(memberDir, "account", "create", "--handle", member, "--password", password, "--invite", code);
   lumia(memberDir, "send", general, "Reporting for duty.");
+  // A third, who holds no role: someone for the member to manage once a role says they may.
+  const handDir = resolve(work, `cli-roles-hand-${which}`);
+  const hand = `hand${which}${stamp}`;
+  lumia(handDir, "instance", "add", instance);
+  lumia(handDir, "account", "create", "--handle", hand, "--password", password, "--invite", code);
   const signIn = async (page: Page, handle: string) => {
     await trustCard(page);
     await page.getByLabel("Email or handle").fill(handle);
@@ -1316,13 +1321,16 @@ async function rolesStep(which: string, stamp: number) {
     // Made, it is the role being edited: who holds it can be added.
     await page.getByRole("heading", { name: /Members with this role/ }).waitFor();
     await page.getByText("Nobody holds this role yet.").waitFor();
+    // And its editor holds what was just saved, not a new role's empty fields.
+    if ((await page.getByLabel("Name").inputValue()) !== "Crew") throw new Error(`the editor of the role just made has the name ${JSON.stringify(await page.getByLabel("Name").inputValue())}`);
+    if ((await page.getByRole("radio", { name: /^sky$/i }).getAttribute("aria-checked")) !== "true") throw new Error("the editor of the role just made has lost its colour");
     await page.getByRole("button", { name: "Add members" }).click();
     await page.getByRole("checkbox", { name: new RegExp(member) }).click();
     await page.getByRole("button", { name: "Add", exact: true }).click();
     await page.locator(".lu-roleedit__holders").getByText(new RegExp(member)).first().waitFor();
     await page.getByRole("button", { name: "Back to roles" }).click();
     await roleRow("Crew").getByText("1 member", { exact: true }).waitFor();
-    await roleRow("Everyone").getByText("2 members", { exact: true }).waitFor();
+    await roleRow("Everyone").getByText("3 members", { exact: true }).waitFor();
 
     phase("the tag");
     if (theirs) await tagIn(theirs.page).filter({ hasText: "Crew" }).waitFor({ timeout: 20_000 });
@@ -1330,6 +1338,14 @@ async function rolesStep(which: string, stamp: number) {
     await tagIn(page).filter({ hasText: "Crew" }).waitFor();
     if (!(await tagIn(page).getAttribute("class"))?.includes("lu-tone-sky")) throw new Error("the tag is not on its role's tone");
     await page.locator(".lu-shell__aside .lu-member", { hasText: member }).locator(".lu-tag", { hasText: "Crew" }).waitFor();
+    // The owner's own card says both: "You", and "Owner".
+    await page.locator(".lu-shell__aside .lu-member", { hasText: owner }).click();
+    const own = page.locator(".lu-pcard");
+    await own.locator(".lu-pcard__named .lu-tag", { hasText: "Owner" }).waitFor();
+    const marks = await own.locator(".lu-pcard__named .lu-tag").allTextContents();
+    if (marks.join() !== "You,Owner") throw new Error(`the owner's own card says ${JSON.stringify(marks)} beside the name, not "You" and "Owner"`);
+    await page.keyboard.press("Escape");
+    await own.waitFor({ state: "detached" });
     // A member who manages nothing is offered no settings.
     if (theirs) {
       await theirs.page.getByRole("button", { name: /server menu/ }).click();
@@ -1390,6 +1406,10 @@ async function rolesStep(which: string, stamp: number) {
     await page.getByLabel("Name").fill("crew");
     await save.click();
     await page.getByText(`Another role in Roles ${stamp} has that name.`).waitFor();
+    // A name with a character nobody can see in it (a zero-width space) is refused in the sheet's words.
+    await page.getByLabel("Name").fill("Help​ers");
+    await save.click();
+    await page.getByText("A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.").waitFor();
     await page.getByRole("button", { name: "Back to roles" }).click();
 
     phase("a title");
@@ -1397,10 +1417,38 @@ async function rolesStep(which: string, stamp: number) {
     const row = page.locator(".lu-roster__item", { hasText: member });
     await row.locator(".lu-roster__row").click();
     if ((await row.getByRole("checkbox", { name: "Crew" }).getAttribute("aria-checked")) !== "true") throw new Error("the member's role is not ticked");
+    // A title with a hidden character in it is refused, said under the row, and what was typed stays to be put right.
+    await row.getByRole("textbox", { name: "Title" }).fill("Navi​gator");
+    await row.getByRole("button", { name: "Save", exact: true }).click();
+    await row.getByText("A title is up to 32 characters on one line, with no hidden characters.").waitFor();
     await row.getByRole("textbox", { name: "Title" }).fill("Navigator");
     await row.getByRole("button", { name: "Save", exact: true }).click();
     await row.getByText("· Navigator").waitFor();
     await page.locator(".lu-roster__item", { hasText: owner }).locator(".lu-tag", { hasText: "Owner" }).waitFor();
+
+    // A member's own title is changed ten times an hour at most. The owner's is changed ten times through the
+    // instance, back to none; the eleventh, from their own card, is refused in the sheet's words, in the title's pop.
+    phase("their title too often");
+    {
+      const json = { "content-type": "application/json", accept: "application/json" };
+      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: owner, password }) })).json()) as { accessToken?: string };
+      if (!pair.accessToken) throw new Error("the suite could not sign in as the owner");
+      for (const title of ["1", "2", "3", "4", "5", "6", "7", "8", "9", ""]) {
+        const set = await fetch(`${instance}/api/v1/servers/${server}/membership`, { method: "PATCH", headers: { ...json, authorization: `Bearer ${pair.accessToken}` }, body: JSON.stringify({ title }) });
+        if (!set.ok) throw new Error(`the owner's title was not set to ${JSON.stringify(title)}: ${set.status} ${await set.text()}`);
+      }
+      await toGeneral();
+      await page.locator(".lu-shell__aside .lu-member", { hasText: owner }).click();
+      await page.locator(".lu-pcard").getByRole("button", { name: "Add a title" }).click({ timeout: 20_000 });
+      await page.getByRole("textbox", { name: "Title" }).fill("Captain");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await page.getByText("You’ve changed your title too many times this hour. Try again later.").waitFor();
+      await page.getByRole("button", { name: "Cancel" }).click();
+      await page.locator(".lu-pcard").waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator(".lu-pcard").waitFor({ state: "detached" });
+      await toSettings("Overview");
+    }
 
     phase("titles as tags");
     await section("Overview").click();
@@ -1435,12 +1483,37 @@ async function rolesStep(which: string, stamp: number) {
     await tagIn(page).filter({ hasText: "Pilot" }).waitFor({ timeout: 20_000 });
     await page.screenshot({ path: `${out}/${which}-roles-titles.png` });
 
-    phase("deleted");
+    // The role the member holds comes to grant Manage members while their browser is open. With no reload they are
+    // offered the settings and, in Members, the row of someone below them opens to Kick: the members are read again
+    // by the snapshot that says what this account may now do. The `tagsChanged` before it read them by the one
+    // before, and after a role's permissions change nothing else reads them.
+    phase("a role that comes to manage");
     await toSettings("Roles");
+    await roleRow("Crew").locator(".lu-role__open").click();
+    await page.getByRole("switch", { name: "Manage members" }).click();
+    await save.click();
+    await page.getByText("Saved.").waitFor();
+    await page.getByRole("button", { name: "Back to roles" }).click();
+    if (theirs) {
+      const p = theirs.page;
+      live.page = p;
+      await p.getByRole("button", { name: /server menu/ }).click();
+      await p.getByRole("menuitem", { name: "Server settings" }).click({ timeout: 20_000 });
+      const below = p.locator(".lu-roster__item", { hasText: hand });
+      await below.locator("button.lu-roster__row").click({ timeout: 20_000 });
+      await below.getByRole("button", { name: `Kick ${hand}` }).waitFor();
+      await below.getByRole("button", { name: "Cancel" }).click();
+      // The owner is nobody's to manage: with nothing of theirs to change, their row does not open.
+      if ((await p.locator(".lu-roster__item", { hasText: owner }).locator("button.lu-roster__row").count()) !== 0) throw new Error("the owner's row opens for a member who manages members");
+      live.page = page;
+    }
+
+    phase("deleted");
     await roleRow("Helpers").locator(".lu-role__open").click();
     await page.getByRole("button", { name: "Delete role" }).click();
     const asked = page.getByRole("dialog", { name: "Delete Helpers?" });
     await asked.getByText("Nobody holds this role.").waitFor();
+    await asked.getByText("This can’t be undone.").waitFor();
     await asked.getByRole("button", { name: "Delete role" }).click();
     await ordered(["Crew", "Everyone"]);
     await page.screenshot({ path: `${out}/${which}-roles.png` });
@@ -1450,12 +1523,12 @@ async function rolesStep(which: string, stamp: number) {
     await row.locator(".lu-roster__row").click();
     await row.getByRole("button", { name: `Kick ${member}` }).click();
     await row.waitFor({ state: "detached" });
-    await page.getByRole("heading", { name: /^Members/ }).getByText("1", { exact: true }).waitFor();
+    await page.getByRole("heading", { name: /^Members/ }).getByText("2", { exact: true }).waitFor();
   } finally {
     await mine.ctx.close();
     await theirs?.ctx.close();
   }
-  console.log(`  ${which}: made roles, gave one from its editor and saw its tag${theirs ? " in two browsers" : ""}, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken, set titles and saw them as tags once the server showed titles, deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: made roles, found the one just made in its editor as saved, gave it from there and saw its tag${theirs ? " in two browsers" : ""}, read “You” and “Owner” on the owner's own card, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken and a name and a title with a hidden character, set titles, was refused the owner's eleventh change of their own in an hour, saw titles as tags once the server showed them, ${theirs ? "let the member's role manage members and found the row of someone below them opening in their browser with no reload, " : ""}deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
 }
 
 // The middle button held over a pane and moved up from where it came down
@@ -2580,6 +2653,25 @@ async function mediaStep(which: string, stamp: number) {
     if ((await scale()) !== 1.5) throw new Error(`the plus key zoomed to ${await scale()}`);
     await page.keyboard.press("0");
     await fit.and(page.locator(":disabled")).waitFor();
+    // A press on the fitted picture let go over the bar is over: zoomed after it, the picture stays where it is while the pointer moves with no button held.
+    const bar = await viewer.locator(".lu-viewer__name").boundingBox();
+    if (!bar) throw new Error("the viewer has no bar");
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(bar.x + 8, bar.y + bar.height / 2, { steps: 4 });
+    await page.mouse.up();
+    await page.mouse.move(x, y, { steps: 2 });
+    // Zoomed as far as it goes, where this picture is taller than its room and so has somewhere to be moved to.
+    for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -100);
+    await viewer.getByRole("button", { name: "Zoom in" }).and(page.locator(":disabled")).waitFor();
+    const room = await viewer.locator(".lu-viewer__stage").evaluate((e) => e.clientHeight);
+    if (!(at.height * (await scale()) > room + 40)) throw new Error(`the picture zoomed to ${await scale()} has nowhere to move in a room ${room} high, so a drag left down would not show`);
+    const placed = () => shown.evaluate((e) => (e as HTMLElement).style.transform);
+    const rested = await placed();
+    await page.mouse.move(x + 20, y + 20, { steps: 4 });
+    if ((await placed()) !== rested) throw new Error(`the picture followed the pointer with no button held, after a press let go over the bar: ${rested} to ${await placed()}`);
+    await page.keyboard.press("0");
+    await fit.and(page.locator(":disabled")).waitFor();
     await page.keyboard.press("Escape");
     await viewer.waitFor({ state: "detached" });
     phase("opened by the other side");
@@ -2596,7 +2688,7 @@ async function mediaStep(which: string, stamp: number) {
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, each still the element it was once the conversation was read again, opened in the viewer, zoomed and closed, and opened by the other member, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: a picture from the CLI drawn; one attached here with alt text, sent, drawn, each still the element it was once the conversation was read again, opened in the viewer, zoomed, left where it was by a pointer moving after a press let go over the bar, and closed, and opened by the other member, in ${Date.now() - t0} ms`);
 }
 
 // An attachment the server lets go while its row is on screen (specs/media.md
