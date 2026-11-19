@@ -14,7 +14,8 @@
 # member and another role taken from her by the Remove beside her, a title
 # set, the tag beside a name in #general following a change made from here
 # while the conversation is on screen, a title and roles changed from a
-# profile card, the server switched to titles, a member kicked, and the role
+# profile card, the owner's own card saying You and Owner and refusing a
+# title with a hidden character, the server switched to titles, a member kicked, and the role
 # deleted after its sheet. Last, testRolesAsOneWhoManagesWhatIsBelow, as Devon.
 #
 #   scripts/smoke-roles.sh   # expects the app and its tests built for the simulator (xcodebuild build-for-testing, see AGENTS.md) and the CLI
@@ -286,6 +287,11 @@ reached card 90
 case " $(member_field "$devon_id" "' '.join(m.get('roleIds', []))") " in *" $design "*) ;; *) fail "Devon does not hold Design after the card's Edit" ;; esac
 seen card
 echo "Devon's title and roles changed from his profile card's two Edits"
+reached own 90
+# shellcheck disable=SC2154
+[ "$(member_field "$owner_id" "m.get('title', '')")" = "Founder" ] || fail "the owner's title is \"$(member_field "$owner_id" "m.get('title', '')")\" after one with a hidden character was typed"
+seen own
+echo "the owner's own card says You and Owner, and a title with a hidden character was refused in its editor"
 reached titles 90
 [ "$(server_field "d.get('memberTag', 'MEMBER_TAG_ROLE')")" = "MEMBER_TAG_TITLE" ] || fail "the server's tag is $(server_field "d.get('memberTag', 'MEMBER_TAG_ROLE')") after Titles was chosen"
 seen titles

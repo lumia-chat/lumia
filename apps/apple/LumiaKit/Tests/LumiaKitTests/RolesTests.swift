@@ -158,8 +158,12 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(RoleWords.administratorQuestion(serverName: "Acme", roleName: "Member", held: 1204)[1], "1,204 members hold Member.")
         XCTAssertEqual(RoleWords.deleteQuestion(held: 3), ["3 members hold this role. They lose what it allowed.", "This can’t be undone."])
         XCTAssertEqual(RoleWords.deleteQuestion(held: 1)[0], "1 member holds this role. They lose what it allowed.")
-        XCTAssertEqual(RoleWords.deleteQuestion(held: 0)[0], "Nobody holds this role.")
-        XCTAssertEqual(RoleWords.deleteQuestion(held: nil)[0], "Nobody holds this role.")
+        XCTAssertEqual(RoleWords.deleteQuestion(held: 0), ["Nobody holds this role.", "This can’t be undone."])
+        XCTAssertEqual(RoleWords.deleteQuestion(held: 1204)[0], "1,204 members hold this role. They lose what it allowed.")
+        // Not known, the member list not read yet or not read at all: nothing
+        // is said of who holds it, least of all that nobody does.
+        XCTAssertEqual(RoleWords.deleteQuestion(held: nil), ["This can’t be undone."])
+        XCTAssertEqual(RoleWords.deleteQuestion(held: Roles.holders(acme[1], members: nil)), ["This can’t be undone."])
     }
 
     // MARK: A member
@@ -202,6 +206,38 @@ final class RolesTests: XCTestCase {
         XCTAssertEqual(Roles.mark(owner: true, guest: false), "Owner")
         XCTAssertEqual(Roles.mark(owner: false, guest: true), "Guest")
         XCTAssertNil(Roles.mark(owner: false, guest: false))
+    }
+
+    // A member list that could not be read is not an empty one: who holds
+    // a role stays unknown, or as it was last known, and "Delete
+    // Moderator?" does not say nobody holds a role forty members hold.
+    func testAMemberListThatCouldNotBeReadIsNotAnEmptyOne() {
+        let forty = (0..<40).map { member("m\($0)", roleIDs: ["mod"]) }
+        // Never read, and the read failed: no list, so no count.
+        var lists = MemberLists.after(held: [:], serverIDs: ["acme"], read: [:])
+        XCTAssertNil(lists["acme"])
+        XCTAssertNil(Roles.holders(acme[1], members: lists["acme"]))
+        XCTAssertEqual(RoleWords.deleteQuestion(held: Roles.holders(acme[1], members: lists["acme"])), ["This can’t be undone."])
+        // Read: counted.
+        lists = MemberLists.after(held: lists, serverIDs: ["acme"], read: ["acme": forty])
+        XCTAssertEqual(Roles.holders(acme[1], members: lists["acme"]), 40)
+        // Asked again and not read: what was held stays.
+        lists = MemberLists.after(held: lists, serverIDs: ["acme", "trail"], read: [:])
+        XCTAssertEqual(lists["acme"]?.count, 40)
+        XCTAssertNil(lists["trail"])
+        XCTAssertEqual(RoleWords.deleteQuestion(held: Roles.holders(acme[1], members: lists["acme"]))[0], "40 members hold this role. They lose what it allowed.")
+        // A server left goes, whatever was read of it.
+        XCTAssertEqual(MemberLists.after(held: lists, serverIDs: ["trail"], read: ["acme": forty, "trail": []]), ["trail": []])
+    }
+
+    // On a profile card "You" stands beside "Owner" or "Guest", not in its place.
+    func testACardsMarksSayYouAndWhoTheyAreToTheServer() {
+        XCTAssertEqual(Roles.cardMarks(me: true, owner: true, guest: false), ["You", "Owner"])
+        XCTAssertEqual(Roles.cardMarks(me: true, owner: false, guest: true), ["You", "Guest"])
+        XCTAssertEqual(Roles.cardMarks(me: true, owner: false, guest: false), ["You"])
+        XCTAssertEqual(Roles.cardMarks(me: false, owner: true, guest: false), ["Owner"])
+        XCTAssertEqual(Roles.cardMarks(me: false, owner: false, guest: true), ["Guest"])
+        XCTAssertEqual(Roles.cardMarks(me: false, owner: false, guest: false), [])
     }
 
     func testATagOnItsToneOrThePlainChip() {
@@ -279,8 +315,7 @@ final class RolesTests: XCTestCase {
             RoleWords.roleRefusal(code: code, details: field.map { ["field": $0] } ?? [:], message: message, serverName: "Acme")
         }
         XCTAssertEqual(said("ALREADY_EXISTS"), "Another role in Acme has that name.")
-        XCTAssertTrue(said("INVALID_ARGUMENT", field: "name").contains("1 to 32 characters"))
-        XCTAssertEqual(said("INVALID_ARGUMENT", field: "name"), "A role’s name is 1 to 32 characters, and can’t be “everyone”.")
+        XCTAssertEqual(said("INVALID_ARGUMENT", field: "name"), "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.")
         XCTAssertEqual(said("INVALID_ARGUMENT", field: "color"), "A role’s colour is one of the nine, or none.")
         XCTAssertTrue(said("INVALID_ARGUMENT", field: "role_ids").contains("Try again"))
         XCTAssertTrue(said("PERMISSION_DENIED").contains("isn’t yours to change"))
@@ -295,10 +330,66 @@ final class RolesTests: XCTestCase {
             RoleWords.memberRefusal(code: code, details: field.map { ["field": $0] } ?? [:], message: message)
         }
         XCTAssertEqual(said("NOT_FOUND"), "They are no longer a member.")
-        XCTAssertTrue(said("INVALID_ARGUMENT", field: "title").contains("32 characters"))
+        XCTAssertEqual(said("INVALID_ARGUMENT", field: "title"), "A title is up to 32 characters on one line, with no hidden characters.")
+        // This account's own title, changed more than ten times in an hour.
+        XCTAssertEqual(said("RATE_LIMITED", message: "too many requests"), "You’ve changed your title too many times this hour. Try again later.")
         XCTAssertEqual(said("PERMISSION_DENIED"), "That isn’t yours to change. They may be at or above your own highest role.")
         XCTAssertEqual(said("FAILED_PRECONDITION"), "A member can’t hold that many roles.")
         XCTAssertEqual(said(nil, message: "nope"), "nope")
+    }
+
+    // Against a running instance with open registration
+    // (`LUMIA_TEST_INSTANCE`, as in `LumiaKitTests`; skipped without it):
+    // what the instance refuses of a title and of a role's name comes
+    // through the core with its code and its field, and is said in the
+    // sheet's words. A title or a name with a character nobody can see in
+    // it, a title on two lines, and this account's own title changed an
+    // eleventh time in the hour.
+    func testWhatTheInstanceRefusesOfATitleAndANameIsSaidInTheSheetsWords() async throws {
+        guard let instance = ProcessInfo.processInfo.environment["LUMIA_TEST_INSTANCE"], let base = URL(string: instance) else {
+            throw XCTSkip("LUMIA_TEST_INSTANCE names no instance")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lumia-kit-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let client = try LumiaClient(baseURL: base, dataDirectory: dir)
+        try await client.createAccount(handle: "titled\(UInt64(Date().timeIntervalSince1970 * 1000))", password: "a password for the kit's test")
+        let server = try await client.createServer(name: "Acme")
+        let me = try await client.snapshot().accountId
+        func said(_ error: any Error) -> String {
+            RoleWords.memberRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage)
+        }
+        func refused(_ title: String) async -> String? {
+            do {
+                _ = try await client.setMemberTitle(serverID: server.serverId, accountID: me, title: title)
+                return nil
+            } catch { return said(error) }
+        }
+
+        // Hidden characters and a second line: refused, and nothing counted.
+        let hidden = "A title is up to 32 characters on one line, with no hidden characters."
+        for title in ["Foun\u{200B}der", "Founder\u{200E}!", "Foun\u{2028}der", "Foun\nder", "\u{202E}Founder"] {
+            let words = await refused(title)
+            XCTAssertEqual(words, hidden, "for \(title.unicodeScalars.map { String($0.value, radix: 16) })")
+        }
+        do {
+            _ = try await client.createRole(serverID: server.serverId, name: "Mod\u{200B}erator", color: "", hideTag: false, permissions: [])
+            XCTFail("a role's name with a hidden character was taken")
+        } catch {
+            XCTAssertEqual(
+                RoleWords.roleRefusal(code: error.lumiaCode, details: error.lumiaDetails, message: error.lumiaMessage, serverName: "Acme"),
+                "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
+            )
+        }
+
+        // Ten changes of one's own title in the hour are taken, the eleventh is not.
+        for n in 1...10 {
+            let words = await refused("Founder \(n)")
+            XCTAssertNil(words, "change \(n) was refused")
+        }
+        let eleventh = await refused("Founder 11")
+        XCTAssertEqual(eleventh, "You’ve changed your title too many times this hour. Try again later.")
+        let kept = try await client.members(serverID: server.serverId).first { $0.accountId == me }?.title
+        XCTAssertEqual(kept, "Founder 10")
     }
 
     func testTheWordsAreTheSheets() {

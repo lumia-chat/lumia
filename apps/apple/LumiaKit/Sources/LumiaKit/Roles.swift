@@ -232,6 +232,14 @@ public enum Roles {
         owner ? "Owner" : guest ? "Guest" : nil
     }
 
+    /// The words beside the name on a profile card, each a tag in the
+    /// accent: "You" on this account's own, then who they are to the
+    /// server. Both are shown, on every client: "You" does not stand in
+    /// for "Owner" or "Guest".
+    public static func cardMarks(me: Bool, owner: Bool, guest: Bool) -> [String] {
+        (me ? ["You"] : []) + (mark(owner: owner, guest: guest).map { [$0] } ?? [])
+    }
+
     /// A member's tag as a message and a member row draw it: its words, on its tone or the plain chip.
     public static func tag(of tag: TagSummary?) -> TagLook? {
         guard let tag, !tag.label.isEmpty else { return nil }
@@ -325,15 +333,21 @@ public enum RoleWords {
         return lines
     }
 
-    /// What is asked before a role is deleted: the lines under "Delete Moderator?".
+    /// What is asked before a role is deleted: the lines under "Delete
+    /// Moderator?". How many hold it is said only when it is known: with
+    /// the member list not read yet, or not read at all, nothing is said
+    /// of holders, since "Nobody holds this role." of a role forty members
+    /// hold is the one thing the question must not say.
     public static func deleteQuestion(held: Int?) -> [String] {
+        let undone = "This can’t be undone."
+        guard let held else { return [undone] }
         let first: String
-        switch held ?? 0 {
+        switch held {
         case 0: first = "Nobody holds this role."
         case 1: first = "1 member holds this role. They lose what it allowed."
         case let n: first = "\(Roles.grouped(n)) members hold this role. They lose what it allowed."
         }
-        return [first, "This can’t be undone."]
+        return [first, undone]
     }
 
     /// Why a role was not saved, moved or deleted: `code` and `details` as the error carries them, `message` its own words.
@@ -342,7 +356,7 @@ public enum RoleWords {
         case "PERMISSION_DENIED": "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give."
         case "ALREADY_EXISTS": "Another role in \(serverName) has that name."
         case "NOT_FOUND": "That role is gone. Someone deleted it."
-        case "INVALID_ARGUMENT" where details["field"] == "name": "A role’s name is 1 to 32 characters, and can’t be “everyone”."
+        case "INVALID_ARGUMENT" where details["field"] == "name": "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”."
         case "INVALID_ARGUMENT" where details["field"] == "color": "A role’s colour is one of the nine, or none."
         case "INVALID_ARGUMENT" where details["field"] == "role_ids": "The roles changed while you were moving one. Try again."
         case "FAILED_PRECONDITION": "This server has as many roles as it can hold."
@@ -350,13 +364,16 @@ public enum RoleWords {
         }
     }
 
-    /// Why a member's roles or title were not saved, or they were not kicked.
+    /// Why a member's roles or title were not saved, or they were not
+    /// kicked. `RATE_LIMITED` is this account's own title, which a server
+    /// lets it change ten times an hour; nothing else of a member is counted.
     public static func memberRefusal(code: String?, details: [String: String], message: String) -> String {
         switch code {
         case "PERMISSION_DENIED": "That isn’t yours to change. They may be at or above your own highest role."
         case "NOT_FOUND": "They are no longer a member."
         case "FAILED_PRECONDITION": "A member can’t hold that many roles."
-        case "INVALID_ARGUMENT" where details["field"] == "title": "A title is up to 32 characters, on one line."
+        case "RATE_LIMITED": "You’ve changed your title too many times this hour. Try again later."
+        case "INVALID_ARGUMENT" where details["field"] == "title": "A title is up to 32 characters on one line, with no hidden characters."
         default: message
         }
     }

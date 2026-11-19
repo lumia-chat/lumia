@@ -152,10 +152,13 @@ public extension LumiaSession {
     /// quotes. The answer is who was mentioned and is not in the channel, so
     /// not notified. It carries the composer's attachments, by draft id,
     /// and the cards of the links whose previews were kept (specs/media.md).
-    func send(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = []) async throws -> [String] {
+    /// `taken` runs as the core's send returns without an error, before the
+    /// list is read again: the moment the composer's draft is let go.
+    func send(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = [], taken: () -> Void = {}) async throws -> [String] {
         let mentions = await mentions(in: body, channelID: channelID)
         let outside = Replies.outside(mentions, inside: channelMemberIDs[channelID], me: me)
         _ = try await client.sendMessageWithMedia(channelID: channelID, body: body, mentions: mentions, replyTo: quote, attachments: attachments, cardURLs: cardURLs)
+        taken()
         await refreshMessages(channelID: channelID)
         return outside
     }
@@ -218,8 +221,10 @@ public extension LumiaSession {
 
     /// Sends a message in a personal conversation, quoting another or not,
     /// with the composer's attachments and the cards this phone made.
-    func dmSend(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = []) async throws {
+    /// `taken` is as `send`'s.
+    func dmSend(channelID: String, body: String, quote: QuoteSummary?, attachments: [String] = [], cardURLs: [String] = [], taken: () -> Void = {}) async throws {
         _ = try await client.dmSendWithMedia(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cardURLs)
+        taken()
         await refreshDmLog(channelID: channelID)
     }
 

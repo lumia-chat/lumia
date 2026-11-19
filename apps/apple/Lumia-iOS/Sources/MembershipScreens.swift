@@ -556,9 +556,10 @@ struct ProfileCard: View {
                 VStack(alignment: .leading, spacing: LumiaTokens.space2) {
                     NameWithTag(gap: LumiaTokens.space8) {
                         Text(name).font(LumiaTokens.titleAuth.font).foregroundStyle(LumiaTokens.ink.color).lineLimit(1)
-                        // This account, the server's owner, or a guest.
-                        if let mark = me ? "You" : listed.flatMap({ Roles.mark(owner: $0.owner, guest: $0.guest) }) {
-                            LumiaTag(mark, tone: .accent)
+                        // This account, and who they are to the server, its owner
+                        // or a guest: both said, "You" never in the other's place.
+                        ForEach(Roles.cardMarks(me: me, owner: listed?.owner ?? false, guest: listed?.guest ?? false), id: \.self) { mark in
+                            LumiaTag(mark, tone: .accent).accessibilityIdentifier("card-mark")
                         }
                     }
                     titleLine

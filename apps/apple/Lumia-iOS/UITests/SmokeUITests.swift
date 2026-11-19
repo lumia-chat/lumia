@@ -553,7 +553,9 @@ final class SmokeUITests: XCTestCase {
     /// `tags` (#general, each author's tag beside their name; the smoke then
     /// takes Admin from Maya from elsewhere), `live` (her tag is Design with
     /// the conversation still on screen), `card` (Devon's profile card: his
-    /// title and his roles, each changed from its Edit), `titles` (Overview's "Tag beside
+    /// title and his roles, each changed from its Edit), `own` (this
+    /// account's own card: "You" and "Owner" both, and a title with a hidden
+    /// character refused in the editor), `titles` (Overview's "Tag beside
     /// names": Titles, and #general tags by title), `kicked` (Sam, from his
     /// row, nothing asked), `deleting` (the role's sheet, saying who holds
     /// it) and `deleted`.
@@ -773,6 +775,27 @@ final class SmokeUITests: XCTestCase {
         shown(labelled("Moderator, Design, Engineering"), "the card does not list the role Devon was given")
         reached("card", under: steps)
         putAwaySheet(app, showing: editRoles)
+
+        // This account's own card: "You" and who it is to the server, both
+        // said; and a title with a character in it that nobody can see is
+        // refused in the editor, in the sheet's words, and is not its title.
+        let mine = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ryan Winchester")).firstMatch
+        shown(mine, "the channel's members do not list this account")
+        mine.tap()
+        shown(editTitle, "this account's own card does not offer its title")
+        let marks = app.staticTexts.matching(identifier: "card-mark")
+        XCTAssertEqual((0..<marks.count).map { marks.element(boundBy: $0).label }, ["You", "Owner"], "the owner's own card does not say both You and Owner")
+        XCTAssertTrue(app.staticTexts["Founder"].exists, "the card does not show this account's title")
+        editTitle.tap()
+        shown(labelled("Ryan Winchester in Acme"), "the title's editor does not say whose it is")
+        retype(app.textFields["Title"], "Foun\u{200B}der in chief\n")
+        app.buttons["member-save"].tap()
+        shown(app.staticTexts["member-error"], "a title with a hidden character in it was not refused")
+        XCTAssertEqual(app.staticTexts["member-error"].label, "A title is up to 32 characters on one line, with no hidden characters.")
+        reached("own", under: steps)
+        app.buttons["Cancel"].tap()
+        shown(app.staticTexts["Founder"], "the card does not show the title as it was")
+        putAwaySheet(app, showing: editTitle)
         back()
 
         // Overview: the tag beside names is the server's to choose; Titles.

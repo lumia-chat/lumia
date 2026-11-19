@@ -83,39 +83,82 @@ private struct Reading: ViewModifier {
 /// Keeps what is typed in a conversation's composer and not sent (issue
 /// #23): what both kinds share. As the conversation comes on screen, at a
 /// cold launch too, the draft the core keeps for it is put in the field
-/// and the reply bar (`place`); what the composer then holds, its words and
-/// the reply they answer, is kept once it has rested for 400 ms, and at
-/// once when the screen goes away and when the app leaves the foreground,
-/// since iOS may end it there without a word (the kit's `DraftKeeper`,
-/// which a send tells to keep nothing). The files waiting in the strip
-/// are not kept, and a message's edit is typed in a field of its own, so
-/// it is never the draft.
+/// and the reply bar (`place`) once the store answers, which it does off
+/// the main thread; what the composer then holds, its words and the reply
+/// they answer, is kept once it has rested for 400 ms, and at once when
+/// the screen goes away and when the app leaves the foreground, since iOS
+/// may end it there without a word (the session's `DraftKeeper`, which a
+/// send tells when it goes and what came of it). The files waiting in the
+/// strip are not kept, and a message's edit is typed in a field of its
+/// own, so it is never the draft.
 private struct Drafting: ViewModifier {
     @Environment(\.scenePhase) private var scenePhase
     let session: LumiaSession
     let channelID: String
-    let keeper: DraftKeeper
     /// What the composer holds: its words, and the reply being written as it is kept.
     let words: String
     let reply: QuoteSummary?
     /// Puts a conversation's kept draft in the field and the reply bar, or empties them for none.
     let place: (DraftSummary?) -> Void
+    /// The conversation the keeper was told this screen shows; nil while it is under another or gone.
+    @State private var shown: String?
+    /// The conversation whose words the field holds.
+    @State private var filled: String?
+
+    private var keeper: DraftKeeper { session.draftKeeper }
 
     func body(content: Content) -> some View {
         content
-            .onAppear(perform: open)
+            .onAppear(perform: appear)
             // Another conversation in the same screen: this one's words stay its own.
-            .onChange(of: channelID) { _, _ in open() }
-            .onChange(of: words) { _, words in keeper.changed(body: words, reply: reply) }
-            .onChange(of: reply) { _, reply in keeper.changed(body: words, reply: reply) }
-            .onChange(of: scenePhase) { _, phase in if phase != .active { keeper.leave() } }
-            .onDisappear { keeper.leave() }
+            .onChange(of: channelID) { _, _ in appear() }
+            .onChange(of: words) { _, words in keeper.changed(channelID, body: words, reply: reply) }
+            .onChange(of: reply) { _, reply in keeper.changed(channelID, body: words, reply: reply) }
+            // Kept as the app leaves the foreground; the shell holds the app
+            // awake until the store has it (`KeptBeforeSuspension`).
+            .onChange(of: scenePhase) { _, phase in if phase != .active { keeper.keepNow(channelID) } }
+            .onDisappear {
+                if let shown { keeper.leave(shown) }
+                shown = nil
+            }
     }
 
-    /// Back from a screen pushed over this one, the field is as it was left: nothing is read again.
-    private func open() {
-        guard keeper.channelID != channelID else { return }
-        place(keeper.open(channelID, in: session.drafts))
+    /// The conversation is on screen. Back from a screen pushed over this
+    /// one, the field is as it was left, and nothing is put in it.
+    private func appear() {
+        guard shown != channelID else { return }
+        if let shown { keeper.leave(shown) }
+        shown = channelID
+        let back = filled == channelID
+        filled = channelID
+        keeper.open(channelID, holding: back ? DraftSummary(body: words, reply: reply) : nil, place: place)
+    }
+}
+
+/// Holds the app awake in the background until the store has answered the
+/// drafts written as it left the foreground, and any written just before
+/// (a conversation left a moment ago). They are written off the main
+/// thread, so the scene's change of phase no longer waits for them, and a
+/// write that is waiting for the store's lock must not be cut off by the
+/// app's suspension: the words would not be kept, and a process suspended
+/// while it holds a lock on a file in the app group's container is ended.
+/// The shell asks for it as the scene goes to the background, which is
+/// after the conversation on screen was told the app is no longer active.
+@MainActor
+enum KeptBeforeSuspension {
+    static func hold(_ keeper: DraftKeeper) {
+        var held = UIBackgroundTaskIdentifier.invalid
+        let end = {
+            guard held != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(held)
+            held = .invalid
+        }
+        // The system's own limit running out ends it too; it calls on the main thread.
+        held = UIApplication.shared.beginBackgroundTask(withName: "Keeping what is typed") { end() }
+        Task {
+            await keeper.settled()
+            end()
+        }
     }
 }
 
@@ -229,8 +272,6 @@ struct ConversationScreen: View {
     @State private var replying: QuoteSummary?
     /// Whose message the reply answers, as it was begun; empty for one kept with a draft.
     @State private var replyingTo = ""
-    /// Keeps the draft and the reply through a switch, a quit or a crash.
-    @State private var drafts = DraftKeeper()
     @State private var sheet: MessageSheet?
     @State private var changes = Changes()
     @State private var flash: String?
@@ -339,7 +380,7 @@ struct ConversationScreen: View {
         .mediaOpening($opening, session: session)
         .environment(playback)
         .onDisappear { playback.leave() }
-        .modifier(Drafting(session: session, channelID: channelID, keeper: drafts, words: draft, reply: replying, place: place))
+        .modifier(Drafting(session: session, channelID: channelID, words: draft, reply: replying, place: place))
         .modifier(Reading(session: session, channelID: channelID, newest: log?.messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshDmChannels()
             await session.refreshDmLog(channelID: channelID)
@@ -468,27 +509,25 @@ struct ConversationScreen: View {
         // file still on its way holds the send.
         guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         let quote = replying
-        let name = replyName
+        let typed = draft
         let (attachments, cards) = media.outgoing(body: body)
+        // On its way: the field empties, and the words stay kept until the
+        // send has returned without an error, so that an app ended meanwhile
+        // has them in the draft if the core does not have the message.
+        let keeper = session.draftKeeper
+        keeper.sending(channelID, body: typed, reply: quote)
         draft = ""
         replying = nil
         error = ""
-        // Sent, the conversation keeps no draft, and no save still waits to bring these words back.
-        drafts.sent()
         do {
-            try await session.dmSend(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
+            try await session.dmSend(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards) { keeper.sent(channelID) }
             media.sent()
         } catch {
             self.error = error.lumiaMessage
-            // Not sent: the words come back to the field, as on the web, unless
-            // something new was typed meanwhile or another conversation is here
-            // now, and are kept again.
-            guard drafts.channelID == channelID, draft.isEmpty else { return }
-            draft = body
-            if replying == nil, quote != nil {
-                replying = quote
-                replyingTo = name
-            }
+            // Not sent: the words and the reply come back to the field, as on
+            // the web, unless something new was typed meanwhile; with another
+            // conversation here now, they are its draft when it is next opened.
+            keeper.unsent(channelID, body: typed, reply: quote)
         }
     }
 
@@ -517,8 +556,6 @@ struct ChannelScreen: View {
     @State private var replying: QuoteSummary?
     /// The reply bar's "@ On": on for each new reply.
     @State private var mentionOn = true
-    /// Keeps the draft and the reply through a switch, a quit or a crash.
-    @State private var drafts = DraftKeeper()
     /// The kept draft's words as they were put in the field, which is not typing.
     @State private var placed = ""
     @State private var sheet: MessageSheet?
@@ -634,7 +671,7 @@ struct ChannelScreen: View {
         .mediaOpening($opening, session: session)
         .environment(playback)
         .onDisappear { playback.leave() }
-        .modifier(Drafting(session: session, channelID: channelID, keeper: drafts, words: draft, reply: keptReply, place: place))
+        .modifier(Drafting(session: session, channelID: channelID, words: draft, reply: keptReply, place: place))
         .modifier(Reading(session: session, channelID: channelID, newest: messages.last?.seq ?? 0, marks: member, load: {
             await session.refreshMessages(channelID: channelID)
             if member, !isDM { await session.loadChannelMembers(channelID: channelID) }
@@ -825,27 +862,27 @@ struct ChannelScreen: View {
         guard media.strip.canSend(body: body), !MessageCounter.over(session.client.messageRoom(body)) else { return }
         // "@ On" turned off: the reply notifies nobody.
         let quote = keptReply
+        let typed = draft
         let (attachments, cards) = media.outgoing(body: body)
+        // On its way: the field empties, and the words stay kept until the
+        // send has returned without an error, so that an app ended meanwhile
+        // has them in the draft if the core does not have the message.
+        let keeper = session.draftKeeper
+        keeper.sending(channelID, body: typed, reply: quote)
         draft = ""
         replying = nil
         error = ""
-        // Sent, the conversation keeps no draft, and no save still waits to bring these words back.
-        drafts.sent()
         do {
-            let missed = try await session.send(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards)
+            let missed = try await session.send(channelID: channelID, body: body, quote: quote, attachments: attachments, cardURLs: cards) { keeper.sent(channelID) }
             media.sent()
             outside = missed.isEmpty ? nil : OutsideNote(channelID: channelID, accountIDs: missed)
         } catch {
             self.error = error.lumiaMessage
-            // Not sent: the words come back to the field, as on the web, unless
-            // something new was typed meanwhile or another conversation is here
-            // now, and are kept again.
-            guard drafts.channelID == channelID, draft.isEmpty else { return }
-            draft = body
-            if replying == nil, let quote {
-                replying = quote
-                mentionOn = !quote.silent
-            }
+            // Not sent: the words and the reply, with its "@ On" as it stood,
+            // come back to the field, as on the web, unless something new was
+            // typed meanwhile; with another conversation here now, they are
+            // its draft when it is next opened.
+            keeper.unsent(channelID, body: typed, reply: quote)
         }
     }
 

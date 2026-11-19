@@ -328,10 +328,13 @@ public actor LumiaClient {
     /// #23, architecture 13), nil for nothing, and what is typed there now
     /// kept in its place, with the message it replies to; words that are
     /// empty or all blank keep nothing. Each one read or write of the
-    /// instance's local store, on this phone only, so they run where they
-    /// are asked: the field is filled as its screen appears, and what is in
-    /// it is kept before the app has left the foreground, not after a call
-    /// that reaches the instance has had its turn.
+    /// instance's local store, on this phone only, and each blocks: it
+    /// takes the core's lock, and a write waits for the store's write lock,
+    /// for as long as the gateway is applying a batch and at most the
+    /// store's ten seconds. So they are not this actor's, where a call that
+    /// reaches the instance would have its turn first, and they are never
+    /// made on the main thread: `DraftStore.queued` runs them on a queue of
+    /// their own, in the order asked (`LumiaSession.draftKeeper`).
     public nonisolated func draft(channelID: String) throws -> DraftSummary? { try inner.draft(channelId: channelID) }
     public nonisolated func setDraft(channelID: String, body: String, reply: QuoteSummary?) throws {
         try inner.setDraft(channelId: channelID, body: body, reply: reply)
@@ -354,9 +357,13 @@ public actor LumiaClient {
         await Task.detached { inner.discardAttachment(draftId: draftID) }.value
     }
     /// The links a composer previews in a conversation, at most three: none
-    /// where it cannot have cards (an instance that makes none).
-    public nonisolated func previewLinks(channelID: String, body: String) -> [String] {
-        inner.previewLinks(channelId: channelID, body: body)
+    /// where it cannot have cards (an instance that makes none). It asks
+    /// nothing of the instance, but it takes the core's lock, which a
+    /// draft's write holds while it waits for the store's: so it runs off
+    /// the main thread, beside this actor's other calls.
+    public nonisolated func previewLinks(channelID: String, body: String) async -> [String] {
+        let inner = inner
+        return await Task.detached { inner.previewLinks(channelId: channelID, body: body) }.value
     }
     /// The card a link has while composing: the instance's in a server's
     /// conversation, this phone's own in a personal one; nil for none.

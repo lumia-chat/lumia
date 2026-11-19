@@ -206,7 +206,10 @@ struct ShellView: View {
             // The single-writer lock follows the app's phase (architecture 15.5).
             switch phase {
             case .active: session.foreground()
-            case .background: session.background()
+            case .background:
+                session.background()
+                // What was typed is on its way to the store: not suspended before it is there.
+                KeptBeforeSuspension.hold(session.draftKeeper)
             default: break
             }
         }

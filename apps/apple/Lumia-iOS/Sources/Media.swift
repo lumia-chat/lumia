@@ -150,8 +150,11 @@ final class ComposerMedia {
     }
 
     /// Typing has paused: the draft's links that may have cards, each asked for once.
-    func links(in draft: String, session: LumiaSession, channelID: String) {
-        for url in previews.update(links: session.previewLinks(channelID: channelID, body: draft)) {
+    func links(in draft: String, session: LumiaSession, channelID: String) async {
+        let found = await session.previewLinks(channelID: channelID, body: draft)
+        // More was typed while the core was asked: that pause asks again.
+        guard !Task.isCancelled else { return }
+        for url in previews.update(links: found) {
             Task {
                 let card = await session.cardPreview(channelID: channelID, url: url)
                 previews.arrived(url, card: card)
@@ -242,7 +245,7 @@ extension View {
         task(id: draft) {
             try? await Task.sleep(for: LinkPreviews.pause)
             guard !Task.isCancelled else { return }
-            media.links(in: draft, session: session, channelID: channelID)
+            await media.links(in: draft, session: session, channelID: channelID)
         }
     }
 }

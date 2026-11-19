@@ -101,6 +101,21 @@ public struct LoadRetry: Equatable, Sendable {
     }
 }
 
+/// The servers' member lists after a refresh, as a value the tests cover.
+enum MemberLists {
+    /// The lists of `serverIDs`: those `read` in place of what was held,
+    /// the rest as held, and a server left gone. A list that could not be
+    /// read is not an empty one: what was held of it stays, and a server
+    /// with none held has none, so that it is asked for again at the next
+    /// snapshot and nothing counts its members as zero meanwhile (a role's
+    /// "Nobody holds this role." among them).
+    static func after(held: [String: [MemberSummary]], serverIDs: [String], read: [String: [MemberSummary]]) -> [String: [MemberSummary]] {
+        var lists = held.filter { serverIDs.contains($0.key) }
+        for (id, list) in read where serverIDs.contains(id) { lists[id] = list }
+        return lists
+    }
+}
+
 @MainActor
 @Observable
 public final class LumiaSession {
@@ -208,6 +223,10 @@ public final class LumiaSession {
     @ObservationIgnored var uploadLimitsAsked = false
     /// Pictures decoded for drawing, by blob.
     @ObservationIgnored public let mediaImages = MediaImages()
+
+    /// What is typed in the conversations on screen and not sent, kept in
+    /// the core's store off the main thread (issue #23; `Drafts.swift`).
+    @ObservationIgnored public private(set) lazy var draftKeeper = DraftKeeper(store: queuedDrafts())
 
     // The rail's order and folders (architecture 6.9; `Rail.swift`).
     /// A rail edited here and not yet answered: drawn in place of the snapshot's.
@@ -537,6 +556,7 @@ public final class LumiaSession {
         stop()
         try? await ask(.signOut)
         signedIn = false
+        draftKeeper.forget()
         snapshot = nil
         messages = [:]
         dmChannels = []
@@ -1039,10 +1059,11 @@ public final class LumiaSession {
     /// The member lists of `serverIDs`, those of `fetching` read again and
     /// the rest kept; a server left goes.
     private func refreshPeople(serverIDs: [String], fetching: [String]) async {
-        var byServer = serverMembers.filter { serverIDs.contains($0.key) }
+        var read: [String: [MemberSummary]] = [:]
         for id in fetching {
-            byServer[id] = (try? await client.members(serverID: id)) ?? []
+            if let list = try? await client.members(serverID: id) { read[id] = list }
         }
+        let byServer = MemberLists.after(held: serverMembers, serverIDs: serverIDs, read: read)
         var found: [String: MemberSummary] = [:]
         for id in serverIDs {
             for m in byServer[id] ?? [] { found[m.accountId] = m }
