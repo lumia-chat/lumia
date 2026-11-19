@@ -690,6 +690,22 @@ impl SqliteStore {
             .map_err(backend)
     }
 
+    /// Says one server's kept member list may be out of date (a guest let
+    /// into a channel there sees more of its members than it was listed).
+    /// A server with no kept list is left with none.
+    ///
+    /// # Errors
+    /// On a database failure.
+    pub fn mark_member_list_stale(&self, server_id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "UPDATE kept_member_lists SET stale = stale + 1 WHERE server_id = ?1",
+                [server_id],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
     /// The servers whose kept member list is to be listed again.
     ///
     /// # Errors
@@ -2335,6 +2351,19 @@ mod tests {
             .unwrap();
         assert_eq!(store.kept_members("t").unwrap(), ["Ada L."]);
         assert_eq!(store.stale_member_lists().unwrap(), ["s", "t"]);
+    }
+
+    #[test]
+    fn one_list_said_stale_leaves_the_others_current() {
+        let store = SqliteStore::in_memory().unwrap();
+        for server in ["s", "t"] {
+            store
+                .keep_member_list(server, &list(&[("a", "Ada")]), 0)
+                .unwrap();
+        }
+        store.mark_member_list_stale("t").unwrap();
+        store.mark_member_list_stale("never listed").unwrap();
+        assert_eq!(store.stale_member_lists().unwrap(), ["t"]);
     }
 
     #[test]

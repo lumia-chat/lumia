@@ -3697,3 +3697,496 @@ impl Client {
             .block_on(self.app.resolve_bluesky_handle(&handle))?)
     }
 }
+
+// ── Roles and titles as every shell offers them (architecture 7.5) ──────
+//
+// `lumia_client::roles`' rules and words, held to `proto/vectors/roles/cases.json`: the
+// phones ask these rather than keep a copy.
+
+impl From<RoleSummary> for roles::RoleSummary {
+    fn from(r: RoleSummary) -> Self {
+        Self {
+            role_id: r.role_id,
+            name: r.name,
+            color: r.color,
+            position: r.position,
+            is_everyone: r.is_everyone,
+            hide_tag: r.hide_tag,
+            permissions: r.permissions,
+            can_manage: r.can_manage,
+        }
+    }
+}
+
+impl From<roles::RoleDraft> for RoleDraft {
+    fn from(r: roles::RoleDraft) -> Self {
+        Self {
+            name: r.name,
+            color: r.color,
+            hide_tag: r.hide_tag,
+            permissions: r.permissions,
+        }
+    }
+}
+
+fn roles_in(roles: Vec<RoleSummary>) -> Vec<roles::RoleSummary> {
+    roles.into_iter().map(Into::into).collect()
+}
+
+/// A section of a server's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SettingsSection {
+    Overview,
+    Roles,
+    Members,
+}
+
+impl From<roles::SettingsSection> for SettingsSection {
+    fn from(s: roles::SettingsSection) -> Self {
+        match s {
+            roles::SettingsSection::Overview => Self::Overview,
+            roles::SettingsSection::Roles => Self::Roles,
+            roles::SettingsSection::Members => Self::Members,
+        }
+    }
+}
+
+/// An editor's two drafts: the role as it opened on it, and what it holds.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RoleDrafts {
+    pub opened: RoleDraft,
+    pub draft: RoleDraft,
+}
+
+/// A role a member holds, as a card and a settings row list it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct HeldRole {
+    pub role_id: String,
+    pub label: String,
+    /// One of the nine tones, or none for the plain chip.
+    pub tone: Option<String>,
+}
+
+/// A role to tick in a member's form.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RoleChoice {
+    pub id: String,
+    pub name: String,
+    pub tone: Option<String>,
+    pub checked: bool,
+    /// Not this account's to give or take: shown, not changeable.
+    pub locked: bool,
+}
+
+/// What a member's form holds: the roles ticked and the title typed.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MemberForm {
+    pub role_ids: Vec<String>,
+    pub title: String,
+}
+
+impl From<MemberForm> for roles::MemberForm {
+    fn from(f: MemberForm) -> Self {
+        Self {
+            role_ids: f.role_ids,
+            title: f.title,
+        }
+    }
+}
+
+impl From<roles::MemberForm> for MemberForm {
+    fn from(f: roles::MemberForm) -> Self {
+        Self {
+            role_ids: f.role_ids,
+            title: f.title,
+        }
+    }
+}
+
+/// A member's form's two states: as it opened, and as it is.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MemberForms {
+    pub opened: MemberForm,
+    pub form: MemberForm,
+}
+
+/// What a save of a member's form asks, in one request (`change_member`).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MemberChanges {
+    pub give: Vec<String>,
+    pub take: Vec<String>,
+    /// The title as it would be kept; none leaves it as it is, empty clears it.
+    pub title: Option<String>,
+}
+
+/// What this account may change of a member.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct MemberOffers {
+    pub roles: bool,
+    /// In the roles' place, for a guest.
+    pub roles_note: Option<String>,
+    pub title: bool,
+    pub kick: bool,
+}
+
+/// A tag as a message and a member row draw it.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TagLook {
+    pub label: String,
+    /// One of the nine tones, or none for the plain chip.
+    pub tone: Option<String>,
+}
+
+/// Every fixed sentence the roles screens say.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RoleWords {
+    pub roles_hint: String,
+    pub roles_hint_menu: String,
+    pub everyone_subtitle: String,
+    pub title_hint: String,
+    pub guest_roles_note: String,
+    pub delete_role_hint: String,
+    pub tag_heading: String,
+    pub tag_subtitle: String,
+    pub tag_note: String,
+    pub tag_roles_label: String,
+    pub tag_roles_caption: String,
+    pub tag_titles_label: String,
+    pub tag_titles_caption: String,
+    pub nobody_holds: String,
+    pub everyone_holds: String,
+    pub no_member_matches: String,
+    pub reading_members: String,
+    pub no_roles: String,
+    pub administrator_title: String,
+    /// The permission whose switch asks before it is turned on, by its wire name.
+    pub administrator: String,
+    /// The most characters a role's name or a title keeps.
+    pub label_max: u32,
+}
+
+/// Every fixed sentence the roles screens say, once.
+#[uniffi::export]
+pub fn role_words() -> RoleWords {
+    RoleWords {
+        roles_hint: roles::ROLES_HINT.into(),
+        roles_hint_menu: roles::ROLES_HINT_MENU.into(),
+        everyone_subtitle: roles::EVERYONE_SUBTITLE.into(),
+        title_hint: roles::TITLE_HINT.into(),
+        guest_roles_note: roles::GUEST_ROLES_NOTE.into(),
+        delete_role_hint: roles::DELETE_ROLE_HINT.into(),
+        tag_heading: roles::TAG_HEADING.into(),
+        tag_subtitle: roles::TAG_SUBTITLE.into(),
+        tag_note: roles::TAG_NOTE.into(),
+        tag_roles_label: roles::TAG_ROLES_LABEL.into(),
+        tag_roles_caption: roles::TAG_ROLES_CAPTION.into(),
+        tag_titles_label: roles::TAG_TITLES_LABEL.into(),
+        tag_titles_caption: roles::TAG_TITLES_CAPTION.into(),
+        nobody_holds: roles::NOBODY_HOLDS.into(),
+        everyone_holds: roles::EVERYONE_HOLDS.into(),
+        no_member_matches: roles::NO_MEMBER_MATCHES.into(),
+        reading_members: roles::READING_MEMBERS.into(),
+        no_roles: roles::NO_ROLES.into(),
+        administrator_title: roles::ADMINISTRATOR_TITLE.into(),
+        administrator: roles::ADMINISTRATOR.into(),
+        label_max: u32::try_from(roles::LABEL_MAX).unwrap_or(u32::MAX),
+    }
+}
+
+/// The sections of a server's settings this account may use, in order; none, and the
+/// settings do not open.
+#[uniffi::export]
+pub fn roles_settings_sections(server: ServerSummary) -> Vec<SettingsSection> {
+    roles::settings_sections(
+        server.can_manage,
+        server.can_manage_roles,
+        server.can_manage_members,
+    )
+    .into_iter()
+    .map(Into::into)
+    .collect()
+}
+
+/// A colour as one of the nine tones; none for none, and for anything that is no tone.
+#[uniffi::export]
+pub fn roles_tone_of(color: String) -> Option<String> {
+    roles::tone_of(&color).map(str::to_string)
+}
+
+/// `n` with its thousands grouped by commas.
+#[uniffi::export]
+pub fn roles_grouped(n: u64) -> String {
+    roles::grouped(n)
+}
+
+/// "5 roles": a server's roles counted without `Everyone`.
+#[uniffi::export]
+pub fn roles_count(roles: Vec<RoleSummary>) -> String {
+    roles::roles_count(&roles_in(roles))
+}
+
+/// "1 member", "1,204 members".
+#[uniffi::export]
+pub fn roles_members_count(n: u64) -> String {
+    roles::members_count(n)
+}
+
+/// How many of `members` hold `role`; none while the members are not known.
+#[uniffi::export]
+pub fn roles_holders(role: RoleSummary, members: Option<Vec<MemberSummary>>) -> Option<u64> {
+    let held: Option<Vec<Vec<String>>> =
+        members.map(|list| list.into_iter().map(|m| m.role_ids).collect());
+    roles::holders(&role.into(), held.as_deref())
+}
+
+/// A role at or above this account's own highest: a lock, and it does not open.
+#[uniffi::export]
+pub fn roles_locked(role: RoleSummary) -> bool {
+    roles::locked_role(&role.into())
+}
+
+/// Whether `role_id` may land before `before_id` when it is moved.
+#[uniffi::export]
+pub fn roles_lands_before(roles: Vec<RoleSummary>, role_id: String, before_id: String) -> bool {
+    roles::lands_before(&roles_in(roles), &role_id, &before_id)
+}
+
+/// The whole order a move sends: every role but `Everyone`.
+#[uniffi::export]
+pub fn roles_moved_before(
+    roles: Vec<RoleSummary>,
+    role_id: String,
+    before_id: String,
+) -> Vec<String> {
+    roles::moved_before(&roles_in(roles), &role_id, &before_id)
+}
+
+/// The role a step up (`up`) or down puts `role_id` before; none where there is no step.
+#[uniffi::export]
+pub fn roles_step_before(roles: Vec<RoleSummary>, role_id: String, up: bool) -> Option<String> {
+    roles::step_before(&roles_in(roles), &role_id, up)
+}
+
+/// "Design moved to position 3".
+#[uniffi::export]
+pub fn roles_moved_words(role_name: String, position: u64) -> String {
+    roles::moved_words(&role_name, position)
+}
+
+/// The editor's fields for a role, or for a new one.
+#[uniffi::export]
+pub fn roles_draft_of(role: Option<RoleSummary>) -> RoleDraft {
+    roles::draft_of(role.map(Into::into).as_ref()).into()
+}
+
+/// Whether Save is offered: against what the editor opened on (`opened`), none for a new role.
+#[uniffi::export]
+pub fn roles_savable(draft: RoleDraft, opened: Option<RoleDraft>) -> bool {
+    roles::savable(&draft.into(), opened.map(Into::into).as_ref())
+}
+
+/// An editor's two drafts once the role under it is `now`: an untouched editor follows.
+#[uniffi::export]
+pub fn roles_followed(opened: RoleDraft, draft: RoleDraft, now: RoleDraft) -> RoleDrafts {
+    let next = roles::followed(&opened.into(), &draft.into(), &now.into());
+    RoleDrafts {
+        opened: next.opened.into(),
+        draft: next.draft.into(),
+    }
+}
+
+/// A permission this account does not hold, and so cannot give or take.
+#[uniffi::export]
+pub fn roles_withheld(grantable: Vec<String>, permission: String) -> bool {
+    roles::withheld(&grantable, &permission)
+}
+
+/// Every role a member holds, in the server's order, without `Everyone`.
+#[uniffi::export]
+pub fn roles_held(roles: Vec<RoleSummary>, role_ids: Vec<String>) -> Vec<HeldRole> {
+    roles::roles_held(&roles_in(roles), &role_ids)
+        .into_iter()
+        .map(|r| HeldRole {
+            role_id: r.role_id,
+            label: r.label,
+            tone: r.tone,
+        })
+        .collect()
+}
+
+/// A member's roles to tick, those not this account's to give marked.
+#[uniffi::export]
+pub fn roles_choices(roles: Vec<RoleSummary>, held: Vec<String>) -> Vec<RoleChoice> {
+    roles::role_choices(&roles_in(roles), &held)
+        .into_iter()
+        .map(|c| RoleChoice {
+            id: c.id,
+            name: c.name,
+            tone: c.tone,
+            checked: c.checked,
+            locked: c.locked,
+        })
+        .collect()
+}
+
+/// The roles a tick leaves a member with; a locked role is not changed by one.
+#[uniffi::export]
+pub fn roles_toggled(roles: Vec<RoleSummary>, held: Vec<String>, role_id: String) -> Vec<String> {
+    roles::toggled_role(&roles_in(roles), &held, &role_id)
+}
+
+/// A member's form as it opens on them.
+#[uniffi::export]
+pub fn roles_form_of(member: MemberSummary) -> MemberForm {
+    MemberForm {
+        role_ids: member.role_ids,
+        title: member.title,
+    }
+}
+
+/// What a member's form changed, against the form as it opened.
+#[uniffi::export]
+pub fn roles_member_changes(opened: MemberForm, form: MemberForm) -> MemberChanges {
+    let c = roles::member_changes(&opened.into(), &form.into());
+    MemberChanges {
+        give: c.give,
+        take: c.take,
+        title: c.title,
+    }
+}
+
+/// Whether a member's form has anything to ask.
+#[uniffi::export]
+pub fn roles_changes_any(changes: MemberChanges) -> bool {
+    roles::changes_any(&roles::MemberChanges {
+        give: changes.give,
+        take: changes.take,
+        title: changes.title,
+    })
+}
+
+/// A member's form once the list has them as `now`: an untouched form follows.
+#[uniffi::export]
+pub fn roles_member_followed(opened: MemberForm, form: MemberForm, now: MemberForm) -> MemberForms {
+    let next = roles::member_followed(&opened.into(), &form.into(), &now.into());
+    MemberForms {
+        opened: next.opened.into(),
+        form: next.form.into(),
+    }
+}
+
+/// What this account may change of `member` in `server`; `me` whether it is this account.
+#[uniffi::export]
+pub fn roles_member_offers(server: ServerSummary, member: MemberSummary, me: bool) -> MemberOffers {
+    let o = roles::member_offers(server.can_manage_roles, member.guest, member.can_manage, me);
+    MemberOffers {
+        roles: o.roles,
+        roles_note: o.roles_note,
+        title: o.title,
+        kick: o.kick,
+    }
+}
+
+/// Whether a member's row in Members opens at all.
+#[uniffi::export]
+pub fn roles_offers_any(offers: MemberOffers) -> bool {
+    roles::offers_any(&roles::MemberOffers {
+        roles: offers.roles,
+        roles_note: offers.roles_note,
+        title: offers.title,
+        kick: offers.kick,
+    })
+}
+
+/// "Owner" or "Guest" beside a name; none for anyone else.
+#[uniffi::export]
+pub fn roles_member_mark(member: MemberSummary) -> Option<String> {
+    roles::member_mark(member.owner, member.guest).map(str::to_string)
+}
+
+/// The words beside the name on a profile card: "You", then "Owner" or "Guest". `member` is
+/// none at Home and before the server's members are read.
+#[uniffi::export]
+pub fn roles_card_marks(me: bool, member: Option<MemberSummary>) -> Vec<String> {
+    roles::card_marks(me, member.map(|m| (m.owner, m.guest)))
+}
+
+/// A member's tag as it is drawn: its words and its tone, none for the plain chip.
+#[uniffi::export]
+pub fn roles_tag_look(tag: Option<TagSummary>) -> Option<TagLook> {
+    let tag = tag.map(|t| roles::TagSummary {
+        label: t.label,
+        color: t.color,
+    });
+    roles::tag_of(tag.as_ref()).map(|(label, tone)| TagLook { label, tone })
+}
+
+/// Whether Members' search finds `member` by `query`.
+#[uniffi::export]
+pub fn roles_found(query: String, member: MemberSummary) -> bool {
+    roles::found(
+        &query,
+        &member.display_name,
+        &member.nickname,
+        &member.handle,
+        &member.title,
+    )
+}
+
+/// "Delete Moderator?"
+#[uniffi::export]
+pub fn roles_delete_title(role_name: String) -> String {
+    roles::delete_title(&role_name)
+}
+
+/// Under a role's name field.
+#[uniffi::export]
+pub fn roles_name_hint(server_name: String) -> String {
+    roles::role_name_hint(&server_name)
+}
+
+/// Under "Show as tag", as it stands.
+#[uniffi::export]
+pub fn roles_tag_switch_caption(shown: bool) -> String {
+    roles::tag_switch_caption(shown).into()
+}
+
+/// A permission's line where its switch is not this account's to turn.
+#[uniffi::export]
+pub fn roles_withheld_caption(detail: String) -> String {
+    roles::withheld_caption(&detail)
+}
+
+/// The lines under "Turn on Administrator?"; `held` none for a new role.
+#[uniffi::export]
+pub fn roles_administrator_question(
+    server_name: String,
+    role_name: String,
+    held: Option<u64>,
+) -> Vec<String> {
+    roles::administrator_question(&server_name, &role_name, held)
+}
+
+/// The lines under "Delete Moderator?"; `held` none while who holds it is not known.
+#[uniffi::export]
+pub fn roles_delete_question(held: Option<u64>) -> Vec<String> {
+    roles::delete_question(held)
+}
+
+/// Why a role was not saved, moved or deleted: the instance's code and `details.field`
+/// (empty where there are none), its message for anything else.
+#[uniffi::export]
+pub fn roles_role_refusal(
+    code: String,
+    field: String,
+    message: String,
+    server_name: String,
+) -> String {
+    roles::role_refusal(&code, &field, &message, &server_name)
+}
+
+/// Why a member's roles or title were not saved, or they were not kicked.
+#[uniffi::export]
+pub fn roles_member_refusal(code: String, field: String, message: String) -> String {
+    roles::member_refusal(&code, &field, &message)
+}

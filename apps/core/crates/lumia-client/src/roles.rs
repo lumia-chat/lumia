@@ -474,6 +474,621 @@ pub fn highest_of(role_ids: &[String], roles: &[RoleSummary]) -> Option<u32> {
         .min()
 }
 
+// ── What a shell offers (architecture 7.5) ──────────────────────────────
+//
+// The rules every shell's roles screens follow, and the words they say: which settings
+// sections an account sees, a role's lock and moves, an editor's drafts and when it saves,
+// a member's form and what its save asks, what is offered of a member, the marks beside a
+// name, the members' search, and every sentence. `proto/vectors/roles/cases.json` holds the
+// cases every client agrees on; the desktop and the phones ask these, and the web, whose page
+// needs an answer at once and has the core in a worker, keeps a copy held to the same cases
+// (as it does the viewer's).
+
+/// A section of a server's settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingsSection {
+    Overview,
+    Roles,
+    Members,
+}
+
+/// The sections of a server's settings an account may use, in order: Overview with Manage
+/// server, Roles with Manage roles, and Members with Manage members or Manage roles, since a
+/// member's roles are changed there too. None, and the settings do not open.
+#[must_use]
+pub fn settings_sections(
+    can_manage: bool,
+    can_manage_roles: bool,
+    can_manage_members: bool,
+) -> Vec<SettingsSection> {
+    let mut sections = Vec::new();
+    if can_manage {
+        sections.push(SettingsSection::Overview);
+    }
+    if can_manage_roles {
+        sections.push(SettingsSection::Roles);
+    }
+    if can_manage_members || can_manage_roles {
+        sections.push(SettingsSection::Members);
+    }
+    sections
+}
+
+/// A role's or a tag's colour as one of [`TONES`]; `None` for none, and for anything that
+/// is no tone.
+#[must_use]
+pub fn tone_of(color: &str) -> Option<&'static str> {
+    TONES.iter().copied().find(|t| *t == color)
+}
+
+/// `n` with its thousands grouped by commas, as every count on these screens is written.
+#[must_use]
+pub fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// "5 roles": a server's roles counted without `Everyone`.
+#[must_use]
+pub fn roles_count(roles: &[RoleSummary]) -> String {
+    let n = roles.iter().filter(|r| !r.is_everyone).count() as u64;
+    if n == 1 {
+        "1 role".to_string()
+    } else {
+        format!("{} roles", grouped(n))
+    }
+}
+
+/// "1 member", "1,204 members".
+#[must_use]
+pub fn members_count(n: u64) -> String {
+    if n == 1 {
+        "1 member".to_string()
+    } else {
+        format!("{} members", grouped(n))
+    }
+}
+
+/// How many of `members` (each by the role ids it holds) hold a role; every one of them holds
+/// `Everyone`. `None` while the members are not known: a role is never said to be nobody's
+/// before they are read.
+#[must_use]
+pub fn holders(role: &RoleSummary, members: Option<&[Vec<String>]>) -> Option<u64> {
+    let members = members?;
+    let n = if role.is_everyone {
+        members.len()
+    } else {
+        members
+            .iter()
+            .filter(|held| held.contains(&role.role_id))
+            .count()
+    };
+    Some(n as u64)
+}
+
+/// A role at or above this account's own highest: listed with a lock, and it does not open.
+/// `Everyone` always opens.
+#[must_use]
+pub fn locked_role(role: &RoleSummary) -> bool {
+    !role.is_everyone && !role.can_manage
+}
+
+/// Where a role may land when it is moved: before `before_id`, a role this account manages,
+/// or before `Everyone`, which is last. A role is never put before one that is locked, since
+/// those are at or above this account's own highest, and landing where it already is moves
+/// nothing.
+#[must_use]
+pub fn lands_before(roles: &[RoleSummary], role_id: &str, before_id: &str) -> bool {
+    let at = |id: &str| roles.iter().position(|r| r.role_id == id);
+    let (Some(from), Some(to)) = (at(role_id), at(before_id)) else {
+        return false;
+    };
+    let (moved, before) = (&roles[from], &roles[to]);
+    if locked_role(moved) || moved.is_everyone || to == from || to == from + 1 {
+        return false;
+    }
+    before.is_everyone || !locked_role(before)
+}
+
+/// The whole order a move sends: every role but `Everyone`, with `role_id` now before
+/// `before_id`.
+#[must_use]
+pub fn moved_before(roles: &[RoleSummary], role_id: &str, before_id: &str) -> Vec<String> {
+    let mut order = Vec::new();
+    for r in roles {
+        if r.role_id == role_id {
+            continue;
+        }
+        if r.role_id == before_id {
+            order.push(role_id.to_string());
+        }
+        if !r.is_everyone {
+            order.push(r.role_id.clone());
+        }
+    }
+    order
+}
+
+/// The role a step up (`up`) or down puts `role_id` before; `None` where there is no such
+/// step (the highest it may go, or last above `Everyone`).
+#[must_use]
+pub fn step_before(roles: &[RoleSummary], role_id: &str, up: bool) -> Option<String> {
+    let at = roles.iter().position(|r| r.role_id == role_id)?;
+    let before = if up { at.checked_sub(1)? } else { at + 2 };
+    let before = roles.get(before)?;
+    lands_before(roles, role_id, &before.role_id).then(|| before.role_id.clone())
+}
+
+/// What "Moved" says to assistive technology once a role has moved: "Design moved to
+/// position 3", the position counted from 1 among the roles but `Everyone`.
+#[must_use]
+pub fn moved_words(role_name: &str, position: u64) -> String {
+    format!("{role_name} moved to position {position}")
+}
+
+/// The editor's fields for a role, or for a new one: no name, no colour, shown as a tag,
+/// nothing granted.
+#[must_use]
+pub fn draft_of(role: Option<&RoleSummary>) -> RoleDraft {
+    role.map_or_else(RoleDraft::default, |r| RoleDraft {
+        name: r.name.clone(),
+        color: r.color.clone(),
+        hide_tag: r.hide_tag,
+        permissions: r.permissions.clone(),
+    })
+}
+
+fn same_set(a: &[String], b: &[String]) -> bool {
+    a.len() == b.len() && a.iter().all(|x| b.contains(x))
+}
+
+/// Whether two drafts hold the same thing, the permissions in any order; `saved` compares the
+/// names as a save would keep them, trimmed.
+fn same_draft(a: &RoleDraft, b: &RoleDraft, saved: bool) -> bool {
+    let name = |d: &RoleDraft| {
+        if saved {
+            d.name.trim().to_string()
+        } else {
+            d.name.clone()
+        }
+    };
+    name(a) == name(b)
+        && a.color == b.color
+        && a.hide_tag == b.hide_tag
+        && same_set(&a.permissions, &b.permissions)
+}
+
+/// Whether Save is offered. An editor holds two drafts: the role as the editor opened on it
+/// (`opened`) and the one being edited. A new role, which has no `opened`, is saved once it
+/// has a name; a role once the draft differs from `opened` and still has a name. The draft is
+/// never compared with the role as it now is: what someone else changed of it meanwhile is
+/// not this editor's to save, and does not light Save. A save sends the difference between
+/// the two ([`changes`]) and nothing else. `Everyone`'s editor offers only its permissions,
+/// and its name, the role's own, is never empty.
+#[must_use]
+pub fn savable(draft: &RoleDraft, opened: Option<&RoleDraft>) -> bool {
+    if draft.name.trim().is_empty() {
+        return false;
+    }
+    opened.is_none_or(|opened| !same_draft(draft, opened, true))
+}
+
+/// An editor's two drafts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Drafts {
+    pub opened: RoleDraft,
+    pub draft: RoleDraft,
+}
+
+/// An editor's two drafts once the role under it is `now`. An editor nobody has touched
+/// follows: while the draft still holds what it opened on, both become the role as it now is.
+/// Once something was changed they stay as they are, so the save sends that change and
+/// nothing else, whatever became of the rest of the role meanwhile.
+#[must_use]
+pub fn followed(opened: &RoleDraft, draft: &RoleDraft, now: &RoleDraft) -> Drafts {
+    if !same_draft(draft, opened, false) || same_draft(now, opened, false) {
+        return Drafts {
+            opened: opened.clone(),
+            draft: draft.clone(),
+        };
+    }
+    Drafts {
+        opened: now.clone(),
+        draft: now.clone(),
+    }
+}
+
+/// A permission this account does not hold, and so cannot give or take: its switch is shown
+/// and not turned. `grantable` is the server's.
+#[must_use]
+pub fn withheld(grantable: &[String], permission: &str) -> bool {
+    !grantable.iter().any(|p| p == permission)
+}
+
+/// The permission whose switch asks before it is turned on.
+pub const ADMINISTRATOR: &str = "ADMINISTRATOR";
+
+/// A role a member holds, as a card and a settings row list it: its name, on its tone or the
+/// plain chip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldRole {
+    pub role_id: String,
+    pub label: String,
+    /// One of [`TONES`], or `None` for the plain chip.
+    pub tone: Option<String>,
+}
+
+/// Every role a member holds, in the server's order, without `Everyone`.
+#[must_use]
+pub fn roles_held(roles: &[RoleSummary], role_ids: &[String]) -> Vec<HeldRole> {
+    roles
+        .iter()
+        .filter(|r| !r.is_everyone && role_ids.contains(&r.role_id))
+        .map(|r| HeldRole {
+            role_id: r.role_id.clone(),
+            label: r.name.clone(),
+            tone: tone_of(&r.color).map(str::to_string),
+        })
+        .collect()
+}
+
+/// A role to tick in a member's form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleChoice {
+    pub id: String,
+    pub name: String,
+    pub tone: Option<String>,
+    pub checked: bool,
+    /// Not this account's to give or take: shown, not changeable.
+    pub locked: bool,
+}
+
+/// A member's roles to tick: the server's in order without `Everyone`, each not this
+/// account's to give or take marked.
+#[must_use]
+pub fn role_choices(roles: &[RoleSummary], held: &[String]) -> Vec<RoleChoice> {
+    roles
+        .iter()
+        .filter(|r| !r.is_everyone)
+        .map(|r| RoleChoice {
+            id: r.role_id.clone(),
+            name: r.name.clone(),
+            tone: tone_of(&r.color).map(str::to_string),
+            checked: held.contains(&r.role_id),
+            locked: !r.can_manage,
+        })
+        .collect()
+}
+
+/// The roles a tick leaves a member with; a locked role, and `Everyone`, are not changed by
+/// one.
+#[must_use]
+pub fn toggled_role(roles: &[RoleSummary], held: &[String], role_id: &str) -> Vec<String> {
+    match roles.iter().find(|r| r.role_id == role_id) {
+        Some(r) if !r.is_everyone && r.can_manage => {
+            if held.iter().any(|h| h == role_id) {
+                held.iter().filter(|h| *h != role_id).cloned().collect()
+            } else {
+                let mut next = held.to_vec();
+                next.push(role_id.to_string());
+                next
+            }
+        }
+        _ => held.to_vec(),
+    }
+}
+
+/// What a member's form holds, in their row in Members and in a card's two pops: the roles
+/// ticked and the title typed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberForm {
+    pub role_ids: Vec<String>,
+    pub title: String,
+}
+
+fn same_form(a: &MemberForm, b: &MemberForm) -> bool {
+    a.title == b.title && same_set(&a.role_ids, &b.role_ids)
+}
+
+/// What a save of a member's form asks, in one request ([`crate::app::App::change_member`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberChanges {
+    /// The roles ticked that the form did not open with.
+    pub give: Vec<String>,
+    /// The roles it opened with that are no longer ticked.
+    pub take: Vec<String>,
+    /// The title as it would be kept, where it differs from the one the form opened with;
+    /// `None` leaves it as it is, and empty clears it.
+    pub title: Option<String>,
+}
+
+/// What a member's form changed, against the form as it opened (`opened`), never against the
+/// member as the list now has them: a role someone else gave them meanwhile is in neither list
+/// and so is not taken, and one this form did not touch is not named. Roles and title go in
+/// the one request, which the instance does whole or not at all.
+#[must_use]
+pub fn member_changes(opened: &MemberForm, form: &MemberForm) -> MemberChanges {
+    let title = form.title.trim();
+    MemberChanges {
+        give: form
+            .role_ids
+            .iter()
+            .filter(|id| !opened.role_ids.contains(id))
+            .cloned()
+            .collect(),
+        take: opened
+            .role_ids
+            .iter()
+            .filter(|id| !form.role_ids.contains(id))
+            .cloned()
+            .collect(),
+        title: (title != opened.title.trim()).then(|| title.to_string()),
+    }
+}
+
+/// Whether there is anything to ask: a form saved as it opened asks nothing.
+#[must_use]
+pub fn changes_any(changes: &MemberChanges) -> bool {
+    !changes.give.is_empty() || !changes.take.is_empty() || changes.title.is_some()
+}
+
+/// A member's form's two states.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Forms {
+    pub opened: MemberForm,
+    pub form: MemberForm,
+}
+
+/// A member's form once the list has them as `now`: one nobody has touched follows, as a
+/// role's editor does ([`followed`]).
+#[must_use]
+pub fn member_followed(opened: &MemberForm, form: &MemberForm, now: &MemberForm) -> Forms {
+    if !same_form(form, opened) || same_form(now, opened) {
+        return Forms {
+            opened: opened.clone(),
+            form: form.clone(),
+        };
+    }
+    Forms {
+        opened: now.clone(),
+        form: now.clone(),
+    }
+}
+
+/// What this account may change of a member, on their row in Members and on their card.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberOffers {
+    /// Their roles to tick: with Manage roles, for anyone but a guest.
+    pub roles: bool,
+    /// In the roles' place, for a guest, where roles would otherwise be offered.
+    pub roles_note: Option<String>,
+    /// Their title: this account's own, or that of a member below it with Manage members.
+    pub title: bool,
+    /// Kick: with Manage members, a member below this account, never itself.
+    pub kick: bool,
+}
+
+/// What this account may change of a member: `can_manage_roles` is the server's, `guest` and
+/// `can_manage` the member's, `me` whether the member is this account.
+#[must_use]
+pub fn member_offers(
+    can_manage_roles: bool,
+    guest: bool,
+    can_manage: bool,
+    me: bool,
+) -> MemberOffers {
+    MemberOffers {
+        roles: can_manage_roles && !guest,
+        roles_note: (can_manage_roles && guest).then(|| GUEST_ROLES_NOTE.to_string()),
+        title: me || can_manage,
+        kick: !me && can_manage,
+    }
+}
+
+/// Whether a member's row in Members opens at all: there is something of theirs to change.
+#[must_use]
+pub fn offers_any(offers: &MemberOffers) -> bool {
+    offers.roles || offers.roles_note.is_some() || offers.title || offers.kick
+}
+
+/// The word beside a name on a card and in Members: the server's owner, or a guest.
+#[must_use]
+pub fn member_mark(owner: bool, guest: bool) -> Option<&'static str> {
+    if owner {
+        Some("Owner")
+    } else if guest {
+        Some("Guest")
+    } else {
+        None
+    }
+}
+
+/// The words beside the name on a profile card, in order: "You" on this account's own, then
+/// who they are to the server the card was opened in ("You" and "Owner", or "You" and
+/// "Guest", where both are so). `member` is `(owner, guest)`, `None` where there is no member
+/// (at Home, or before the server's members are read).
+#[must_use]
+pub fn card_marks(me: bool, member: Option<(bool, bool)>) -> Vec<String> {
+    let mut marks = Vec::new();
+    if me {
+        marks.push("You".to_string());
+    }
+    if let Some(mark) = member.and_then(|(owner, guest)| member_mark(owner, guest)) {
+        marks.push(mark.to_string());
+    }
+    marks
+}
+
+/// A member's tag as a message and a member row draw it: its words, and its tone, `None` for
+/// the plain chip. `None` where there is no tag or it has no words.
+#[must_use]
+pub fn tag_of(tag: Option<&TagSummary>) -> Option<(String, Option<String>)> {
+    let tag = tag.filter(|t| !t.label.is_empty())?;
+    Some((tag.label.clone(), tone_of(&tag.color).map(str::to_string)))
+}
+
+/// Whether a member is found by `query` in Members: their display name, nickname, handle or
+/// title has it in it, whatever its capitals, a leading `@` let go. Everyone is found by
+/// nothing typed.
+#[must_use]
+pub fn found(query: &str, display_name: &str, nickname: &str, handle: &str, title: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    let q = q.strip_prefix('@').unwrap_or(&q);
+    q.is_empty()
+        || [display_name, nickname, handle, title]
+            .iter()
+            .any(|s| s.to_lowercase().contains(q))
+}
+
+// The words, as every shell says them.
+
+pub const ROLES_HINT: &str =
+    "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.";
+/// The same where a role is moved from its menu alone (a phone, a narrow window).
+pub const ROLES_HINT_MENU: &str =
+    "In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone.";
+pub const EVERYONE_SUBTITLE: &str =
+    "What every member may do before any role adds to it. Guests are not among them.";
+pub const TITLE_HINT: &str = "Up to 32 characters. A title grants nothing.";
+pub const GUEST_ROLES_NOTE: &str = "Guests aren’t given roles.";
+pub const DELETE_ROLE_HINT: &str = "Its members lose what it allowed. This can’t be undone.";
+pub const TAG_HEADING: &str = "Tag beside names";
+pub const TAG_SUBTITLE: &str =
+    "What shows beside a member’s name in messages and in the member list.";
+pub const TAG_NOTE: &str = "A profile shows a member’s title and roles either way.";
+pub const TAG_ROLES_LABEL: &str = "Roles";
+pub const TAG_ROLES_CAPTION: &str =
+    "Each member’s highest role that is shown as a tag, in the role’s colour.";
+pub const TAG_TITLES_LABEL: &str = "Titles";
+pub const TAG_TITLES_CAPTION: &str =
+    "Each member’s title, in no colour. A member without a title has no tag.";
+/// Where a role's holders would be listed.
+pub const NOBODY_HOLDS: &str = "Nobody holds this role yet.";
+/// Where "Add members" would list who may be given a role.
+pub const EVERYONE_HOLDS: &str = "Everyone who can hold this role already does.";
+/// A search that found nobody, in Members and in "Add members".
+pub const NO_MEMBER_MATCHES: &str = "No member matches that.";
+pub const READING_MEMBERS: &str = "Reading the members…";
+/// On a profile card, under Roles, for a member who holds none where they may be given some.
+pub const NO_ROLES: &str = "No roles";
+pub const ADMINISTRATOR_TITLE: &str = "Turn on Administrator?";
+
+/// The title of what is asked before a role is deleted: "Delete Moderator?".
+#[must_use]
+pub fn delete_title(role_name: &str) -> String {
+    format!("Delete {role_name}?")
+}
+
+/// Under a role's name field.
+#[must_use]
+pub fn role_name_hint(server_name: &str) -> String {
+    format!("1 to 32 characters. No other role in {server_name} can have the same name.")
+}
+
+/// Under "Show as tag", as it stands.
+#[must_use]
+pub fn tag_switch_caption(shown: bool) -> &'static str {
+    if shown {
+        "This role can be the tag beside a member’s name."
+    } else {
+        "This role only carries permissions. It is nobody’s tag."
+    }
+}
+
+/// A permission's line where its switch is not this account's to turn.
+#[must_use]
+pub fn withheld_caption(detail: &str) -> String {
+    format!("{detail} You don’t hold it, so it is not yours to give or take.")
+}
+
+/// What is asked before Administrator is turned on: the lines under "Turn on
+/// Administrator?". How many hold the role is said when there are some; a new role has none.
+#[must_use]
+pub fn administrator_question(
+    server_name: &str,
+    role_name: &str,
+    held: Option<u64>,
+) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Administrator allows everything in {server_name}, in every channel, whatever a channel’s own permissions say."
+    )];
+    match held {
+        Some(1) => lines.push(format!("1 member holds {role_name}.")),
+        Some(n) if n > 1 => lines.push(format!("{} members hold {role_name}.", grouped(n))),
+        _ => {}
+    }
+    lines
+}
+
+/// What is asked before a role is deleted: the lines under "Delete Moderator?". How many hold
+/// it is said only when it is known: while the members are being read, or could not be,
+/// nothing is said of them, since "Nobody holds this role." would be said of one forty hold.
+#[must_use]
+pub fn delete_question(held: Option<u64>) -> Vec<String> {
+    let last = "This can’t be undone.".to_string();
+    let first = match held {
+        None => return vec![last],
+        Some(0) => "Nobody holds this role.".to_string(),
+        Some(1) => "1 member holds this role. They lose what it allowed.".to_string(),
+        Some(n) => format!(
+            "{} members hold this role. They lose what it allowed.",
+            grouped(n)
+        ),
+    };
+    vec![first, last]
+}
+
+/// Why a role was not saved, moved or deleted: the instance's `code` and `details.field`
+/// (empty where there are none), its `message` for anything else.
+#[must_use]
+pub fn role_refusal(code: &str, field: &str, message: &str, server_name: &str) -> String {
+    match (code, field) {
+        ("PERMISSION_DENIED", _) => "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give.".to_string(),
+        ("ALREADY_EXISTS", _) => format!("Another role in {server_name} has that name."),
+        ("NOT_FOUND", _) => "That role is gone. Someone deleted it.".to_string(),
+        ("INVALID_ARGUMENT", "name") => "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.".to_string(),
+        ("INVALID_ARGUMENT", "color") => "A role’s colour is one of the nine, or none.".to_string(),
+        ("INVALID_ARGUMENT", "role_ids") => "The roles changed while you were moving one. Try again.".to_string(),
+        ("FAILED_PRECONDITION", _) => "This server has as many roles as it can hold.".to_string(),
+        _ => message.to_string(),
+    }
+}
+
+/// Why a member's roles or title were not saved, or they were not kicked.
+#[must_use]
+pub fn member_refusal(code: &str, field: &str, message: &str) -> String {
+    match (code, field) {
+        ("PERMISSION_DENIED", _) => {
+            "That isn’t yours to change. They may be at or above your own highest role.".to_string()
+        }
+        ("NOT_FOUND", _) => "They are no longer a member.".to_string(),
+        ("FAILED_PRECONDITION", _) => "A member can’t hold that many roles.".to_string(),
+        ("INVALID_ARGUMENT", "title") => {
+            "A title is up to 32 characters on one line, with no hidden characters.".to_string()
+        }
+        // A member's own title, changed more often than the instance takes in an hour.
+        ("RATE_LIMITED", _) => {
+            "You’ve changed your title too many times this hour. Try again later.".to_string()
+        }
+        _ => message.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

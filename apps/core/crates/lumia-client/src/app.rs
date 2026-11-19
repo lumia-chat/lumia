@@ -4119,6 +4119,32 @@ impl App {
     }
 
     /// A server of the snapshot last taken.
+    /// Says stale the kept member list of each server where this account is
+    /// a guest and `events` added it to a channel: a guest is listed only
+    /// the members it shares a channel with (specs/authorization.md 6.4),
+    /// and is not told of those a new channel brings, so their tags would
+    /// be missing until the list is read again. Whether any was.
+    fn guest_lists_grown(&self, events: &[lumia_core::proto::AccountEvent]) -> bool {
+        let mut grown = false;
+        for event in events {
+            let Some(account_event::Payload::ChannelAdded(added)) = &event.payload else {
+                continue;
+            };
+            let Some(channel) = &added.channel else {
+                continue;
+            };
+            let server_id = wire::display(&channel.server_id);
+            if self.kept_server(&server_id).is_some_and(|s| s.guest)
+                && self
+                    .write(|inner| Ok(inner.reader.mark_member_list_stale(&server_id)?))
+                    .is_ok()
+            {
+                grown = true;
+            }
+        }
+        grown
+    }
+
     fn kept_server(&self, server_id: &str) -> Option<ServerSummary> {
         self.kept::<SnapshotSummary>(KEPT_SNAPSHOT)
             .ok()
@@ -4412,6 +4438,8 @@ impl App {
         spawn(async move {
             let _passed_on = passed_on;
             while let Some(ev) = erx.next().await {
+                // A guest let into a channel sees its people from then on.
+                let mut guest_sees_more = false;
                 match &ev {
                     GatewayEvent::Notice(Notice::Welcomed(w)) => {
                         let account = hex::encode(&w.account_id);
@@ -4442,6 +4470,7 @@ impl App {
                         }
                         drop(inner);
                         app.keep_profiles(&profiles_updated(events));
+                        guest_sees_more = app.guest_lists_grown(events);
                     }
                     // What the log would have said of the members kept was
                     // skipped: every kept list is as old as the last
@@ -4453,11 +4482,12 @@ impl App {
                 }
                 // A welcome too: lists left stale by a connection that
                 // ended, or a process that did, before they were read.
-                let refresh = matches!(
-                    &ev,
-                    GatewayEvent::Notice(Notice::Welcomed(_))
-                        | GatewayEvent::AccountSnapshotTaken { .. }
-                );
+                let refresh = guest_sees_more
+                    || matches!(
+                        &ev,
+                        GatewayEvent::Notice(Notice::Welcomed(_))
+                            | GatewayEvent::AccountSnapshotTaken { .. }
+                    );
                 let engine = app
                     .dm
                     .lock()
@@ -8556,6 +8586,33 @@ mod kept_tests {
                 ("Everyone".to_string(), true)
             ]
         );
+    }
+
+    #[test]
+    fn a_guest_let_into_a_channel_reads_its_members_again_and_a_member_does_not() {
+        let app = app_with_roles();
+        let added = account_events(vec![account_event::Payload::ChannelAdded(
+            lumia_core::proto::ChannelAdded {
+                channel: Some(lumia_core::proto::Channel {
+                    channel_id: vec![7; 16],
+                    server_id: vec![1; 16],
+                    ..Default::default()
+                }),
+            },
+        )]);
+        let stale = |app: &App| app.lock().reader.stale_member_lists().unwrap();
+
+        // A member was listed every member already.
+        assert!(!app.guest_lists_grown(&added));
+        assert!(stale(&app).is_empty());
+
+        // A guest is listed only those it shares a channel with: a new channel may bring more.
+        app.change_kept_server(&uid(1), |server| {
+            server.guest = true;
+            true
+        });
+        assert!(app.guest_lists_grown(&added));
+        assert_eq!(stale(&app), [uid(1)]);
     }
 
     #[test]

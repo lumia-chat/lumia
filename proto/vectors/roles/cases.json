@@ -1,0 +1,2194 @@
+{
+  "about": "Roles and titles as every client offers them (architecture 7.5): which settings sections an account sees, a role's lock and moves, a role editor's two drafts and when it saves, a member's form and what its save asks, what is offered of a member, the marks beside a name, the members' search, and every sentence said. `roles` names the lists of roles a case may use by name; `words` is every fixed sentence. Every client agrees on every case (lumia_client::roles).",
+  "roles": {
+    "acme": [
+      {
+        "roleId": "admin",
+        "name": "admin",
+        "color": "indigo",
+        "isEveryone": false,
+        "hideTag": false,
+        "canManage": false,
+        "permissions": []
+      },
+      {
+        "roleId": "mod",
+        "name": "mod",
+        "color": "green",
+        "isEveryone": false,
+        "hideTag": false,
+        "canManage": false,
+        "permissions": []
+      },
+      {
+        "roleId": "design",
+        "name": "design",
+        "color": "peach",
+        "isEveryone": false,
+        "hideTag": false,
+        "canManage": true,
+        "permissions": []
+      },
+      {
+        "roleId": "eng",
+        "name": "eng",
+        "color": "sky",
+        "isEveryone": false,
+        "hideTag": false,
+        "canManage": true,
+        "permissions": []
+      },
+      {
+        "roleId": "invite",
+        "name": "invite",
+        "color": "",
+        "isEveryone": false,
+        "hideTag": true,
+        "canManage": true,
+        "permissions": []
+      },
+      {
+        "roleId": "everyone",
+        "name": "Everyone",
+        "color": "",
+        "isEveryone": true,
+        "hideTag": false,
+        "canManage": true,
+        "permissions": []
+      }
+    ]
+  },
+  "words": {
+    "ROLES_HINT": "In order, highest first. Drag a role to move it. A new role starts last, just above Everyone.",
+    "ROLES_HINT_MENU": "In order, highest first. A role is moved from its menu. A new role starts last, just above Everyone.",
+    "EVERYONE_SUBTITLE": "What every member may do before any role adds to it. Guests are not among them.",
+    "TITLE_HINT": "Up to 32 characters. A title grants nothing.",
+    "GUEST_ROLES_NOTE": "Guests aren’t given roles.",
+    "DELETE_ROLE_HINT": "Its members lose what it allowed. This can’t be undone.",
+    "TAG_HEADING": "Tag beside names",
+    "TAG_SUBTITLE": "What shows beside a member’s name in messages and in the member list.",
+    "TAG_NOTE": "A profile shows a member’s title and roles either way.",
+    "TAG_ROLES_LABEL": "Roles",
+    "TAG_ROLES_CAPTION": "Each member’s highest role that is shown as a tag, in the role’s colour.",
+    "TAG_TITLES_LABEL": "Titles",
+    "TAG_TITLES_CAPTION": "Each member’s title, in no colour. A member without a title has no tag.",
+    "NOBODY_HOLDS": "Nobody holds this role yet.",
+    "EVERYONE_HOLDS": "Everyone who can hold this role already does.",
+    "NO_MEMBER_MATCHES": "No member matches that.",
+    "READING_MEMBERS": "Reading the members…",
+    "NO_ROLES": "No roles",
+    "ADMINISTRATOR_TITLE": "Turn on Administrator?",
+    "ADMINISTRATOR": "ADMINISTRATOR"
+  },
+  "cases": [
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": true,
+        "canManageRoles": true,
+        "canManageMembers": true
+      },
+      "answer": [
+        "overview",
+        "roles",
+        "members"
+      ],
+      "why": "each permission opens its own section"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": true,
+        "canManageRoles": false,
+        "canManageMembers": false
+      },
+      "answer": [
+        "overview"
+      ],
+      "why": "Manage server alone: Overview"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": false,
+        "canManageRoles": true,
+        "canManageMembers": false
+      },
+      "answer": [
+        "roles",
+        "members"
+      ],
+      "why": "Manage roles opens Members too, since a member's roles are changed there"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": false,
+        "canManageRoles": false,
+        "canManageMembers": true
+      },
+      "answer": [
+        "members"
+      ],
+      "why": "Manage members alone: Members"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": false,
+        "canManageRoles": false,
+        "canManageMembers": false
+      },
+      "answer": [],
+      "why": "none, and the settings do not open"
+    },
+    {
+      "rule": "toneOf",
+      "args": {
+        "color": "sky"
+      },
+      "answer": "sky",
+      "why": "one of the nine"
+    },
+    {
+      "rule": "toneOf",
+      "args": {
+        "color": ""
+      },
+      "answer": null,
+      "why": "no colour"
+    },
+    {
+      "rule": "toneOf",
+      "args": {
+        "color": "#ff0000"
+      },
+      "answer": null,
+      "why": "anything else is no tone"
+    },
+    {
+      "rule": "rolesCount",
+      "args": {
+        "roles": "acme"
+      },
+      "answer": "5 roles",
+      "why": "counted without Everyone"
+    },
+    {
+      "rule": "rolesCount",
+      "args": {
+        "roles": [
+          {
+            "roleId": "a",
+            "name": "a",
+            "color": "",
+            "isEveryone": false,
+            "hideTag": false,
+            "canManage": true,
+            "permissions": []
+          },
+          {
+            "roleId": "everyone",
+            "name": "everyone",
+            "color": "",
+            "isEveryone": true,
+            "hideTag": false,
+            "canManage": true,
+            "permissions": []
+          }
+        ]
+      },
+      "answer": "1 role",
+      "why": "one role is singular"
+    },
+    {
+      "rule": "membersCount",
+      "args": {
+        "n": 1
+      },
+      "answer": "1 member",
+      "why": "one member is singular"
+    },
+    {
+      "rule": "membersCount",
+      "args": {
+        "n": 1204
+      },
+      "answer": "1,204 members",
+      "why": "thousands grouped by a comma"
+    },
+    {
+      "rule": "membersCount",
+      "args": {
+        "n": 0
+      },
+      "answer": "0 members",
+      "why": "none is plural"
+    },
+    {
+      "rule": "grouped",
+      "args": {
+        "n": 1234567
+      },
+      "answer": "1,234,567",
+      "why": "every three digits from the right"
+    },
+    {
+      "rule": "grouped",
+      "args": {
+        "n": 999
+      },
+      "answer": "999",
+      "why": "under a thousand, as it is"
+    },
+    {
+      "rule": "holders",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "members": [
+          [
+            "eng"
+          ],
+          [
+            "eng",
+            "design"
+          ],
+          []
+        ]
+      },
+      "answer": 2,
+      "why": "those holding it"
+    },
+    {
+      "rule": "holders",
+      "args": {
+        "roles": "acme",
+        "roleId": "everyone",
+        "members": [
+          [
+            "eng"
+          ],
+          [
+            "eng",
+            "design"
+          ],
+          []
+        ]
+      },
+      "answer": 3,
+      "why": "everyone holds Everyone"
+    },
+    {
+      "rule": "holders",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "members": null
+      },
+      "answer": null,
+      "why": "not known while the members are not read"
+    },
+    {
+      "rule": "lockedRole",
+      "args": {
+        "roles": "acme",
+        "roleId": "admin"
+      },
+      "answer": true,
+      "why": "a role this account does not manage is locked"
+    },
+    {
+      "rule": "lockedRole",
+      "args": {
+        "roles": "acme",
+        "roleId": "design"
+      },
+      "answer": false,
+      "why": "one it manages is not"
+    },
+    {
+      "rule": "lockedRole",
+      "args": {
+        "roles": [
+          {
+            "roleId": "everyone",
+            "name": "everyone",
+            "color": "",
+            "isEveryone": true,
+            "hideTag": false,
+            "canManage": false,
+            "permissions": []
+          }
+        ],
+        "roleId": "everyone"
+      },
+      "answer": false,
+      "why": "Everyone always opens"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "design"
+      },
+      "answer": true,
+      "why": "before a role it manages"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "design",
+        "beforeId": "everyone"
+      },
+      "answer": true,
+      "why": "before Everyone: last"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "design",
+        "beforeId": "invite"
+      },
+      "answer": true,
+      "why": "down past one"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "mod"
+      },
+      "answer": false,
+      "why": "never before a locked role"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "admin"
+      },
+      "answer": false,
+      "why": "never before a locked role, however high"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "eng"
+      },
+      "answer": false,
+      "why": "where it is moves nothing"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "invite"
+      },
+      "answer": false,
+      "why": "just after itself moves nothing"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "mod",
+        "beforeId": "everyone"
+      },
+      "answer": false,
+      "why": "a locked role does not move"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "everyone",
+        "beforeId": "design"
+      },
+      "answer": false,
+      "why": "Everyone does not move"
+    },
+    {
+      "rule": "landsBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "gone",
+        "beforeId": "design"
+      },
+      "answer": false,
+      "why": "a role not in the list"
+    },
+    {
+      "rule": "movedBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "beforeId": "design"
+      },
+      "answer": [
+        "admin",
+        "mod",
+        "eng",
+        "design",
+        "invite"
+      ],
+      "why": "the whole order, every role but Everyone"
+    },
+    {
+      "rule": "movedBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "design",
+        "beforeId": "everyone"
+      },
+      "answer": [
+        "admin",
+        "mod",
+        "eng",
+        "invite",
+        "design"
+      ],
+      "why": "before Everyone is last"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "up": true
+      },
+      "answer": "design",
+      "why": "a step up"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "eng",
+        "up": false
+      },
+      "answer": "everyone",
+      "why": "a step down, before Everyone"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "design",
+        "up": false
+      },
+      "answer": "invite",
+      "why": "a step down"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "design",
+        "up": true
+      },
+      "answer": null,
+      "why": "Design is the highest Devon manages"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "invite",
+        "up": false
+      },
+      "answer": null,
+      "why": "the last above Everyone has no step down"
+    },
+    {
+      "rule": "stepBefore",
+      "args": {
+        "roles": "acme",
+        "roleId": "admin",
+        "up": false
+      },
+      "answer": null,
+      "why": "a locked role has no step"
+    },
+    {
+      "rule": "movedWords",
+      "args": {
+        "roleName": "Design",
+        "position": 3
+      },
+      "answer": "Design moved to position 3",
+      "why": "said once a role has moved"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "opened": null
+      },
+      "answer": false,
+      "why": "a new role with no name"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "  ",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "opened": null
+      },
+      "answer": false,
+      "why": "a name of spaces is none"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Design",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "opened": null
+      },
+      "answer": true,
+      "why": "a new role with a name"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "as it opened"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": " Moderator ",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "the name as a save keeps it is the same"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "renamed"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "no name"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "its colour let go"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": true,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "no longer a tag"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "SEND_IN_THREADS",
+            "MANAGE_ROLES"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "the permissions in another order are the same"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "a permission switched off"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Moderator",
+          "color": "sky",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "touched, against what it opened on whatever the role is now"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Everyone",
+          "color": "",
+          "hideTag": false,
+          "permissions": [
+            "VIEW_CHANNEL"
+          ]
+        },
+        "opened": {
+          "name": "Everyone",
+          "color": "",
+          "hideTag": false,
+          "permissions": [
+            "VIEW_CHANNEL"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "Everyone as it opened"
+    },
+    {
+      "rule": "savable",
+      "args": {
+        "draft": {
+          "name": "Everyone",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "opened": {
+          "name": "Everyone",
+          "color": "",
+          "hideTag": false,
+          "permissions": [
+            "VIEW_CHANNEL"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "of Everyone only the permissions change"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "sky",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "now": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "sky",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "why": "touched, both drafts stay: the save is the colour and nothing else"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "now": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        },
+        "draft": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "why": "untouched, the editor follows the role as it changes underneath"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "now": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "why": "the role read again as it was is no change"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator ",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "now": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator ",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "why": "a space typed after the name is a touch, and is not typed over"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "SEND_IN_THREADS",
+            "MANAGE_ROLES"
+          ]
+        },
+        "now": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        },
+        "draft": {
+          "name": "Mods",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "why": "changed and changed back, it is untouched again"
+    },
+    {
+      "rule": "followed",
+      "args": {
+        "opened": {
+          "name": "",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "draft": {
+          "name": "",
+          "color": "",
+          "hideTag": false,
+          "permissions": []
+        },
+        "now": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "why": "a role just made: its editor opens on nothing and takes the role when it comes"
+    },
+    {
+      "rule": "withheld",
+      "args": {
+        "grantable": [
+          "MANAGE_ROLES"
+        ],
+        "permission": "ADMINISTRATOR"
+      },
+      "answer": true,
+      "why": "a permission not held"
+    },
+    {
+      "rule": "withheld",
+      "args": {
+        "grantable": [
+          "MANAGE_ROLES"
+        ],
+        "permission": "MANAGE_ROLES"
+      },
+      "answer": false,
+      "why": "one held"
+    },
+    {
+      "rule": "rolesHeld",
+      "args": {
+        "roles": "acme",
+        "roleIds": [
+          "invite",
+          "everyone",
+          "design"
+        ]
+      },
+      "answer": [
+        {
+          "roleId": "design",
+          "label": "design",
+          "tone": "peach"
+        },
+        {
+          "roleId": "invite",
+          "label": "invite",
+          "tone": null
+        }
+      ],
+      "why": "in the server's order, without Everyone, the plain chip for no colour"
+    },
+    {
+      "rule": "roleChoices",
+      "args": {
+        "roles": "acme",
+        "held": [
+          "mod",
+          "eng"
+        ]
+      },
+      "answer": [
+        {
+          "id": "admin",
+          "name": "admin",
+          "tone": "indigo",
+          "checked": false,
+          "locked": true
+        },
+        {
+          "id": "mod",
+          "name": "mod",
+          "tone": "green",
+          "checked": true,
+          "locked": true
+        },
+        {
+          "id": "design",
+          "name": "design",
+          "tone": "peach",
+          "checked": false,
+          "locked": false
+        },
+        {
+          "id": "eng",
+          "name": "eng",
+          "tone": "sky",
+          "checked": true,
+          "locked": false
+        },
+        {
+          "id": "invite",
+          "name": "invite",
+          "tone": null,
+          "checked": false,
+          "locked": false
+        }
+      ],
+      "why": "every role but Everyone, those not this account's to give marked"
+    },
+    {
+      "rule": "toggledRole",
+      "args": {
+        "roles": "acme",
+        "held": [
+          "eng"
+        ],
+        "roleId": "design"
+      },
+      "answer": [
+        "eng",
+        "design"
+      ],
+      "why": "a tick gives"
+    },
+    {
+      "rule": "toggledRole",
+      "args": {
+        "roles": "acme",
+        "held": [
+          "eng",
+          "design"
+        ],
+        "roleId": "eng"
+      },
+      "answer": [
+        "design"
+      ],
+      "why": "and takes"
+    },
+    {
+      "rule": "toggledRole",
+      "args": {
+        "roles": "acme",
+        "held": [
+          "mod"
+        ],
+        "roleId": "mod"
+      },
+      "answer": [
+        "mod"
+      ],
+      "why": "a locked role stays"
+    },
+    {
+      "rule": "toggledRole",
+      "args": {
+        "roles": "acme",
+        "held": [],
+        "roleId": "admin"
+      },
+      "answer": [],
+      "why": "a locked role is not given"
+    },
+    {
+      "rule": "toggledRole",
+      "args": {
+        "roles": "acme",
+        "held": [],
+        "roleId": "everyone"
+      },
+      "answer": [],
+      "why": "Everyone is not ticked"
+    },
+    {
+      "rule": "memberChanges",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "eng",
+            "design"
+          ],
+          "title": "Staff Engineer"
+        },
+        "form": {
+          "roleIds": [
+            "design",
+            "eng"
+          ],
+          "title": " Staff Engineer "
+        }
+      },
+      "answer": {
+        "give": [],
+        "take": [],
+        "title": null
+      },
+      "why": "the same roles in another order and the title as kept: nothing"
+    },
+    {
+      "rule": "memberChanges",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "eng",
+            "design"
+          ],
+          "title": "Staff Engineer"
+        },
+        "form": {
+          "roleIds": [
+            "eng",
+            "invite"
+          ],
+          "title": " Principal "
+        }
+      },
+      "answer": {
+        "give": [
+          "invite"
+        ],
+        "take": [
+          "design"
+        ],
+        "title": "Principal"
+      },
+      "why": "one ticked, one unticked, the title retyped: one request with all three"
+    },
+    {
+      "rule": "memberChanges",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "eng",
+            "design"
+          ],
+          "title": "Staff Engineer"
+        },
+        "form": {
+          "roleIds": [
+            "eng",
+            "design"
+          ],
+          "title": "  "
+        }
+      },
+      "answer": {
+        "give": [],
+        "take": [],
+        "title": ""
+      },
+      "why": "a title cleared is a title to set, empty"
+    },
+    {
+      "rule": "memberChanges",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [],
+          "title": ""
+        }
+      },
+      "answer": {
+        "give": [],
+        "take": [
+          "design"
+        ],
+        "title": null
+      },
+      "why": "against the form as it opened: a role given elsewhere meanwhile is not taken"
+    },
+    {
+      "rule": "changesAny",
+      "args": {
+        "changes": {
+          "give": [],
+          "take": [],
+          "title": null
+        }
+      },
+      "answer": false,
+      "why": "nothing to ask"
+    },
+    {
+      "rule": "changesAny",
+      "args": {
+        "changes": {
+          "give": [],
+          "take": [],
+          "title": ""
+        }
+      },
+      "answer": true,
+      "why": "a title cleared"
+    },
+    {
+      "rule": "changesAny",
+      "args": {
+        "changes": {
+          "give": [],
+          "take": [
+            "design"
+          ],
+          "title": null
+        }
+      },
+      "answer": true,
+      "why": "a role taken"
+    },
+    {
+      "rule": "memberFollowed",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [],
+          "title": ""
+        },
+        "now": {
+          "roleIds": [
+            "design",
+            "mod"
+          ],
+          "title": "Lead"
+        }
+      },
+      "answer": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [],
+          "title": ""
+        }
+      },
+      "why": "touched, the form keeps what it opened with"
+    },
+    {
+      "rule": "memberFollowed",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "now": {
+          "roleIds": [
+            "design",
+            "mod"
+          ],
+          "title": "Lead"
+        }
+      },
+      "answer": {
+        "opened": {
+          "roleIds": [
+            "design",
+            "mod"
+          ],
+          "title": "Lead"
+        },
+        "form": {
+          "roleIds": [
+            "design",
+            "mod"
+          ],
+          "title": "Lead"
+        }
+      },
+      "why": "untouched, the form follows the member"
+    },
+    {
+      "rule": "memberFollowed",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [
+            "design"
+          ],
+          "title": "L"
+        },
+        "now": {
+          "roleIds": [
+            "design",
+            "mod"
+          ],
+          "title": "Lead"
+        }
+      },
+      "answer": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [
+            "design"
+          ],
+          "title": "L"
+        }
+      },
+      "why": "a title being typed is a touch"
+    },
+    {
+      "rule": "memberOffers",
+      "args": {
+        "canManageRoles": true,
+        "guest": false,
+        "canManage": true,
+        "me": false
+      },
+      "answer": {
+        "roles": true,
+        "rolesNote": null,
+        "title": true,
+        "kick": true
+      },
+      "why": "Manage roles, a member below"
+    },
+    {
+      "rule": "memberOffers",
+      "args": {
+        "canManageRoles": true,
+        "guest": false,
+        "canManage": false,
+        "me": false
+      },
+      "answer": {
+        "roles": true,
+        "rolesNote": null,
+        "title": false,
+        "kick": false
+      },
+      "why": "a member above: their roles below this account's own can still be given and taken"
+    },
+    {
+      "rule": "memberOffers",
+      "args": {
+        "canManageRoles": true,
+        "guest": true,
+        "canManage": true,
+        "me": false
+      },
+      "answer": {
+        "roles": false,
+        "rolesNote": "Guests aren’t given roles.",
+        "title": true,
+        "kick": true
+      },
+      "why": "a guest: no roles, and why"
+    },
+    {
+      "rule": "memberOffers",
+      "args": {
+        "canManageRoles": false,
+        "guest": false,
+        "canManage": true,
+        "me": false
+      },
+      "answer": {
+        "roles": false,
+        "rolesNote": null,
+        "title": true,
+        "kick": true
+      },
+      "why": "Manage members alone"
+    },
+    {
+      "rule": "memberOffers",
+      "args": {
+        "canManageRoles": false,
+        "guest": false,
+        "canManage": false,
+        "me": true
+      },
+      "answer": {
+        "roles": false,
+        "rolesNote": null,
+        "title": true,
+        "kick": false
+      },
+      "why": "this account itself: its own title, never Kick"
+    },
+    {
+      "rule": "offersAny",
+      "args": {
+        "offers": {
+          "roles": false,
+          "rolesNote": null,
+          "title": false,
+          "kick": false
+        }
+      },
+      "answer": false,
+      "why": "nothing to change: the row does not open"
+    },
+    {
+      "rule": "offersAny",
+      "args": {
+        "offers": {
+          "roles": false,
+          "rolesNote": "Guests aren’t given roles.",
+          "title": false,
+          "kick": false
+        }
+      },
+      "answer": true,
+      "why": "a guest's note is something to show"
+    },
+    {
+      "rule": "memberMark",
+      "args": {
+        "owner": true,
+        "guest": false
+      },
+      "answer": "Owner",
+      "why": "the owner"
+    },
+    {
+      "rule": "memberMark",
+      "args": {
+        "owner": false,
+        "guest": true
+      },
+      "answer": "Guest",
+      "why": "a guest"
+    },
+    {
+      "rule": "memberMark",
+      "args": {
+        "owner": false,
+        "guest": false
+      },
+      "answer": null,
+      "why": "anyone else"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": true,
+        "member": {
+          "owner": true,
+          "guest": false
+        }
+      },
+      "answer": [
+        "You",
+        "Owner"
+      ],
+      "why": "this account's own card, as owner: both"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": true,
+        "member": {
+          "owner": false,
+          "guest": true
+        }
+      },
+      "answer": [
+        "You",
+        "Guest"
+      ],
+      "why": "as a guest: both"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": true,
+        "member": {
+          "owner": false,
+          "guest": false
+        }
+      },
+      "answer": [
+        "You"
+      ],
+      "why": "a member"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": false,
+        "member": {
+          "owner": true,
+          "guest": false
+        }
+      },
+      "answer": [
+        "Owner"
+      ],
+      "why": "the owner, to someone else"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": false,
+        "member": {
+          "owner": false,
+          "guest": false
+        }
+      },
+      "answer": [],
+      "why": "nothing"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": true,
+        "member": null
+      },
+      "answer": [
+        "You"
+      ],
+      "why": "at Home, or before the members are read"
+    },
+    {
+      "rule": "cardMarks",
+      "args": {
+        "me": false,
+        "member": null
+      },
+      "answer": [],
+      "why": "nothing at Home"
+    },
+    {
+      "rule": "tagOf",
+      "args": {
+        "tag": {
+          "label": "Moderator",
+          "color": "green"
+        }
+      },
+      "answer": {
+        "label": "Moderator",
+        "tone": "green"
+      },
+      "why": "a role, on its tone"
+    },
+    {
+      "rule": "tagOf",
+      "args": {
+        "tag": {
+          "label": "Staff Engineer",
+          "color": ""
+        }
+      },
+      "answer": {
+        "label": "Staff Engineer",
+        "tone": null
+      },
+      "why": "a title, the plain chip"
+    },
+    {
+      "rule": "tagOf",
+      "args": {
+        "tag": null
+      },
+      "answer": null,
+      "why": "no tag"
+    },
+    {
+      "rule": "tagOf",
+      "args": {
+        "tag": {
+          "label": "",
+          "color": "green"
+        }
+      },
+      "answer": null,
+      "why": "a tag of no words is none"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Maya Chen",
+        "nickname": "",
+        "handle": "maya",
+        "title": "",
+        "query": ""
+      },
+      "answer": true,
+      "why": "nothing typed finds everyone"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Devon Park",
+        "nickname": "",
+        "handle": "devon",
+        "title": "Staff Engineer",
+        "query": "ENGINEER"
+      },
+      "answer": true,
+      "why": "the title, whatever its capitals"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Maya Chen",
+        "nickname": "",
+        "handle": "maya",
+        "title": "",
+        "query": "ENGINEER"
+      },
+      "answer": false,
+      "why": "not in the name, handle or title"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Maya Chen",
+        "nickname": "",
+        "handle": "maya",
+        "title": "",
+        "query": "@maya"
+      },
+      "answer": true,
+      "why": "a handle with its @"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Maya Chen",
+        "nickname": "",
+        "handle": "maya",
+        "title": "",
+        "query": "chen"
+      },
+      "answer": true,
+      "why": "the display name"
+    },
+    {
+      "rule": "found",
+      "args": {
+        "displayName": "Devon Park",
+        "nickname": "",
+        "handle": "devon",
+        "title": "Staff Engineer",
+        "query": "nobody"
+      },
+      "answer": false,
+      "why": "nobody"
+    },
+    {
+      "rule": "roleNameHint",
+      "args": {
+        "serverName": "Acme"
+      },
+      "answer": "1 to 32 characters. No other role in Acme can have the same name.",
+      "why": "under the name"
+    },
+    {
+      "rule": "tagSwitchCaption",
+      "args": {
+        "shown": true
+      },
+      "answer": "This role can be the tag beside a member’s name.",
+      "why": "Show as tag on"
+    },
+    {
+      "rule": "tagSwitchCaption",
+      "args": {
+        "shown": false
+      },
+      "answer": "This role only carries permissions. It is nobody’s tag.",
+      "why": "Show as tag off"
+    },
+    {
+      "rule": "withheldCaption",
+      "args": {
+        "detail": "Change the server’s name, picture and settings."
+      },
+      "answer": "Change the server’s name, picture and settings. You don’t hold it, so it is not yours to give or take.",
+      "why": "a permission not this account's to give"
+    },
+    {
+      "rule": "deleteTitle",
+      "args": {
+        "roleName": "Moderator"
+      },
+      "answer": "Delete Moderator?",
+      "why": "the question's title"
+    },
+    {
+      "rule": "administratorQuestion",
+      "args": {
+        "serverName": "Acme",
+        "roleName": "Moderator",
+        "held": 3
+      },
+      "answer": [
+        "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say.",
+        "3 members hold Moderator."
+      ],
+      "why": "how many hold the role"
+    },
+    {
+      "rule": "administratorQuestion",
+      "args": {
+        "serverName": "Acme",
+        "roleName": "Moderator",
+        "held": 1
+      },
+      "answer": [
+        "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say.",
+        "1 member holds Moderator."
+      ],
+      "why": "one holds it"
+    },
+    {
+      "rule": "administratorQuestion",
+      "args": {
+        "serverName": "Acme",
+        "roleName": "Moderator",
+        "held": 1204
+      },
+      "answer": [
+        "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say.",
+        "1,204 members hold Moderator."
+      ],
+      "why": "grouped"
+    },
+    {
+      "rule": "administratorQuestion",
+      "args": {
+        "serverName": "Acme",
+        "roleName": "",
+        "held": null
+      },
+      "answer": [
+        "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say."
+      ],
+      "why": "a new role: nobody to count"
+    },
+    {
+      "rule": "administratorQuestion",
+      "args": {
+        "serverName": "Acme",
+        "roleName": "Moderator",
+        "held": 0
+      },
+      "answer": [
+        "Administrator allows everything in Acme, in every channel, whatever a channel’s own permissions say."
+      ],
+      "why": "nobody holds it"
+    },
+    {
+      "rule": "deleteQuestion",
+      "args": {
+        "held": 3
+      },
+      "answer": [
+        "3 members hold this role. They lose what it allowed.",
+        "This can’t be undone."
+      ],
+      "why": "how many hold it"
+    },
+    {
+      "rule": "deleteQuestion",
+      "args": {
+        "held": 1
+      },
+      "answer": [
+        "1 member holds this role. They lose what it allowed.",
+        "This can’t be undone."
+      ],
+      "why": "one holds it"
+    },
+    {
+      "rule": "deleteQuestion",
+      "args": {
+        "held": 0
+      },
+      "answer": [
+        "Nobody holds this role.",
+        "This can’t be undone."
+      ],
+      "why": "nobody holds it"
+    },
+    {
+      "rule": "deleteQuestion",
+      "args": {
+        "held": null
+      },
+      "answer": [
+        "This can’t be undone."
+      ],
+      "why": "not known: nothing is said of who holds it"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "ALREADY_EXISTS",
+        "field": "",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "Another role in Acme has that name.",
+      "why": "a name taken"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "INVALID_ARGUMENT",
+        "field": "name",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "A role’s name is 1 to 32 characters on one line, with no hidden characters, and can’t be “everyone”.",
+      "why": "a name refused"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "INVALID_ARGUMENT",
+        "field": "color",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "A role’s colour is one of the nine, or none.",
+      "why": "a colour refused"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "INVALID_ARGUMENT",
+        "field": "role_ids",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "The roles changed while you were moving one. Try again.",
+      "why": "an order out of date"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "PERMISSION_DENIED",
+        "field": "",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "That isn’t yours to change. A role at or above your own highest, or a permission you don’t hold, is not yours to give.",
+      "why": "not this account's"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "NOT_FOUND",
+        "field": "",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "That role is gone. Someone deleted it.",
+      "why": "deleted elsewhere"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "FAILED_PRECONDITION",
+        "field": "",
+        "message": "",
+        "serverName": "Acme"
+      },
+      "answer": "This server has as many roles as it can hold.",
+      "why": "the limit"
+    },
+    {
+      "rule": "roleRefusal",
+      "args": {
+        "code": "",
+        "field": "",
+        "message": "transport: offline",
+        "serverName": "Acme"
+      },
+      "answer": "transport: offline",
+      "why": "anything else in its own words"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "NOT_FOUND",
+        "field": "",
+        "message": ""
+      },
+      "answer": "They are no longer a member.",
+      "why": "gone"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "INVALID_ARGUMENT",
+        "field": "title",
+        "message": ""
+      },
+      "answer": "A title is up to 32 characters on one line, with no hidden characters.",
+      "why": "a title refused"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "RATE_LIMITED",
+        "field": "",
+        "message": ""
+      },
+      "answer": "You’ve changed your title too many times this hour. Try again later.",
+      "why": "one's own title, too often"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "PERMISSION_DENIED",
+        "field": "",
+        "message": ""
+      },
+      "answer": "That isn’t yours to change. They may be at or above your own highest role.",
+      "why": "not this account's"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "FAILED_PRECONDITION",
+        "field": "",
+        "message": ""
+      },
+      "answer": "A member can’t hold that many roles.",
+      "why": "the limit"
+    },
+    {
+      "rule": "memberRefusal",
+      "args": {
+        "code": "",
+        "field": "",
+        "message": "nope"
+      },
+      "answer": "nope",
+      "why": "anything else in its own words"
+    }
+  ]
+}

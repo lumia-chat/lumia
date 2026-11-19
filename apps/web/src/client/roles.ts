@@ -3,7 +3,12 @@
 // The core says what this account may do (each role's and member's
 // `canManage`, the server's `grantable` and its `canManage…` switches) and
 // the instance decides every write; this reads those into what a screen
-// offers, and holds the words every screen says the same way.
+// offers, and holds the words every screen says the same way. The rules and
+// words are the core's (`lumia_client::roles`), which the desktop and the
+// phones ask; the page needs an answer at once and has the core in a
+// worker, so it keeps this copy, held to the cases every client agrees on
+// (`proto/vectors/roles/cases.json`, `roles.test.ts`), as it does the
+// viewer's.
 import type { MemberSummary, RoleSummary, ServerSummary, TagSummary } from "./bridge";
 
 /** The nine tones a role may have, as the design system names them. */
@@ -34,15 +39,20 @@ export function settingsSections(server: Pick<ServerSummary, "canManage" | "canM
   return sections;
 }
 
+/** `n` with its thousands grouped by commas, as every count on these screens is written. */
+export function grouped(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
 /** "5 roles": a server's roles counted without Everyone. */
 export function rolesCount(roles: Pick<RoleSummary, "isEveryone">[]): string {
   const n = roles.filter((r) => !r.isEveryone).length;
-  return n === 1 ? "1 role" : `${n} roles`;
+  return n === 1 ? "1 role" : `${grouped(n)} roles`;
 }
 
 /** "1 member", "1,204 members". */
 export function membersCount(n: number): string {
-  return n === 1 ? "1 member" : `${n.toLocaleString("en-US")} members`;
+  return n === 1 ? "1 member" : `${grouped(n)} members`;
 }
 
 /** How many of `members` hold a role; Everyone is held by all of them. Undefined until the members are known. */
@@ -90,6 +100,11 @@ export function stepBefore(roles: Ordered[], roleId: string, step: -1 | 1): stri
   const at = roles.findIndex((r) => r.roleId === roleId);
   const before = roles[step === -1 ? at - 1 : at + 2];
   return at >= 0 && before && landsBefore(roles, roleId, before.roleId) ? before.roleId : undefined;
+}
+
+/** What is said once a role has moved: "Design moved to position 3", counted from 1 among the roles but Everyone. */
+export function movedWords(roleName: string, position: number): string {
+  return `${roleName} moved to position ${position}`;
 }
 
 /** What a role's editor holds while it is open. */
@@ -304,11 +319,15 @@ export function redressed(was: { servers: Dressing[] } | undefined, now: { serve
     .map((server) => server.serverId);
 }
 
-/** Members whose name, handle or title has `query` in it, whatever its capitals; all of them for nothing typed. */
-export function searched<M extends Pick<MemberSummary, "displayName" | "nickname" | "handle" | "title">>(members: M[], query: string): M[] {
+/** Whether a member is found by `query`: their display name, nickname, handle or title has it in it, whatever its capitals, a leading `@` let go. Everyone is found by nothing typed. */
+export function found(query: string, m: Pick<MemberSummary, "displayName" | "nickname" | "handle" | "title">): boolean {
   const q = query.trim().toLowerCase().replace(/^@/, "");
-  if (!q) return members;
-  return members.filter((m) => [m.displayName, m.nickname, m.handle, m.title].some((s) => s.toLowerCase().includes(q)));
+  return !q || [m.displayName, m.nickname, m.handle, m.title].some((s) => s.toLowerCase().includes(q));
+}
+
+/** The members `query` finds (`found`); all of them for nothing typed. */
+export function searched<M extends Pick<MemberSummary, "displayName" | "nickname" | "handle" | "title">>(members: M[], query: string): M[] {
+  return members.filter((m) => found(query, m));
 }
 
 // ── Words ────────────────────────────────────────────────────
@@ -336,6 +355,13 @@ export const TAG_CHOICES = {
   titles: { label: "Titles", caption: "Each member’s title, in no colour. A member without a title has no tag." },
 } as const;
 
+export const ADMINISTRATOR_TITLE = "Turn on Administrator?";
+
+/** The title of what is asked before a role is deleted: "Delete Moderator?". */
+export function deleteTitle(roleName: string): string {
+  return `Delete ${roleName}?`;
+}
+
 export function roleNameHint(serverName: string): string {
   return `1 to 32 characters. No other role in ${serverName} can have the same name.`;
 }
@@ -353,7 +379,7 @@ export function withheldCaption(detail: string): string {
 /** What is asked before Administrator is turned on: the lines under "Turn on Administrator?". A new role has no holders to count. */
 export function administratorQuestion(serverName: string, roleName: string, held: number | undefined): string[] {
   const lines = [`Administrator allows everything in ${serverName}, in every channel, whatever a channel’s own permissions say.`];
-  if (held) lines.push(held === 1 ? `1 member holds ${roleName}.` : `${held.toLocaleString("en-US")} members hold ${roleName}.`);
+  if (held) lines.push(held === 1 ? `1 member holds ${roleName}.` : `${grouped(held)} members hold ${roleName}.`);
   return lines;
 }
 
@@ -366,7 +392,7 @@ export function administratorQuestion(serverName: string, roleName: string, held
 export function deleteQuestion(held: number | undefined): string[] {
   const last = "This can’t be undone.";
   if (held === undefined) return [last];
-  const first = held === 0 ? "Nobody holds this role." : held === 1 ? "1 member holds this role. They lose what it allowed." : `${held.toLocaleString("en-US")} members hold this role. They lose what it allowed.`;
+  const first = held === 0 ? "Nobody holds this role." : held === 1 ? "1 member holds this role. They lose what it allowed." : `${grouped(held)} members hold this role. They lose what it allowed.`;
   return [first, last];
 }
 

@@ -38,6 +38,7 @@ import type { MemberSummary, PermissionGroup, RoleSummary, ServerSummary, Snapsh
 import type { MenuPoint } from "../client/menus";
 import {
   ADMINISTRATOR,
+  ADMINISTRATOR_TITLE,
   DELETE_ROLE_HINT,
   EVERYONE_HOLDS,
   EVERYONE_SUBTITLE,
@@ -50,6 +51,7 @@ import {
   TITLE_HINT,
   administratorQuestion,
   deleteQuestion,
+  deleteTitle,
   changesAny,
   draftOf,
   followed,
@@ -63,6 +65,7 @@ import {
   memberOffers,
   memberRefusal,
   movedBefore,
+  movedWords,
   offersAny,
   roleChoices,
   roleNameHint,
@@ -171,7 +174,7 @@ export function RolesSection(props: { server: ServerSummary; members: MemberSumm
     const name = roles().find((r) => r.roleId === roleId)?.name ?? "";
     setError("");
     setMoved(order);
-    setSaid(`${name} moved to position ${order.indexOf(roleId) + 1}`);
+    setSaid(movedWords(name, order.indexOf(roleId) + 1));
     try {
       tookRoles(await client().reorderRoles(props.server.serverId, order), props.server.serverId);
     } catch (err) {
@@ -259,7 +262,7 @@ export function RolesSection(props: { server: ServerSummary; members: MemberSumm
               const { role, anchor } = a();
               return (
                 <Popover anchor={anchor} onClose={() => setAsking(null)}>
-                  <ConfirmPop title={`Delete ${role.name}?`} confirm="Delete role" danger onCancel={() => setAsking(null)} onConfirm={() => void remove(role.id)}>
+                  <ConfirmPop title={deleteTitle(role.name)} confirm="Delete role" danger onCancel={() => setAsking(null)} onConfirm={() => void remove(role.id)}>
                     <For each={deleteQuestion(role.members)}>{(line) => <p>{line}</p>}</For>
                   </ConfirmPop>
                 </Popover>
@@ -553,7 +556,7 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
           return (
             <Popover anchor={anchor} onClose={() => setAskingAdmin(null)}>
               <ConfirmPop
-                title="Turn on Administrator?"
+                title={ADMINISTRATOR_TITLE}
                 confirm="Turn on"
                 onCancel={() => setAskingAdmin(null)}
                 onConfirm={() => {
@@ -572,7 +575,7 @@ function RoleEditor(props: { server: ServerSummary; role: RoleSummary | undefine
           const anchor = asked();
           return (
             <Popover anchor={anchor} onClose={() => setAskingDelete(null)}>
-              <ConfirmPop title={`Delete ${props.role?.name ?? "this role"}?`} confirm="Delete role" danger onCancel={() => setAskingDelete(null)} onConfirm={() => void remove()}>
+              <ConfirmPop title={deleteTitle(props.role?.name ?? "this role")} confirm="Delete role" danger onCancel={() => setAskingDelete(null)} onConfirm={() => void remove()}>
                 <For each={deleteQuestion(held())}>{(line) => <p>{line}</p>}</For>
               </ConfirmPop>
             </Popover>
