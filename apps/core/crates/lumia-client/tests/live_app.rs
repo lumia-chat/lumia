@@ -669,19 +669,19 @@ async fn roles_and_titles_reach_every_member() {
     // A title is the member's own; someone else's is not theirs to set.
     let titled = member
         .app
-        .set_member_title(&server_id, &member_id, "  Staff Engineer ")
+        .change_member(&server_id, &member_id, &[], &[], Some("  Staff Engineer "))
         .await
         .unwrap();
     assert_eq!(titled.title, "Staff Engineer");
     let owner_id = owner.app.snapshot().await.unwrap().account_id;
     let not_theirs = member
         .app
-        .set_member_title(&server_id, &owner_id, "Nope")
+        .change_member(&server_id, &owner_id, &[], &[], Some("Nope"))
         .await;
     assert!(denied(&not_theirs, "PERMISSION_DENIED"), "{not_theirs:?}");
     let long = member
         .app
-        .set_member_title(&server_id, &member_id, &"a".repeat(33))
+        .change_member(&server_id, &member_id, &[], &[], Some(&"a".repeat(33)))
         .await;
     assert!(denied(&long, "INVALID_ARGUMENT"), "{long:?}");
 

@@ -2520,32 +2520,6 @@ impl Client {
             .into())
     }
 
-    /// A role's name, colour, tag switch and permissions, whole; a
-    /// permission no editor offers is kept as the role has it, and of
-    /// `Everyone` only the permissions change. Returns the snapshot as it
-    /// then is. Going, once the shells save through `change_role`.
-    pub fn update_role(
-        &self,
-        server_id: String,
-        role_id: String,
-        name: String,
-        color: String,
-        hide_tag: bool,
-        permissions: Vec<String>,
-    ) -> Res<SnapshotSummary> {
-        Ok(self
-            .runtime
-            .block_on(self.app.update_role(
-                &server_id,
-                &role_id,
-                &name,
-                &color,
-                hide_tag,
-                &permissions,
-            ))?
-            .into())
-    }
-
     /// Deletes a role, from whoever held it too. Returns the snapshot as it
     /// then is.
     pub fn delete_role(&self, server_id: String, role_id: String) -> Res<SnapshotSummary> {
@@ -2586,39 +2560,6 @@ impl Client {
                 &take,
                 title.as_deref(),
             ))?
-            .into())
-    }
-
-    /// The roles a member is to hold, the whole set. Returns the member as
-    /// the server now shows them. Going, once the shells save through
-    /// `change_member`.
-    pub fn set_member_roles(
-        &self,
-        server_id: String,
-        account_id: String,
-        role_ids: Vec<String>,
-    ) -> Res<MemberSummary> {
-        Ok(self
-            .runtime
-            .block_on(
-                self.app
-                    .set_member_roles(&server_id, &account_id, &role_ids),
-            )?
-            .into())
-    }
-
-    /// A member's title in a server, up to 32 characters; empty clears it.
-    /// This account's own is its own to set. Returns the member as the
-    /// server now shows them.
-    pub fn set_member_title(
-        &self,
-        server_id: String,
-        account_id: String,
-        title: String,
-    ) -> Res<MemberSummary> {
-        Ok(self
-            .runtime
-            .block_on(self.app.set_member_title(&server_id, &account_id, &title))?
             .into())
     }
 

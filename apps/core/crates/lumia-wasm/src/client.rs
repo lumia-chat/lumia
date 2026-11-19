@@ -410,33 +410,6 @@ impl Client {
         )
     }
 
-    /// A role's name, colour, tag switch and permissions, whole; a
-    /// permission no editor offers is kept as the role has it, and of
-    /// `Everyone` only the permissions change. The snapshot as it then is.
-    /// Going, once the page saves through `changeRole`.
-    ///
-    /// # Errors
-    /// As `createRole`; `PERMISSION_DENIED` for a role this account may not
-    /// manage.
-    #[wasm_bindgen(js_name = updateRole)]
-    pub async fn update_role(
-        &self,
-        server_id: String,
-        role_id: String,
-        name: String,
-        color: String,
-        hide_tag: bool,
-        permissions: Vec<String>,
-    ) -> Result<JsValue, JsError> {
-        to_js(
-            &self
-                .app
-                .update_role(&server_id, &role_id, &name, &color, hide_tag, &permissions)
-                .await
-                .map_err(js_api)?,
-        )
-    }
-
     /// Deletes a role, from whoever held it too. The snapshot as it then is.
     ///
     /// # Errors
@@ -502,51 +475,6 @@ impl Client {
             &self
                 .app
                 .change_member(&server_id, &account_id, &give, &take, title.as_deref())
-                .await
-                .map_err(js_api)?,
-        )
-    }
-
-    /// The roles a member is to hold, the whole set. The member as the
-    /// server now shows them. Going, once the page saves through
-    /// `changeMember`.
-    ///
-    /// # Errors
-    /// `PERMISSION_DENIED` for a role this account may not manage;
-    /// `NOT_FOUND` for someone who is not a member.
-    #[wasm_bindgen(js_name = setMemberRoles)]
-    pub async fn set_member_roles(
-        &self,
-        server_id: String,
-        account_id: String,
-        role_ids: Vec<String>,
-    ) -> Result<JsValue, JsError> {
-        to_js(
-            &self
-                .app
-                .set_member_roles(&server_id, &account_id, &role_ids)
-                .await
-                .map_err(js_api)?,
-        )
-    }
-
-    /// A member's title in a server, up to 32 characters; empty clears it.
-    /// This account's own is its own to set. The member as the server now
-    /// shows them.
-    ///
-    /// # Errors
-    /// `INVALID_ARGUMENT` with `details.field` `title`; `PERMISSION_DENIED`.
-    #[wasm_bindgen(js_name = setMemberTitle)]
-    pub async fn set_member_title(
-        &self,
-        server_id: String,
-        account_id: String,
-        title: String,
-    ) -> Result<JsValue, JsError> {
-        to_js(
-            &self
-                .app
-                .set_member_title(&server_id, &account_id, &title)
                 .await
                 .map_err(js_api)?,
         )

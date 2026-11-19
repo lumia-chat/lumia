@@ -3097,53 +3097,6 @@ impl App {
         self.snapshot().await
     }
 
-    /// `PUT /servers/{id}/roles/{role_id}`: the role's name, colour, tag
-    /// switch and permissions, whole, as [`App::create_role`] takes them. A
-    /// permission no editor offers yet is kept as the role has it. Of
-    /// `Everyone` only the permissions change. Its place is never changed
-    /// here ([`App::reorder_roles`]). Returns the account's snapshot as it
-    /// then is.
-    ///
-    /// Going, once the shells save through [`App::change_role`]: this
-    /// writes back whatever the editor was showing, so an editor left open
-    /// undoes what someone else changed of the role meanwhile.
-    ///
-    /// # Errors
-    /// As [`App::create_role`]; `PERMISSION_DENIED` for a role this account
-    /// may not manage; `NOT_FOUND` for a role the server does not have.
-    pub async fn update_role(
-        &self,
-        server_id: &str,
-        role_id: &str,
-        name: &str,
-        color: &str,
-        hide_tag: bool,
-        permissions: &[String],
-    ) -> Result<SnapshotSummary, ClientError> {
-        let server = wire::display(&parse_uuid(server_id)?);
-        let id = parse_uuid(role_id)?;
-        let held = self
-            .api
-            .roles(&server)
-            .await?
-            .roles
-            .into_iter()
-            .find(|r| r.role_id == id)
-            .map(|r| r.permissions)
-            .ok_or_else(|| ClientError::State(format!("no such role: {role_id}")))?;
-        let role = lumia_core::proto::Role {
-            name: name.trim().to_string(),
-            color: color.to_string(),
-            hide_tag,
-            permissions: crate::roles::saved_permissions(permissions, &held),
-            ..Default::default()
-        };
-        self.api
-            .update_role(&server, &wire::display(&id), role)
-            .await?;
-        self.snapshot().await
-    }
-
     /// `DELETE /servers/{id}/roles/{role_id}`: the role is gone, from
     /// whoever held it too. Returns the account's snapshot as it then is.
     ///
@@ -3229,72 +3182,6 @@ impl App {
             add_role_ids: ids(give)?,
             remove_role_ids: ids(take)?,
             title: title.map(|t| t.trim().to_string()),
-            ..Default::default()
-        };
-        self.patch_member(server_id, account_id, &req).await
-    }
-
-    /// `PATCH /servers/{id}/members/{account_id}`: the roles a member is to
-    /// hold, the whole set, `Everyone` never among them. Each role given or
-    /// taken must be one this account manages. The member hears of it at
-    /// once and the server's other members through their account logs.
-    /// Returns the member as the server now shows them; the kept list has
-    /// them so too.
-    ///
-    /// Going, once the shells save through [`App::change_member`]: the
-    /// whole set is whatever the list drawn from held, so a role someone
-    /// else gave or took since is undone.
-    ///
-    /// # Errors
-    /// `PERMISSION_DENIED` for a role this account may not manage;
-    /// `NOT_FOUND` for someone who is not a member; transport failure.
-    pub async fn set_member_roles(
-        &self,
-        server_id: &str,
-        account_id: &str,
-        role_ids: &[String],
-    ) -> Result<MemberSummary, ClientError> {
-        let ids = role_ids
-            .iter()
-            .map(|id| parse_uuid(id))
-            .collect::<Result<Vec<_>, _>>()?;
-        let req = lumia_core::proto::UpdateMemberRequest {
-            roles: Some(lumia_core::proto::RoleIds { role_ids: ids }),
-            ..Default::default()
-        };
-        self.patch_member(server_id, account_id, &req).await
-    }
-
-    /// A member's title in a server, up to 32 characters once trimmed; an
-    /// empty one clears it (architecture 7.5). This account's own is its
-    /// own to set (`PATCH /servers/{id}/membership`); someone else's takes
-    /// `MANAGE_MEMBERS` and a member below this account
-    /// ([`MemberSummary::can_manage`]). Returns the member as the server now
-    /// shows them.
-    ///
-    /// # Errors
-    /// `INVALID_ARGUMENT` with `details.field` `title`; `PERMISSION_DENIED`;
-    /// `NOT_FOUND` for someone who is not a member; transport failure.
-    pub async fn set_member_title(
-        &self,
-        server_id: &str,
-        account_id: &str,
-        title: &str,
-    ) -> Result<MemberSummary, ClientError> {
-        let server = wire::display(&parse_uuid(server_id)?);
-        let own = self
-            .kept::<SnapshotSummary>(KEPT_SNAPSHOT)?
-            .is_some_and(|s| s.account_id == account_id);
-        if own {
-            let req = lumia_core::proto::UpdateMembershipRequest {
-                title: Some(title.trim().to_string()),
-                ..Default::default()
-            };
-            let member = self.api.update_membership(&server, &req).await?;
-            return self.changed_member(server_id, &member).await;
-        }
-        let req = lumia_core::proto::UpdateMemberRequest {
-            title: Some(title.trim().to_string()),
             ..Default::default()
         };
         self.patch_member(server_id, account_id, &req).await
