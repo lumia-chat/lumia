@@ -1139,7 +1139,7 @@ pub fn add_holders(s: &State, look: Look) -> Option<El> {
     let all = s.members_known()?;
     let mut candidates: Vec<&MemberSummary> = roles::searched(all, &form.filter.text)
         .into_iter()
-        .filter(|m| !m.guest && !m.role_ids.contains(&role.role_id))
+        .filter(|m| core::may_be_given(&role.role_id, m.guest, &m.role_ids))
         .collect();
     candidates.sort_by_cached_key(|m| display_name(m).to_lowercase());
     let rows: Vec<El> = candidates

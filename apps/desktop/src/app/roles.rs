@@ -14,13 +14,9 @@ use crate::session::Failure;
 /// A section of a server's settings: the core's.
 pub use lumia_client::roles::SettingsSection as Section;
 
-/// A section's name in the list beside the page.
+/// What a section of a server's settings is called ([`core::section_label`]).
 pub fn section_label(section: Section) -> &'static str {
-    match section {
-        Section::Overview => "Overview",
-        Section::Roles => "Roles",
-        Section::Members => "Members",
-    }
+    core::section_label(section)
 }
 
 /// The sections of `server`'s settings this account may use, in order
