@@ -44,6 +44,11 @@ export function grouped(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+/** What a section of a server's settings is called, in its list and as its page's title. */
+export function sectionLabel(section: SettingsSection): string {
+  return section === "overview" ? "Overview" : section === "roles" ? "Roles" : "Members";
+}
+
 /** "5 roles": a server's roles counted without Everyone. */
 export function rolesCount(roles: Pick<RoleSummary, "isEveryone">[]): string {
   const n = roles.filter((r) => !r.isEveryone).length;
@@ -148,6 +153,11 @@ export function savable(draft: RoleDraft, opened?: RoleDraft): boolean {
   return !opened || !sameDraft(draft, opened, true);
 }
 
+/** Whether an editor's draft still holds exactly what it opened on, its name as typed: what says "Saved." may stay, and an untouched editor follows the role. */
+export function untouched(opened: RoleDraft, draft: RoleDraft): boolean {
+  return sameDraft(draft, opened);
+}
+
 /**
  * An editor's two drafts once the role under it is `now`. An editor nobody
  * has touched follows: while the draft still holds what it opened on, both
@@ -236,6 +246,16 @@ export function memberChanges(opened: MemberForm, form: MemberForm): MemberChang
 /** Whether there is anything to ask: a form saved as it opened asks nothing. */
 export function changesAny(changes: MemberChanges): boolean {
   return changes.give.length > 0 || changes.take.length > 0 || changes.title !== null;
+}
+
+/** Whether a member's form still holds exactly what it opened with. */
+export function formUntouched(opened: MemberForm, form: MemberForm): boolean {
+  return sameForm(form, opened);
+}
+
+/** Whether a member may be offered a role in "Add members": a guest is given no roles, and one who holds it already has it. */
+export function mayBeGiven(roleId: string, member: Pick<MemberSummary, "guest" | "roleIds">): boolean {
+  return !member.guest && !member.roleIds.includes(roleId);
 }
 
 /** A member's form once the list has them as `now`: one nobody has touched follows, as a role's editor does (`followed`). */

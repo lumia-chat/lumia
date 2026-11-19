@@ -65,6 +65,7 @@ import {
   memberOffers,
   memberRefusal,
   movedBefore,
+  mayBeGiven,
   movedWords,
   offersAny,
   roleChoices,
@@ -598,7 +599,7 @@ function AddHolders(props: { server: ServerSummary; role: RoleSummary; members: 
   const [error, setError] = createSignal("");
   const candidates = createMemo(() =>
     searched(
-      props.members.filter((m) => !m.guest && !m.roleIds.includes(props.role.roleId)),
+      props.members.filter((m) => mayBeGiven(props.role.roleId, m)),
       filter(),
     ).sort((a, b) => memberName(a).localeCompare(memberName(b))),
   );

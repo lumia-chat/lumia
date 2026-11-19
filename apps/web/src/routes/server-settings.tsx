@@ -11,7 +11,7 @@ import { Match, Show, Switch, createEffect, createMemo, createResource, createSi
 import { Button, Card, ChannelHeader, Checkbox, PictureChoices, SectionList, SegmentedTabs, TagSketch, TextField, type IconName } from "../design/components";
 import { ClientError, type ServerSummary, type SnapshotSummary } from "../client/bridge";
 import { usageWords } from "../client/media";
-import { TAG_CHOICES, TAG_HEADING, TAG_NOTE, TAG_SUBTITLE, rolesCount, settingsSections, type SettingsSection } from "../client/roles";
+import { TAG_CHOICES, TAG_HEADING, TAG_NOTE, TAG_SUBTITLE, rolesCount, sectionLabel, settingsSections, type SettingsSection } from "../client/roles";
 import { avatarSrc, client, membersKept, membersQuery, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
 import { DefaultChannelsCard } from "./channels";
@@ -38,11 +38,7 @@ function settingRefusal(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const SECTIONS: Record<SettingsSection, { label: string; icon: IconName }> = {
-  overview: { label: "Overview", icon: "settings" },
-  roles: { label: "Roles", icon: "shield" },
-  members: { label: "Members", icon: "members" },
-};
+const ICONS: Record<SettingsSection, IconName> = { overview: "settings", roles: "shield", members: "members" };
 
 /** True while the window matches `query`. */
 function useMedia(query: string): () => boolean {
@@ -76,14 +72,14 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
   const members = membersQuery(() => (section() === "roles" || section() === "members" ? props.server.serverId : undefined));
   const me = () => members.data?.find((m) => m.accountId === props.snapshot?.accountId);
   const note = (id: SettingsSection) => (id === "roles" ? rolesCount(props.server.roles) : undefined);
-  const list = () => sections().map((id) => ({ id, label: SECTIONS[id].label, icon: SECTIONS[id].icon, note: note(id) }));
+  const list = () => sections().map((id) => ({ id, label: sectionLabel(id), icon: ICONS[id], note: note(id) }));
   return (
     <>
       <Show
         when={folded() && section()}
         fallback={<ChannelHeader kind="page" name="Server settings" topic={props.server.name} actions={[]} onBack={props.back} backLabel={`Back to ${props.server.name}`} />}
       >
-        {(shown) => <ChannelHeader kind="page" name={SECTIONS[shown()].label} topic={props.server.name} actions={[]} onBack={() => setChosen(undefined)} backLabel="Back to Server settings" />}
+        {(shown) => <ChannelHeader kind="page" name={sectionLabel(shown())} topic={props.server.name} actions={[]} onBack={() => setChosen(undefined)} backLabel="Back to Server settings" />}
       </Show>
       <div class="lu-settings">
         <Show when={!folded() || !section()}>

@@ -35,6 +35,14 @@ function answer(c: Case): unknown {
   switch (c.rule) {
     case "settingsSections":
       return roles.settingsSections(a as never);
+    case "sectionLabel":
+      return roles.sectionLabel(a.section);
+    case "untouched":
+      return roles.untouched(a.opened, a.draft);
+    case "formUntouched":
+      return roles.formUntouched(a.opened, a.form);
+    case "mayBeGiven":
+      return roles.mayBeGiven(a.roleId, { guest: a.guest, roleIds: a.roleIds });
     case "toneOf":
       return roles.toneOf(a.color);
     case "rolesCount":

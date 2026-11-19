@@ -3907,6 +3907,35 @@ pub fn roles_settings_sections(server: ServerSummary) -> Vec<SettingsSection> {
     .collect()
 }
 
+/// What a section of a server's settings is called.
+#[uniffi::export]
+pub fn roles_section_label(section: SettingsSection) -> String {
+    roles::section_label(match section {
+        SettingsSection::Overview => roles::SettingsSection::Overview,
+        SettingsSection::Roles => roles::SettingsSection::Roles,
+        SettingsSection::Members => roles::SettingsSection::Members,
+    })
+    .into()
+}
+
+/// Whether an editor's draft still holds exactly what it opened on.
+#[uniffi::export]
+pub fn roles_untouched(opened: RoleDraft, draft: RoleDraft) -> bool {
+    roles::untouched(&opened.into(), &draft.into())
+}
+
+/// Whether a member's form still holds exactly what it opened with.
+#[uniffi::export]
+pub fn roles_form_untouched(opened: MemberForm, form: MemberForm) -> bool {
+    roles::form_untouched(&opened.into(), &form.into())
+}
+
+/// Whether `member` may be offered `role_id` in "Add members": no guest, nobody who holds it.
+#[uniffi::export]
+pub fn roles_may_be_given(role_id: String, member: MemberSummary) -> bool {
+    roles::may_be_given(&role_id, member.guest, &member.role_ids)
+}
+
 /// A colour as one of the nine tones; none for none, and for anything that is no tone.
 #[uniffi::export]
 pub fn roles_tone_of(color: String) -> Option<String> {

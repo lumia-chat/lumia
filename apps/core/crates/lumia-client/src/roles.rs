@@ -515,6 +515,16 @@ pub fn settings_sections(
     sections
 }
 
+/// What a section of a server's settings is called, in its list and as its page's title.
+#[must_use]
+pub fn section_label(section: SettingsSection) -> &'static str {
+    match section {
+        SettingsSection::Overview => "Overview",
+        SettingsSection::Roles => "Roles",
+        SettingsSection::Members => "Members",
+    }
+}
+
 /// A role's or a tag's colour as one of [`TONES`]; `None` for none, and for anything that
 /// is no tone.
 #[must_use]
@@ -681,6 +691,14 @@ pub fn savable(draft: &RoleDraft, opened: Option<&RoleDraft>) -> bool {
     opened.is_none_or(|opened| !same_draft(draft, opened, true))
 }
 
+/// Whether an editor's draft still holds exactly what it opened on, its name as typed: what
+/// says "Saved." may stay on screen, and an editor follows the role underneath ([`followed`]).
+/// A space typed after the name is a touch, though there is nothing to save.
+#[must_use]
+pub fn untouched(opened: &RoleDraft, draft: &RoleDraft) -> bool {
+    same_draft(draft, opened, false)
+}
+
 /// An editor's two drafts.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -843,6 +861,19 @@ pub fn member_changes(opened: &MemberForm, form: &MemberForm) -> MemberChanges {
 #[must_use]
 pub fn changes_any(changes: &MemberChanges) -> bool {
     !changes.give.is_empty() || !changes.take.is_empty() || changes.title.is_some()
+}
+
+/// Whether a member's form still holds exactly what it opened with.
+#[must_use]
+pub fn form_untouched(opened: &MemberForm, form: &MemberForm) -> bool {
+    same_form(form, opened)
+}
+
+/// Whether a member may be offered a role in "Add members", from its editor: a guest is
+/// given no roles, and one who holds it already has it. `role_ids` are the member's.
+#[must_use]
+pub fn may_be_given(role_id: &str, guest: bool, role_ids: &[String]) -> bool {
+    !guest && !role_ids.iter().any(|id| id == role_id)
 }
 
 /// A member's form's two states.

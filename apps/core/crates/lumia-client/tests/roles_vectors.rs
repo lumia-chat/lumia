@@ -80,6 +80,17 @@ fn answer(file: &File, case: &Case) -> Value {
             a["canManageRoles"].as_bool().unwrap(),
             a["canManageMembers"].as_bool().unwrap(),
         )),
+        "sectionLabel" => json!(roles::section_label(of(&a["section"]))),
+        "untouched" => json!(roles::untouched(&of(&a["opened"]), &of(&a["draft"]))),
+        "formUntouched" => json!(roles::form_untouched(
+            &of::<MemberForm>(&a["opened"]),
+            &of::<MemberForm>(&a["form"])
+        )),
+        "mayBeGiven" => json!(roles::may_be_given(
+            s(&a["roleId"]),
+            a["guest"].as_bool().unwrap(),
+            &of::<Vec<String>>(&a["roleIds"])
+        )),
         "toneOf" => json!(roles::tone_of(s(&a["color"]))),
         "rolesCount" => json!(roles::roles_count(&roles_of(file, &a["roles"]))),
         "membersCount" => json!(roles::members_count(a["n"].as_u64().unwrap())),

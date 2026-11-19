@@ -143,6 +143,204 @@
       "why": "none, and the settings do not open"
     },
     {
+      "rule": "sectionLabel",
+      "args": {
+        "section": "overview"
+      },
+      "answer": "Overview",
+      "why": "the section's name"
+    },
+    {
+      "rule": "sectionLabel",
+      "args": {
+        "section": "roles"
+      },
+      "answer": "Roles",
+      "why": "the section's name"
+    },
+    {
+      "rule": "sectionLabel",
+      "args": {
+        "section": "members"
+      },
+      "answer": "Members",
+      "why": "the section's name"
+    },
+    {
+      "rule": "untouched",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "as it opened"
+    },
+    {
+      "rule": "untouched",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "SEND_IN_THREADS",
+            "MANAGE_ROLES"
+          ]
+        }
+      },
+      "answer": true,
+      "why": "the permissions in another order"
+    },
+    {
+      "rule": "untouched",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator ",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "a space typed after the name is a touch, though nothing to save"
+    },
+    {
+      "rule": "untouched",
+      "args": {
+        "opened": {
+          "name": "Moderator",
+          "color": "green",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        },
+        "draft": {
+          "name": "Moderator",
+          "color": "sky",
+          "hideTag": false,
+          "permissions": [
+            "MANAGE_ROLES",
+            "SEND_IN_THREADS"
+          ]
+        }
+      },
+      "answer": false,
+      "why": "recoloured"
+    },
+    {
+      "rule": "formUntouched",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "eng",
+            "design"
+          ],
+          "title": "Lead"
+        },
+        "form": {
+          "roleIds": [
+            "design",
+            "eng"
+          ],
+          "title": "Lead"
+        }
+      },
+      "answer": true,
+      "why": "the same roles in another order"
+    },
+    {
+      "rule": "formUntouched",
+      "args": {
+        "opened": {
+          "roleIds": [
+            "design"
+          ],
+          "title": ""
+        },
+        "form": {
+          "roleIds": [
+            "design"
+          ],
+          "title": "L"
+        }
+      },
+      "answer": false,
+      "why": "a title being typed"
+    },
+    {
+      "rule": "mayBeGiven",
+      "args": {
+        "roleId": "eng",
+        "guest": false,
+        "roleIds": [
+          "design"
+        ]
+      },
+      "answer": true,
+      "why": "a member who does not hold it"
+    },
+    {
+      "rule": "mayBeGiven",
+      "args": {
+        "roleId": "eng",
+        "guest": false,
+        "roleIds": [
+          "eng"
+        ]
+      },
+      "answer": false,
+      "why": "one who holds it already"
+    },
+    {
+      "rule": "mayBeGiven",
+      "args": {
+        "roleId": "eng",
+        "guest": true,
+        "roleIds": []
+      },
+      "answer": false,
+      "why": "a guest is given no roles"
+    },
+    {
       "rule": "toneOf",
       "args": {
         "color": "sky"
