@@ -13,16 +13,38 @@ import LumiaKit
 import SwiftUI
 import UIKit
 
-/// What a long press, a chip's "Add reaction" or VoiceOver opened over a conversation.
+/// What a long press, a chip's "Add reaction", the composer's emoji button
+/// or VoiceOver opened over a conversation.
 enum MessageSheet: Identifiable, Equatable {
     case actions(MessageRef)
     case picker(messageID: String)
+    /// The picker for the composer: what is chosen goes in the field.
+    case composer
 
     var id: String {
         switch self {
         case let .actions(m): "actions-\(m.id)"
         case let .picker(id): "picker-\(id)"
+        case .composer: "composer"
         }
+    }
+}
+
+/// The server's emoji a picker offers in a server's conversation (specs/emoji.md
+/// 10): its name for the section's heading, its emoji as held, each drawn
+/// by the session, and the core's search of them. None in a personal one.
+struct PickerServer {
+    let id: String
+    let name: String
+    let emoji: [EmojiSummary]
+    let drawing: (EmojiSummary) -> EmojiDrawing?
+    let search: (String) async -> [EmojiSummary]
+
+    @MainActor
+    static func of(channelID: String, session: LumiaSession) -> PickerServer? {
+        let serverID = session.emojiServer(of: channelID)
+        guard !serverID.isEmpty, let server = session.snapshot?.servers.first(where: { $0.serverId == serverID }) else { return nil }
+        return PickerServer(id: serverID, name: server.name, emoji: server.emoji, drawing: { session.drawing(of: $0) }, search: { await session.emojiMatches(serverID: serverID, prefix: emojiSearchPrefix($0)) })
     }
 }
 
@@ -47,7 +69,11 @@ struct MessageRef: Equatable {
 /// (`chose`), so the field can take the keyboard and the alert can show.
 struct MessageSheetView: View {
     let sheet: MessageSheet
-    let react: (String, String) -> Void
+    /// The conversation's server's emoji, for the picker; nil in a personal one.
+    var server: PickerServer?
+    let react: (String, PickedEmoji) -> Void
+    /// What the composer's picker chose, to go in the field.
+    var insert: (PickedEmoji) -> Void = { _ in }
     let reply: (MessageRef, String?) -> Void
     let chose: (MessageRef, MessageAction) -> Void
     @State private var picking: String?
@@ -56,9 +82,11 @@ struct MessageSheetView: View {
     var body: some View {
         Group {
             if let picking {
-                EmojiPicker { emoji in react(picking, emoji); dismiss() }
+                EmojiPicker(server: server) { emoji in react(picking, emoji); dismiss() }
             } else if case let .picker(id) = sheet {
-                EmojiPicker { emoji in react(id, emoji); dismiss() }
+                EmojiPicker(server: server) { emoji in react(id, emoji); dismiss() }
+            } else if case .composer = sheet {
+                EmojiPicker(server: server, label: "Emoji") { emoji in insert(emoji); dismiss() }
             } else if case let .actions(message) = sheet {
                 MessageActions(message: message) { action, part in
                     switch action {
@@ -199,13 +227,30 @@ struct QuotableText: UIViewRepresentable {
 }
 
 /// The emoji picker (architecture 6.6) as a sheet: a search field,
-/// "Frequently used" from this phone's own reactions, and every emoji by
-/// Unicode's groups (`EmojiCatalog`, up to Unicode 16, default skin tone).
+/// "Frequently used" from this phone's own reactions, in a server's
+/// conversation the server's emoji under its name (specs/emoji.md 10), and
+/// every emoji by Unicode's groups (`EmojiCatalog`, up to Unicode 16,
+/// default skin tone). A search lists the server's that the core matches
+/// first, then Unicode's, in one grid. `label` names the sheet: "Add
+/// reaction" from a message, "Emoji" from the composer.
 struct EmojiPicker: View {
-    let pick: (String) -> Void
+    var server: PickerServer?
+    var label = "Add reaction"
+    let pick: (PickedEmoji) -> Void
     @State private var search = ""
+    /// The server's emoji the search finds, as the core matches them.
+    @State private var found: [EmojiSummary] = []
 
-    private let columns = [GridItem(.adaptive(minimum: 44), spacing: LumiaTokens.space2)]
+    private let columns = [GridItem(.adaptive(minimum: EmojiMetrics.pickerCell), spacing: LumiaTokens.space2)]
+
+    /// "Frequently used": Unicode's, and this server's own while it holds them.
+    private var frequent: [PickedEmoji] {
+        let held = Dictionary((server?.emoji ?? []).map { ($0.emojiId, $0) }, uniquingKeysWith: { a, _ in a })
+        return FrequentEmoji.list(recent: FrequentEmoji.recent, serverID: server?.id ?? "") { held[$0] != nil }.compactMap { kept in
+            if let parts = FrequentEmoji.customParts(kept) { return held[parts.emojiID].map(PickedEmoji.custom) }
+            return .unicode(kept)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -227,17 +272,22 @@ struct EmojiPicker: View {
                     let wanted = search.trimmingCharacters(in: .whitespaces)
                     if wanted.isEmpty {
                         heading("Frequently used")
-                        grid(FrequentEmoji.list(recent: FrequentEmoji.recent).map { EmojiEntry(emoji: $0, name: EmojiCatalog.name(of: $0), keywords: []) }, key: "f")
+                        mixed(frequent, key: "f")
+                        if let server, !server.emoji.isEmpty {
+                            heading(server.name)
+                            mixed(server.emoji.map(PickedEmoji.custom), key: "server")
+                        }
                         ForEach(EmojiCatalog.groups, id: \.name) { group in
                             heading(group.name)
                             grid(group.emoji, key: group.name)
                         }
                     } else {
-                        let found = EmojiCatalog.search(wanted)
-                        if found.isEmpty {
+                        let words = emojiSearchPrefix(wanted)
+                        let unicode = EmojiCatalog.search(words.isEmpty ? wanted : words)
+                        if found.isEmpty, unicode.isEmpty {
                             Text("No emoji match that.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color).padding(LumiaTokens.space10)
                         } else {
-                            grid(found, key: "s")
+                            mixed(found.map(PickedEmoji.custom) + unicode.map { .unicode($0.emoji) }, key: "s")
                         }
                     }
                 }
@@ -248,7 +298,16 @@ struct EmojiPicker: View {
         }
         .presentationDetents([.medium, .large])
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Add reaction")
+        .accessibilityLabel(label)
+        #if DEBUG
+        // A smoke run's search (scripts/smoke-emoji.sh).
+        .onAppear { if let typed = ProcessInfo.processInfo.environment["LUMIA_DEV_SEARCH"] { search = typed } }
+        #endif
+        // The server's emoji a search finds are the core's to say.
+        .task(id: search) {
+            guard let server, !search.trimmingCharacters(in: .whitespaces).isEmpty else { found = []; return }
+            found = await server.search(search)
+        }
     }
 
     private func heading(_ words: String) -> some View {
@@ -259,15 +318,50 @@ struct EmojiPicker: View {
 
     private func grid(_ emoji: [EmojiEntry], key: String) -> some View {
         LazyVGrid(columns: columns, spacing: LumiaTokens.space2) {
-            ForEach(emoji) { e in
-                Button { pick(e.emoji) } label: {
-                    Text(e.emoji).font(.system(size: 28)).frame(width: 44, height: 44).contentShape(Rectangle())
+            ForEach(emoji) { e in unicodeCell(e.emoji, name: e.name) }
+        }
+        .id(key)
+    }
+
+    /// Unicode's and the server's in one grid: "Frequently used", the
+    /// server's section, a search.
+    private func mixed(_ emoji: [PickedEmoji], key: String) -> some View {
+        LazyVGrid(columns: columns, spacing: LumiaTokens.space2) {
+            ForEach(Array(emoji.enumerated()), id: \.offset) { _, e in
+                switch e {
+                case let .unicode(u): unicodeCell(u, name: EmojiCatalog.name(of: u))
+                case let .custom(c): customCell(c)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(e.name)
             }
         }
         .id(key)
+    }
+
+    private func unicodeCell(_ emoji: String, name: String) -> some View {
+        Button { pick(.unicode(emoji)) } label: {
+            Text(emoji).font(.system(size: EmojiMetrics.picker)).frame(width: EmojiMetrics.pickerCell, height: EmojiMetrics.pickerCell).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name)
+    }
+
+    /// One of the server's: its picture, named by its `:name:`.
+    private func customCell(_ emoji: EmojiSummary) -> some View {
+        Button { pick(.custom(emoji)) } label: {
+            Group {
+                if let drawing = server?.drawing(emoji) {
+                    LumiaCustomEmoji(drawing, side: EmojiMetrics.picker)
+                } else {
+                    Text(verbatim: ":\(emoji.name):").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color).lineLimit(1).minimumScaleFactor(0.5)
+                }
+            }
+            .frame(width: EmojiMetrics.pickerCell, height: EmojiMetrics.pickerCell).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(":\(emoji.name):")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityIdentifier("picker-emoji-\(emoji.name)")
     }
 }
 
@@ -279,11 +373,13 @@ func knownName(_ id: String, session: LumiaSession) -> String {
     return n == String(id.prefix(8)) ? "" : n
 }
 
-/// How a conversation draws a message's reactions: who, as the chip says it.
+/// How a conversation draws a message's reactions: who, as the chip says
+/// it, and one of the server's emoji by its picture while `serverID`'s
+/// emoji hold it (specs/emoji.md 9).
 @MainActor
-func reactionDisplays(_ reactions: [ReactionSummary], session: LumiaSession) -> [ReactionDisplay] {
+func reactionDisplays(_ reactions: [ReactionSummary], session: LumiaSession, serverID: String = "") -> [ReactionDisplay] {
     reactions.map { r in
-        ReactionDisplay(emoji: r.reaction, count: r.count, me: r.me, words: Replies.reactedWords(r, me: session.me) { knownName($0, session: session) })
+        ReactionDisplay(emoji: r.reaction, count: r.count, me: r.me, words: Replies.reactedWords(r, me: session.me) { knownName($0, session: session) }, emojiID: r.emojiId, custom: session.drawing(emojiID: r.emojiId, in: serverID))
     }
 }
 
@@ -366,7 +462,7 @@ struct MentionsScreen: View {
                             Text(author).font(LumiaTokens.textAuthor.font).foregroundStyle(LumiaTokens.ink.color)
                             Text(at).font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkMuted.color)
                         }
-                        MessageBodyText(text: m.body, mentions: m.mentions, edited: m.edited, name: { knownName($0, session: session) })
+                        MessageBodyText(text: m.body, mentions: m.mentions, emoji: m.emoji, held: { session.drawing(emojiID: $0, in: session.emojiServer(of: m.channelId)) }, edited: m.edited, name: { knownName($0, session: session) })
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .multilineTextAlignment(.leading)
                     }

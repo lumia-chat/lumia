@@ -137,12 +137,12 @@ struct ReplyConnectorShape: Shape {
 /// to add another.
 public struct LumiaReactionChips: View {
     let reactions: [ReactionDisplay]
-    let toggle: (String) -> Void
+    let toggle: (ReactionDisplay) -> Void
     let add: (() -> Void)?
     /// The message rows' text scale: a chip's words grow, and the chip with them past its 32.
     let scale: CGFloat
 
-    public init(reactions: [ReactionDisplay], toggle: @escaping (String) -> Void, add: (() -> Void)?, scale: CGFloat = 1) {
+    public init(reactions: [ReactionDisplay], toggle: @escaping (ReactionDisplay) -> Void, add: (() -> Void)?, scale: CGFloat = 1) {
         self.reactions = reactions; self.toggle = toggle; self.add = add; self.scale = scale
     }
 
@@ -152,9 +152,14 @@ public struct LumiaReactionChips: View {
     public var body: some View {
         LumiaFlow(spacing: LumiaTokens.space6) {
             ForEach(reactions) { r in
-                Button { toggle(r.emoji) } label: {
+                Button { toggle(r) } label: {
                     HStack(spacing: LumiaTokens.space6) {
-                        Text(r.emoji).font(LumiaTokens.textCompact.font(scale: scale))
+                        // One of the server's: its picture while held, else its `:name:`.
+                        if let custom = r.custom {
+                            LumiaCustomEmoji(custom, side: EmojiMetrics.chip * scale)
+                        } else {
+                            Text(r.emoji).font(LumiaTokens.textCompact.font(scale: scale))
+                        }
                         Text("\(r.count)").font(LumiaTokens.textLinkSm.font(scale: scale))
                             .foregroundStyle(r.me ? LumiaTokens.accentInk.color : LumiaTokens.inkSecondary.color)
                     }
@@ -165,6 +170,7 @@ public struct LumiaReactionChips: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .disabled(!r.tappable)
                 .contextMenu { Text(r.words) }
                 .accessibilityLabel("\(r.words), \(r.count)")
                 .accessibilityAddTraits(r.me ? .isSelected : [])

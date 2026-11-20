@@ -18,13 +18,14 @@ extension HeldRole: Identifiable {
 extension RoleChoice: Identifiable {}
 
 public extension SettingsSection {
-    /// The section as an identifier names it: "overview", "roles", "members",
+    /// The section as an identifier names it: "overview", "roles", "members", "emoji",
     /// whatever its row says (the core's `rolesSectionLabel`).
     var key: String {
         switch self {
         case .overview: "overview"
         case .roles: "roles"
         case .members: "members"
+        case .emoji: "emoji"
         }
     }
 }

@@ -223,6 +223,9 @@ public final class LumiaSession {
     @ObservationIgnored var uploadLimitsAsked = false
     /// Pictures decoded for drawing, by blob.
     @ObservationIgnored public let mediaImages = MediaImages()
+    /// The servers' emoji pictures, by address (`Emoji.swift`): observable
+    /// themselves, so a view drawing one is drawn again when it comes.
+    @ObservationIgnored public let emojiPictures = EmojiPictures()
 
     /// What is typed in the conversations on screen and not sent, kept in
     /// the core's store off the main thread (issue #23; `Drafts.swift`).
@@ -590,6 +593,7 @@ public final class LumiaSession {
         typing.clear()
         scheduleTypingExpiry()
         pushLedger.forget()
+        emojiPictures.forget()
     }
 
     /// What the sign-in screen says to someone the instance sent back to it.
@@ -1308,6 +1312,11 @@ public final class LumiaSession {
             // again: what the core keeps has the change, so the server's
             // members are read from it, with their tags, and nothing is asked.
             await rereadMembers(serverID: serverId)
+        case .emojiChanged:
+            // After the `accountApplied` it came in, which took the snapshot
+            // again with the server's emoji as they now are: a picture no
+            // server lists any more goes (specs/emoji.md 7).
+            emojiChanged()
         case let .profileUpdated(accountId, handle, displayName, avatarUrl, pronouns, bio):
             apply(ProfileUpdate(accountID: accountId, handle: handle, displayName: displayName, avatarURL: avatarUrl, pronouns: pronouns, bio: bio))
         case let .error(_, message, commandId):

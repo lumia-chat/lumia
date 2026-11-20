@@ -2442,4 +2442,164 @@ final class SmokeUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
         }
     }
+
+    /// A server's own emoji by hand (scripts/smoke-emoji.sh, specs/emoji.md),
+    /// as Acme's owner: a picture from the photo picker uploaded through
+    /// Upload emoji, its name made from the file's and typed over; the
+    /// picker's server section and its search reacting with :partyparrot:;
+    /// the composer's emoji button putting :acme_heart: in the field and the
+    /// `:` list completing :partyparrot:, sent; a rename refused for a name
+    /// Acme has, then made; and Remove, asked first, kept, then taken. The
+    /// smoke reads the instance at each step announced: `uploaded`,
+    /// `reacted`, `sent`, `renamed`, `removed`.
+    func testEmojiByHand() throws {
+        let steps = try XCTUnwrap(ProcessInfo.processInfo.environment["LUMIA_UITEST_STEPS"])
+        func open(_ screen: String, channel: String? = nil) -> XCUIApplication {
+            let app = XCUIApplication()
+            for (key, value) in ProcessInfo.processInfo.environment where key.hasPrefix("LUMIA_DEV_") { app.launchEnvironment[key] = value }
+            app.launchEnvironment["LUMIA_DEV_SCREEN"] = screen
+            if let channel { app.launchEnvironment["LUMIA_DEV_CHANNEL"] = channel }
+            app.launch()
+            return app
+        }
+        var app = open("emoji")
+        var anything = app.descendants(matching: .any)
+        func shown(_ element: XCUIElement, _ why: String, within seconds: TimeInterval = 15) { XCTAssertTrue(element.waitForExistence(timeout: seconds), why) }
+        func gone(_ element: XCUIElement, _ why: String, within seconds: TimeInterval = 15) {
+            XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)], timeout: seconds), .completed, why)
+        }
+        func labelled(_ words: String) -> XCUIElement { anything.matching(NSPredicate(format: "label == %@", words)).firstMatch }
+        /// A new simulator's keyboard says once how to type by sliding; Continue puts it away.
+        func tip() {
+            let go = app.buttons["Continue"]
+            if go.waitForExistence(timeout: 2) { go.tap() }
+        }
+        func retype(_ field: XCUIElement, _ words: String) {
+            let held = (field.value as? String) ?? ""
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            tip()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: held.count + 2) + words)
+        }
+
+        // The section: what it is, Upload, and Acme's twelve, each with its More.
+        let upload = app.buttons["emoji-upload"]
+        shown(upload, "no Upload emoji in the Emoji section", within: 90)
+        XCTAssertTrue(upload.isEnabled, "Upload emoji is off below the limit")
+        shown(app.buttons["emoji-more-partyparrot"], "no row for :partyparrot:")
+        XCTAssertEqual(app.buttons["emoji-more-partyparrot"].label, "More for :partyparrot:")
+        XCTAssertFalse(app.buttons["emoji-more-oldlogo"].exists, "a removed emoji is listed")
+        shown(labelled("Uploaded by Ryan Winchester · Animated"), "a row does not say who uploaded it and that it is animated")
+
+        // Upload emoji: Photos, the smoke's picture, its name made from the file's, typed over.
+        upload.tap()
+        let photos = app.buttons["Photos"]
+        shown(photos, "Upload emoji's menu has no Photos")
+        XCTAssertTrue(app.buttons["Files"].exists, "Upload emoji's menu has no Files")
+        photos.tap()
+        let picked = app.images.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo")).firstMatch
+        shown(picked, "the photo picker shows no picture", within: 30)
+        picked.tap()
+        let add = app.buttons["Add"]
+        if add.waitForExistence(timeout: 3) { add.tap() }
+        let name = app.textFields["emoji-name"]
+        shown(name, "Upload emoji's form did not open on the picture chosen", within: 20)
+        let made = (name.value as? String) ?? ""
+        XCTAssertFalse(made.isEmpty, "the form's name was not made from the file's")
+        XCTAssertTrue(made.allSatisfy { $0.isLowercase || $0.isNumber || $0 == "_" }, "the name made from the file's is \(made)")
+        retype(name, "partyparrot")
+        app.buttons["emoji-save"].tap()
+        shown(app.staticTexts["emoji-name-error"], "a name Acme has was not refused")
+        XCTAssertEqual(app.staticTexts["emoji-name-error"].label, "Acme already has :partyparrot:. Choose another name.")
+        retype(name, "acme_heart")
+        app.buttons["emoji-save"].tap()
+        shown(app.buttons["emoji-more-acme_heart"], "the upload is not listed", within: 30)
+        reached("uploaded", under: steps)
+
+        // #general: the picker from the phone's own message's Add reaction, its search.
+        app.terminate()
+        app = open("channel", channel: "general")
+        anything = app.descendants(matching: .any)
+        let mine = anything.matching(NSPredicate(format: "value BEGINSWITH %@", "Fixed, it was the cache.")).firstMatch
+        shown(mine, "the phone's own message is not in #general", within: 90)
+        XCTAssertEqual(mine.value as? String, "Fixed, it was the cache. Green now :party_blob: :blobcat:", "the message is not heard with its emoji by name")
+        mine.press(forDuration: 1.0)
+        shown(app.buttons["action-addReaction"], "a long press did not open the message's actions")
+        app.buttons["action-addReaction"].tap()
+        shown(labelled("Acme"), "the picker has no section of Acme's emoji")
+        shown(app.buttons["picker-emoji-lgtm"], "Acme's section does not offer :lgtm:")
+        let search = app.textFields["Search emoji"]
+        search.tap()
+        tip()
+        search.typeText("par")
+        let parrot = app.buttons["picker-emoji-partyparrot"]
+        shown(parrot, "the search did not find :partyparrot:")
+        XCTAssertEqual(parrot.label, ":partyparrot:")
+        XCTAssertTrue(app.buttons["picker-emoji-sadparrot"].exists, "the search did not find :sadparrot:, which holds what was typed")
+        parrot.tap()
+        let chip = anything.matching(NSPredicate(format: "label BEGINSWITH %@", "You reacted with :partyparrot:")).firstMatch
+        shown(chip, "no chip of :partyparrot: on the phone's message", within: 20)
+        reached("reacted", under: steps)
+
+        // The composer: the emoji button's picker, then the `:` list.
+        let field = composerField(in: app, within: 10)
+        field.tap()
+        tip()
+        field.typeText("Ship it ")
+        app.buttons["composer-emoji"].tap()
+        shown(labelled("Emoji"), "the composer's emoji button did not open the picker")
+        let heart = app.buttons["picker-emoji-acme_heart"]
+        shown(heart, "the composer's picker does not offer :acme_heart:")
+        heart.tap()
+        gone(heart, "the picker did not go once :acme_heart: was chosen")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Ship it :acme_heart: "), object: field)], timeout: 10), .completed, "the field holds \(String(describing: field.value))")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "the keyboard did not come back to the field")
+        field.typeText(":p")
+        XCTAssertFalse(app.buttons["emoji-option-partyparrot"].waitForExistence(timeout: 2), "one letter after the colon listed something")
+        field.typeText("ar")
+        let option = app.buttons["emoji-option-partyparrot"]
+        shown(option, "the : list does not offer :partyparrot:")
+        option.tap()
+        XCTAssertEqual(field.value as? String, "Ship it :acme_heart: :partyparrot: ")
+        app.buttons["Send"].tap()
+        let sent = anything.matching(NSPredicate(format: "value == %@", "Ship it :acme_heart: :partyparrot:")).firstMatch
+        shown(sent, "the message sent is not drawn", within: 20)
+        reached("sent", under: steps)
+
+        // Rename: refused for a name Acme has, said in place; then made.
+        app.terminate()
+        app = open("emoji")
+        anything = app.descendants(matching: .any)
+        let more = app.buttons["emoji-more-acme_heart"]
+        shown(more, "no row for :acme_heart:", within: 90)
+        more.tap()
+        shown(labelled(":acme_heart:"), "the row's sheet does not say which emoji it is")
+        XCTAssertFalse(app.buttons["Cancel"].exists, "the row's sheet has a Cancel")
+        app.buttons["emoji-rename"].tap()
+        let rename = app.textFields["emoji-name"]
+        shown(rename, "Rename did not put a field in the row")
+        retype(rename, "partyparrot")
+        app.buttons["emoji-rename-save"].tap()
+        shown(app.staticTexts["emoji-rename-error"], "a rename to a name Acme has was not refused")
+        XCTAssertEqual(app.staticTexts["emoji-rename-error"].label, "Acme already has :partyparrot:. Choose another name.")
+        retype(rename, "acme_love")
+        app.buttons["emoji-rename-save"].tap()
+        shown(app.buttons["emoji-more-acme_love"], "the rename is not listed", within: 20)
+        reached("renamed", under: steps)
+
+        // Remove asks first; Keep it keeps it.
+        app.buttons["emoji-more-acme_love"].tap()
+        app.buttons["emoji-remove"].tap()
+        shown(labelled("Remove :acme_love:?"), "Remove asked nothing")
+        shown(labelled("Messages that used it will show its name instead."), "Remove's question does not say what it costs")
+        XCTAssertEqual(app.buttons["ask-cancel"].label, "Keep it")
+        app.buttons["ask-cancel"].tap()
+        gone(labelled("Remove :acme_love:?"), "Keep it did not put the question away")
+        XCTAssertTrue(app.buttons["emoji-more-acme_love"].exists, "Keep it removed it")
+        app.buttons["emoji-more-acme_love"].tap()
+        app.buttons["emoji-remove"].tap()
+        shown(app.buttons["ask-confirm"], "Remove asked nothing the second time")
+        app.buttons["ask-confirm"].tap()
+        gone(app.buttons["emoji-more-acme_love"], "the emoji removed is still listed", within: 20)
+        reached("removed", under: steps)
+    }
 }

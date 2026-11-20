@@ -52,6 +52,7 @@ extension Screen {
         case .overview: .serverOverview(serverID: serverID)
         case .roles: .roles(serverID: serverID)
         case .members: .serverMembers(serverID: serverID)
+        case .emoji: .serverEmoji(serverID: serverID)
         }
     }
 }
@@ -109,6 +110,7 @@ struct ServerSettingsSectionsScreen: View {
         case .overview: nil
         case .roles: rolesCount(roles: server.roles)
         case .members: session.serverMembers[serverID].map { Roles.grouped($0.count) }
+        case .emoji: EmojiWords.count(server.emoji.count, limit: server.emojiLimit)
         }
     }
 
@@ -117,6 +119,7 @@ struct ServerSettingsSectionsScreen: View {
         case .overview: "gearshape"
         case .roles: "checkmark.shield"
         case .members: "person.2"
+        case .emoji: "face.smiling"
         }
     }
 

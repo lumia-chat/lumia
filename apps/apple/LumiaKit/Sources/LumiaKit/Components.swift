@@ -222,13 +222,15 @@ public struct LumiaMessageRow: View {
     /// What was said, as drawn: the core's blocks, each mention by name.
     private func said(_ blocks: [BodyBlock]) -> String {
         if deleted { return "(deleted)" }
-        let drawn = BodyText.plain(blocks, mentions: extras.mentions, name: extras.name)
+        let drawn = BodyText.plain(blocks, mentions: extras.mentions, name: extras.name) { index in
+            extras.emoji.indices.contains(index) ? extras.held(extras.emoji[index].emojiId)?.label : nil
+        }
         return extras.edited ? "\(drawn), \(MessageEdits.editedLabel)" : drawn
     }
 
     /// The body as the core reads it, once a drawing for the words and what
     /// assistive technology hears of them.
-    private var blocks: [BodyBlock] { deleted ? [] : BodyBlocks.parsed(text, mentions: extras.mentions) }
+    private var blocks: [BodyBlock] { deleted ? [] : BodyBlocks.parsed(text, mentions: extras.mentions, emoji: extras.emoji) }
 
     private var editing: Bool { extras.edit != nil && !deleted }
     private var oneLine: Bool { measures.layout == .oneLine }
@@ -361,7 +363,7 @@ public struct LumiaMessageRow: View {
                 if deleted {
                     MessageBodyText(text: "(deleted)", mentions: [], deleted: true, scale: scale)
                 } else {
-                    MessageBodyText(blocks: blocks, mentions: extras.mentions, edited: extras.edited, name: extras.name, openPerson: extras.openPerson, scale: scale)
+                    MessageBodyText(blocks: blocks, mentions: extras.mentions, emoji: extras.emoji, held: extras.held, edited: extras.edited, name: extras.name, openPerson: extras.openPerson, scale: scale)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -531,6 +533,10 @@ public struct MessageExtras {
     public var mentions: [MentionSummary] = []
     /// A mentioned person's name as drawn; empty for one not known.
     public var name: (String) -> String = { _ in "" }
+    /// The server's emoji its body uses (specs/emoji.md 6), and one as
+    /// drawn by its id, nil for one not held, which is its `:name:` as text.
+    public var emoji: [EmojiRefSummary] = []
+    public var held: (String) -> EmojiDrawing? = { _ in nil }
     public var quote: QuoteDisplay?
     public var reactions: [ReactionDisplay] = []
     /// It mentions this account or everyone, or quotes this account.
@@ -549,7 +555,8 @@ public struct MessageExtras {
     public var expanded = false
     /// Show more and Show less; nil draws a long body whole.
     public var expand: (() -> Void)?
-    public var toggle: (String) -> Void = { _ in }
+    /// A chip tapped: this account's reaction with it added or taken away.
+    public var toggle: (ReactionDisplay) -> Void = { _ in }
     public var addReaction: (() -> Void)?
     public var reply: (() -> Void)?
     public var editMessage: (() -> Void)?
@@ -582,17 +589,28 @@ public struct QuoteDisplay {
     }
 }
 
-/// One emoji's chip: how many, whether this account is among them, and who.
+/// One emoji's chip: how many, whether this account is among them, and
+/// who. For one of the server's emoji, its id and, while the phone holds
+/// it, its picture (`custom`); `emoji` is then its `:name:`, which the chip
+/// says where it holds none (specs/emoji.md 9).
 public struct ReactionDisplay: Identifiable {
     public let emoji: String
     public let count: UInt32
     public let me: Bool
     public let words: String
-    public var id: String { emoji }
+    public var emojiID = ""
+    public var custom: EmojiDrawing?
+    /// Grouped by the emoji's id where it is one of the server's, by the emoji where not.
+    public var id: String { emojiID.isEmpty ? emoji : emojiID }
 
-    public init(emoji: String, count: UInt32, me: Bool, words: String) {
-        self.emoji = emoji; self.count = count; self.me = me; self.words = words
+    public init(emoji: String, count: UInt32, me: Bool, words: String, emojiID: String = "", custom: EmojiDrawing? = nil) {
+        self.emoji = emoji; self.count = count; self.me = me; self.words = words; self.emojiID = emojiID; self.custom = custom
     }
+
+    /// Whether a tap does anything: one of the server's emoji that is not
+    /// held any more (removed) takes no new reactions, and this account's
+    /// own is still taken back (specs/emoji.md 7).
+    public var tappable: Bool { emojiID.isEmpty || custom != nil || me }
 }
 
 /// A notice the instance posted in a channel ("Ada added Grace"): one
@@ -715,6 +733,11 @@ public struct LumiaComposer<Above: View>: View {
     var hasAttachments = false
     /// A file is still being processed or uploaded: Send waits.
     var waiting = false
+    /// The emoji button between the field and Send: opens the picker,
+    /// whose choice goes in at the caret (`caret`); nil draws none.
+    var emoji: (() -> Void)?
+    /// Where the field's caret is, from iOS 18; the choice goes at the end before.
+    var caret: ComposerCaret?
     let send: () -> Void
     @ViewBuilder let above: () -> Above
 
@@ -730,8 +753,8 @@ public struct LumiaComposer<Above: View>: View {
     /// a keyboard that has one: this account's newest message, edited.
     /// Near the limit `room` sets the counter at the end of the line under
     /// the field; over it Send and Return do nothing and the draft stays.
-    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, room: ((String) -> MessageRoom)? = nil, attach: AnyView? = nil, hasAttachments: Bool = false, waiting: Bool = false, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
-        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.room = room; self.attach = attach; self.hasAttachments = hasAttachments; self.waiting = waiting; self.send = send; self.above = above
+    public init(text: Binding<String>, placeholder: String, disabled: Bool = false, hint: String? = "Return to send", typing: [String]? = nil, focused: FocusState<Bool>.Binding? = nil, reply: ComposerReply? = nil, editLast: (() -> Void)? = nil, textScale: CGFloat = 1, room: ((String) -> MessageRoom)? = nil, attach: AnyView? = nil, hasAttachments: Bool = false, waiting: Bool = false, emoji: (() -> Void)? = nil, caret: ComposerCaret? = nil, send: @escaping () -> Void, @ViewBuilder above: @escaping () -> Above) {
+        self._text = text; self.placeholder = placeholder; self.disabled = disabled; self.hint = hint; self.typing = typing; self.focused = focused; self.reply = reply; self.editLast = editLast; self.textScale = textScale; self.room = room; self.attach = attach; self.hasAttachments = hasAttachments; self.waiting = waiting; self.emoji = emoji; self.caret = caret; self.send = send; self.above = above
     }
 
     private func canSend(_ left: MessageRoom?) -> Bool {
@@ -739,8 +762,13 @@ public struct LumiaComposer<Above: View>: View {
     }
 
     @ViewBuilder private var field: some View {
-        let base = TextField(placeholder, text: $text, axis: .vertical)
-        if let focused { base.focused(focused) } else { base }
+        if #available(iOS 18, macOS 15, *), let caret {
+            let base = TextField(placeholder, text: $text, selection: caret.selection, axis: .vertical)
+            if let focused { base.focused(focused) } else { base }
+        } else {
+            let base = TextField(placeholder, text: $text, axis: .vertical)
+            if let focused { base.focused(focused) } else { base }
+        }
     }
 
     public var body: some View {
@@ -779,6 +807,20 @@ public struct LumiaComposer<Above: View>: View {
                         }
                         .padding(.horizontal, LumiaTokens.space8)
                         .frame(minHeight: 42)
+                    if let emoji {
+                        // Add reaction's glyph, the field's own way to the picker.
+                        Button(action: emoji) {
+                            Image(systemName: "face.smiling")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(LumiaTokens.inkSecondary.color)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(disabled)
+                        .accessibilityLabel("Emoji")
+                        .accessibilityIdentifier("composer-emoji")
+                    }
                     Button(action: send) {
                         Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
                             .foregroundStyle(LumiaTokens.onAccent.color)

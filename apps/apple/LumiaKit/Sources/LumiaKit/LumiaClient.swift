@@ -176,6 +176,22 @@ public actor LumiaClient {
     public func react(channelID: String, messageID: String, emoji: String, remove: Bool) throws {
         try inner.react(channelId: channelID, messageId: messageID, emoji: emoji, remove: remove)
     }
+    /// A server's own emoji (specs/emoji.md): a reaction with one by its id,
+    /// the composer's matches for what follows a `:`, and uploading,
+    /// renaming and removing one, each returning the snapshot as it then is.
+    public func reactEmoji(channelID: String, messageID: String, emojiID: String, remove: Bool) throws {
+        try inner.reactEmoji(channelId: channelID, messageId: messageID, emojiId: emojiID, remove: remove)
+    }
+    public func emojiMatches(serverID: String, prefix: String) -> [EmojiSummary] { inner.emojiMatches(serverId: serverID, prefix: prefix) }
+    public func uploadEmoji(serverID: String, name: String, picture: Data, mediaType: String) throws -> SnapshotSummary {
+        try inner.uploadEmoji(serverId: serverID, name: name, picture: picture, mediaType: mediaType)
+    }
+    public func renameEmoji(serverID: String, emojiID: String, name: String) throws -> SnapshotSummary {
+        try inner.renameEmoji(serverId: serverID, emojiId: emojiID, name: name)
+    }
+    public func removeEmoji(serverID: String, emojiID: String) throws -> SnapshotSummary {
+        try inner.removeEmoji(serverId: serverID, emojiId: emojiID)
+    }
     /// Editing and deleting a server's message (architecture 6.6): the
     /// command goes through the gateway, and the answer is its id, which a
     /// refusal's error names.

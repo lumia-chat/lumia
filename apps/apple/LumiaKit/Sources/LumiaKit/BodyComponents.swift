@@ -31,12 +31,18 @@ enum BodyType {
 /// accent's ink on its soft fill, with the pill's rounded ends where the
 /// system can draw them (iOS 18), a plain fill before. A pill naming a
 /// person opens them through `openPerson` where given; a link opens in the
-/// system's browser. An edited message says so after its last paragraph's
+/// system's browser. Each of the server's emoji it uses (`emoji`, the
+/// message's refs) is drawn as its picture where `held` gives it, at the
+/// height of an emoji in the text and as wide as its shape, playing when
+/// animated (its first frame under Reduce Motion), and as its `:name:`
+/// where it gives none. An edited message says so after its last paragraph's
 /// words, or on a line of its own after a block that is not one. `scale`
 /// is the message rows' text scale, the leading growing with it.
 public struct MessageBodyText: View {
     let blocks: [BodyBlock]
     let mentions: [MentionSummary]
+    let emoji: [EmojiRefSummary]
+    let held: (String) -> EmojiDrawing?
     let deleted: Bool
     let edited: Bool
     let name: (String) -> String
@@ -44,14 +50,14 @@ public struct MessageBodyText: View {
     let scale: CGFloat
 
     /// `text` read by the core; a deleted message's placeholder is drawn as it is.
-    public init(text: String, mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
-        let blocks = deleted ? [BodyBlock.para(inline: BodyInline(text: text, runs: [], links: []))] : BodyBlocks.parsed(text, mentions: mentions)
-        self.init(blocks: blocks, mentions: deleted ? [] : mentions, deleted: deleted, edited: edited, name: name, openPerson: openPerson, scale: scale)
+    public init(text: String, mentions: [MentionSummary], emoji: [EmojiRefSummary] = [], held: @escaping (String) -> EmojiDrawing? = { _ in nil }, deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
+        let blocks = deleted ? [BodyBlock.para(inline: BodyInline(text: text, runs: [], links: []))] : BodyBlocks.parsed(text, mentions: mentions, emoji: emoji)
+        self.init(blocks: blocks, mentions: deleted ? [] : mentions, emoji: deleted ? [] : emoji, held: held, deleted: deleted, edited: edited, name: name, openPerson: openPerson, scale: scale)
     }
 
     /// Blocks already read, as a row that also needs them for its actions has them.
-    public init(blocks: [BodyBlock], mentions: [MentionSummary], deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
-        self.blocks = blocks; self.mentions = mentions; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson; self.scale = scale
+    public init(blocks: [BodyBlock], mentions: [MentionSummary], emoji: [EmojiRefSummary] = [], held: @escaping (String) -> EmojiDrawing? = { _ in nil }, deleted: Bool = false, edited: Bool = false, name: @escaping (String) -> String = { _ in "" }, openPerson: ((String) -> Void)? = nil, scale: CGFloat = 1) {
+        self.blocks = blocks; self.mentions = mentions; self.emoji = emoji; self.held = held; self.deleted = deleted; self.edited = edited; self.name = name; self.openPerson = openPerson; self.scale = scale
     }
 
     static let scheme = "lumia-mention"
@@ -82,7 +88,7 @@ public struct MessageBodyText: View {
     }
 
     private var look: BodyLook {
-        BodyLook(mentions: mentions, name: name, opens: openPerson != nil, scale: scale)
+        BodyLook(mentions: mentions, name: name, opens: openPerson != nil, scale: scale, emoji: emoji, held: held)
     }
 }
 
@@ -93,6 +99,14 @@ struct BodyLook {
     /// A pill naming a person opens them.
     let opens: Bool
     let scale: CGFloat
+    /// The message's emoji refs, and an emoji as drawn by its id (nil: its text).
+    var emoji: [EmojiRefSummary] = []
+    var held: (String) -> EmojiDrawing? = { _ in nil }
+
+    /// The emoji at `index` of the refs as drawn, when held.
+    func drawing(_ index: Int) -> EmojiDrawing? {
+        emoji.indices.contains(index) ? held(emoji[index].emojiId) : nil
+    }
 }
 
 /// Blocks in a column, the desktop shell's room between them; the last
@@ -154,6 +168,7 @@ struct BodyParagraph: View {
     let inline: BodyInline
     let edited: Bool
     let look: BodyLook
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The pill's and the chip's room either side of their words: a narrow
     /// space that does not break, as near as running words come to the
@@ -161,21 +176,45 @@ struct BodyParagraph: View {
     static let pad = "\u{202F}"
 
     var body: some View {
-        if #available(iOS 18, macOS 15, *) {
-            words(rounded: true).textRenderer(BodyChipRenderer(mention: LumiaTokens.accentSoft.color, code: LumiaTokens.inset.color))
+        let pieces = BodyText.pieces(inline)
+        // An animated emoji held plays: the paragraph is drawn again at its
+        // frames' pace, and not at all while Reduce Motion is on.
+        let playing = EmojiPicture.still(reduceMotion) ? [] : pieces.compactMap { piece -> EmojiPicture? in
+            guard case let .emoji(index) = piece.kind, let picture = look.drawing(index)?.picture, picture.animated else { return nil }
+            return picture
+        }
+        if playing.isEmpty {
+            drawn(pieces, at: nil)
         } else {
-            words(rounded: false)
+            TimelineView(.animation(minimumInterval: playing.map(\.shortest).min())) { frame in
+                drawn(pieces, at: frame.date.timeIntervalSinceReferenceDate)
+            }
+        }
+    }
+
+    @ViewBuilder private func drawn(_ pieces: [BodyPiece], at seconds: Double?) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            words(pieces, rounded: true, at: seconds).textRenderer(BodyChipRenderer(mention: LumiaTokens.accentSoft.color, code: LumiaTokens.inset.color))
+        } else {
+            words(pieces, rounded: false, at: seconds)
         }
     }
 
     /// The words as one `Text`; `rounded` marks the pills and chips for the
-    /// renderer that draws their ends.
-    private func words(rounded: Bool) -> Text {
+    /// renderer that draws their ends; `seconds` is where a playing emoji is
+    /// in its loop, nil for its first frame.
+    private func words(_ pieces: [BodyPiece], rounded: Bool, at seconds: Double?) -> Text {
         var all = Text(verbatim: "")
-        for piece in BodyText.pieces(inline) {
+        for piece in pieces {
             switch piece.kind {
             case .words:
                 all = all + Text(styled(piece.text))
+            case let .emoji(index):
+                if let drawing = look.drawing(index), let picture = EmojiInline.text(drawing, size: LumiaTokens.textMessage.size * look.scale, at: seconds) {
+                    all = all + picture
+                } else {
+                    all = all + Text(styled(piece.text))
+                }
             case .code:
                 if rounded, #available(iOS 18, macOS 15, *) {
                     all = all + Text(chip(piece.text, filled: false)).customAttribute(BodyChip(code: true))
@@ -458,5 +497,30 @@ extension View {
             guard MessageCounter.wentOver(from: old, to: new), let new else { return }
             AccessibilityNotification.Announcement(MessageCounter.words(left: new.left)).post()
         }
+    }
+}
+
+// MARK: Emoji in text
+
+/// One of a server's emoji in a line of text: its picture as a `Text` of
+/// its own, `EmojiMetrics.inText` times the text's size tall and as wide as
+/// its shape, its middle at the middle of the capitals, as an emoji of the
+/// system's font sits. While its picture is on its way it is a clear one of
+/// the same size, so the line does not move when it comes.
+enum EmojiInline {
+    static func text(_ drawing: EmojiDrawing, size: CGFloat, at seconds: Double?) -> Text? {
+        let height = size * EmojiMetrics.inText
+        guard let frame = drawing.picture?.frame(at: seconds) ?? EmojiPicture.clear(width: Int(drawing.width), height: Int(drawing.height)), frame.height > 0 else { return nil }
+        let image = Image(decorative: frame, scale: CGFloat(frame.height) / height)
+        return Text(image).baselineOffset(capHeight(size) / 2 - height / 2)
+    }
+
+    /// The system font's capitals' height at `size`.
+    static func capHeight(_ size: CGFloat) -> CGFloat {
+        #if canImport(UIKit)
+        UIFont.systemFont(ofSize: size).capHeight
+        #else
+        NSFont.systemFont(ofSize: size).capHeight
+        #endif
     }
 }

@@ -61,6 +61,7 @@ struct ShellView: View {
                 case let .role(serverID, roleID): RoleEditorScreen(session: session, serverID: serverID, roleID: roleID, path: $path)
                 case let .roleMembers(serverID, roleID): RoleMembersScreen(session: session, serverID: serverID, roleID: roleID)
                 case let .serverMembers(serverID): ServerMembersScreen(session: session, serverID: serverID)
+                case let .serverEmoji(serverID): ServerEmojiScreen(session: session, serverID: serverID)
                 case let .browse(serverID): BrowseScreen(session: session, serverID: serverID, path: $path)
                 case let .channelMembers(channelID): ChannelMembersScreen(session: session, channelID: channelID, path: $path)
                 case let .addPeople(channelID): AddPeopleScreen(session: session, channelID: channelID)
@@ -185,6 +186,10 @@ struct ShellView: View {
                     }
                 case "newrole": place = .server(id: first); path = [.serverSettings(serverID: first), .roles(serverID: first), .role(serverID: first, roleID: nil)]
                 case "servermembers": place = .server(id: first); path = [.serverSettings(serverID: first), .serverMembers(serverID: first)]
+                // The server's emoji (specs/emoji.md): the section, and through
+                // LUMIA_DEV_EMOJI_FILE, LUMIA_DEV_EMOJI and LUMIA_DEV_ASK its form,
+                // a row's sheet, its question and its rename (`ServerEmojiScreen`).
+                case "emoji": place = .server(id: first); path = [.serverSettings(serverID: first), .serverEmoji(serverID: first)]
                 case "mentions": place = .server(id: first); path = [.mentions(serverID: first)]
                 case "homementions": place = .home; path = [.mentions(serverID: nil)]
                 // Setting up private messages (issue #20): the phrase (after the

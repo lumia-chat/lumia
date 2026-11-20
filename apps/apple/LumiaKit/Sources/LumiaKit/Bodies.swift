@@ -13,12 +13,15 @@ import LumiaFFI
 /// A run of a paragraph drawn one way: plain words (with their emphasis,
 /// strike and links), a mention (the index into the message's mentions;
 /// its text is the mention as typed, which the view replaces with the
-/// person's name), or inline code.
+/// person's name), inline code, or one of the server's emoji (the index
+/// into the message's emoji refs; its text is the `:name:` as typed, which
+/// the view draws as the emoji's picture when the phone holds it).
 public struct BodyPiece: Equatable {
     public enum Kind: Equatable, Sendable {
         case words
         case mention(Int)
         case code
+        case emoji(Int)
     }
 
     public let kind: Kind
@@ -40,7 +43,7 @@ public enum BodyText {
             case .strong: intent = .stronglyEmphasized
             case .strike: intent = .strikethrough
             case .code: intent = .code
-            case .mention: continue
+            case .mention, .emoji: continue
             }
             guard let range = range(run.start, run.end, in: all) else { continue }
             let parts = all[range].runs[\.inlinePresentationIntent].map { ($0.0, $0.1) }
@@ -53,21 +56,24 @@ public enum BodyText {
         return all
     }
 
-    /// `inline` cut where its look changes kind: at each mention's ends
-    /// and each inline code run's, in order. A mention inside code is code
-    /// (the core marks none there).
+    /// `inline` cut where its look changes kind: at each mention's ends,
+    /// each emoji's and each inline code run's, in order. A mention or an
+    /// emoji inside code is code (the core marks none there).
     public static func pieces(_ inline: BodyInline) -> [BodyPiece] {
         let all = attributed(inline)
         let units = UInt32(inline.text.utf16.count)
         var cuts: Set<UInt32> = [0, units]
         var mentions: [(start: UInt32, end: UInt32, index: Int)] = []
         var codes: [(start: UInt32, end: UInt32)] = []
+        var emoji: [(start: UInt32, end: UInt32, index: Int)] = []
         for run in inline.runs where run.start < run.end && run.end <= units {
             switch run.style {
             case let .mention(index):
                 mentions.append((run.start, run.end, Int(index)))
             case .code:
                 codes.append((run.start, run.end))
+            case let .emoji(index):
+                emoji.append((run.start, run.end, Int(index)))
             default:
                 continue
             }
@@ -83,6 +89,8 @@ public enum BodyText {
                 kind = .code
             } else if let m = mentions.first(where: { $0.start <= from && to <= $0.end }) {
                 kind = .mention(m.index)
+            } else if let e = emoji.first(where: { $0.start <= from && to <= $0.end }) {
+                kind = .emoji(e.index)
             } else {
                 kind = .words
             }
@@ -93,24 +101,32 @@ public enum BodyText {
 
     /// The body as it is heard: each paragraph's words with every mention
     /// by name (`name` gives it, empty for one not known, whose mention
-    /// stays as typed), a code block's lines, a list's items after their
-    /// markers, one block to a line.
-    public static func plain(_ blocks: [BodyBlock], mentions: [MentionSummary], name: (String) -> String) -> String {
+    /// stays as typed), every emoji by its present name (`emoji` gives its
+    /// `:name:` by its index among the message's refs, nil for one not
+    /// held, which stays as typed), a code block's lines, a list's items
+    /// after their markers, one block to a line.
+    public static func plain(_ blocks: [BodyBlock], mentions: [MentionSummary], name: (String) -> String, emoji: (Int) -> String? = { _ in nil }) -> String {
         blocks.map { block -> String in
             switch block {
             case let .para(inline):
                 return pieces(inline).map { piece in
                     let typed = String(piece.text.characters)
-                    guard case let .mention(index) = piece.kind, mentions.indices.contains(index) else { return typed }
-                    return BodySegment(text: typed, mention: mentions[index]).drawn(name: name)
+                    switch piece.kind {
+                    case let .mention(index) where mentions.indices.contains(index):
+                        return BodySegment(text: typed, mention: mentions[index]).drawn(name: name)
+                    case let .emoji(index):
+                        return emoji(index) ?? typed
+                    default:
+                        return typed
+                    }
                 }.joined()
             case let .code(_, text):
                 return text
             case let .quote(inner):
-                return plain(inner, mentions: mentions, name: name)
+                return plain(inner, mentions: mentions, name: name, emoji: emoji)
             case let .list(start, items):
                 return items.enumerated().map { k, item in
-                    "\(BodyBlocks.marker(start: start, at: k)) \(plain(item.blocks, mentions: mentions, name: name))"
+                    "\(BodyBlocks.marker(start: start, at: k)) \(plain(item.blocks, mentions: mentions, name: name, emoji: emoji))"
                 }.joined(separator: "\n")
             }
         }.joined(separator: "\n")
@@ -131,13 +147,15 @@ public enum BodyText {
 }
 
 public enum BodyBlocks {
-    /// The blocks `parseBody` reads from a body and its mentions, read once: a row is drawn
-    /// again at every change around it (a hover, a reaction, the typing line), and the same
+    /// The blocks the core reads from a body, its mentions and its emoji
+    /// refs (`parseBodyMarked`), read once: a row is drawn again at every
+    /// change around it (a hover, a reaction, the typing line), and the same
     /// body need not cross into the core each time. `NSCache` lets them go under pressure.
-    public static func parsed(_ body: String, mentions: [MentionSummary]) -> [BodyBlock] {
-        let key = (mentions.map { "\($0.start)-\($0.end)" }.joined(separator: ",") + "\u{0}" + body) as NSString
+    public static func parsed(_ body: String, mentions: [MentionSummary], emoji: [EmojiRefSummary] = []) -> [BodyBlock] {
+        let marks = mentions.map { "\($0.start)-\($0.end)" }.joined(separator: ",") + ";" + emoji.map { "\($0.start)-\($0.end)" }.joined(separator: ",")
+        let key = (marks + "\u{0}" + body) as NSString
         if let held = cache.object(forKey: key) { return held.blocks }
-        let blocks = parseBody(body: body, mentions: mentions)
+        let blocks = emoji.isEmpty ? parseBody(body: body, mentions: mentions) : parseBodyMarked(body: body, mentions: mentions, emoji: emoji)
         cache.setObject(Held(blocks), forKey: key, cost: body.utf8.count)
         return blocks
     }

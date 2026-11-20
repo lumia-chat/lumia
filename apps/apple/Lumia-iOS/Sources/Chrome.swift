@@ -33,6 +33,8 @@ enum Screen: Hashable {
     case role(serverID: String, roleID: String?)
     case roleMembers(serverID: String, roleID: String)
     case serverMembers(serverID: String)
+    /// The server's own emoji, for whoever holds Manage emoji (`EmojiScreens.swift`).
+    case serverEmoji(serverID: String)
     case browse(serverID: String)
     case channelMembers(channelID: String)
     case addPeople(channelID: String)

@@ -12,7 +12,10 @@
 // app is active; and what is typed in the composer and not sent, with the
 // reply it answers, kept by conversation through a switch to another, a
 // quit or a crash (issue #23, `Drafting`). Attachments and link cards, in
-// the composer and under a message, are `Media.swift`'s.
+// the composer and under a message, are `Media.swift`'s. A server's own
+// emoji (specs/emoji.md): drawn in its messages and chips, offered by the
+// picker from Add reaction and from the composer's emoji button, and
+// listed over the keyboard after a `:` in a server's conversation.
 import LumiaFFI
 import LumiaKit
 import SwiftUI
@@ -285,6 +288,10 @@ struct ConversationScreen: View {
     /// What plays here, one at a time, and the one embed shown; let go on leaving.
     @State private var playback = MediaPlayback()
     @FocusState private var composing: Bool
+    /// Where the composer's caret is, for what the emoji button's picker chooses.
+    @State private var caret = ComposerCaret()
+    /// The composer's picker chose: the keyboard comes back as it goes.
+    @State private var refocus = false
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
 
@@ -369,7 +376,7 @@ struct ConversationScreen: View {
             // it either: the instance is not to learn who is writing in a
             // personal conversation (protocol 6.7; an open item of the E2EE spec).
             // The reply bar has no "@ On" here: every message of a personal conversation notifies.
-            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyName, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: member && session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
+            LumiaComposer(text: $draft, placeholder: member ? "Message \(title)" : session.privateMessages.needsSomething ? "Private messages need this phone" : "Setting up the encrypted group…", disabled: !member, hint: nil, focused: $composing, reply: replying.map { _ in ComposerReply(name: replyName, mention: nil) { replying = nil } }, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: member && session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading, emoji: { sheet = .composer }, caret: caret) {
                 Task { await send() }
             } above: {
                 ComposerMediaBars(media: media, session: session)
@@ -387,8 +394,9 @@ struct ConversationScreen: View {
         }, jump: jump, newestVisible: $newestVisible, scroll: $scroll))
         // A message's sheet takes the keyboard from the composer, so its words can be selected.
         .onChange(of: sheet) { _, open in if open != nil { composing = false } }
-        .sheet(item: $sheet, onDismiss: changer.afterSheet) { sheet in
-            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
+        .sheet(item: $sheet, onDismiss: afterSheet) { sheet in
+            // A personal conversation has no server's emoji (specs/emoji.md 1).
+            MessageSheetView(sheet: sheet, react: react, insert: insert, reply: { m, part in startReply(id: m.id, name: m.authorName, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
         .onChange(of: channelID) { _, _ in
@@ -448,7 +456,7 @@ struct ConversationScreen: View {
         guard member else { return x }
         let ref = ref(m)
         x.edit = changer.edit(ref)
-        x.toggle = { react(m.messageId, $0) }
+        x.toggle = { react(m.messageId, .unicode($0.emoji)) }
         x.addReaction = { sheet = .picker(messageID: m.messageId) }
         x.reply = { startReply(id: m.messageId, name: who(m), body: ref.drawn, part: nil) }
         if ref.actions.contains(.edit) { x.editMessage = { changer.start(ref) } }
@@ -486,9 +494,24 @@ struct ConversationScreen: View {
         replyingTo = ""
     }
 
-    private func react(_ messageID: String, _ emoji: String) {
+    private func react(_ messageID: String, _ emoji: PickedEmoji) {
+        guard case let .unicode(emoji) = emoji else { return }
         Task {
             do { try await session.react(channelID: channelID, messageID: messageID, emoji: emoji) } catch { self.error = error.lumiaMessage }
+        }
+    }
+
+    /// The composer's picker chose: in the field at the caret, and the keyboard back.
+    private func insert(_ emoji: PickedEmoji) {
+        draft = caret.insert(emoji.typed, into: draft)
+        refocus = true
+    }
+
+    private func afterSheet() {
+        changer.afterSheet()
+        if refocus {
+            refocus = false
+            composing = true
         }
     }
 
@@ -578,10 +601,22 @@ struct ChannelScreen: View {
     /// What plays here, one at a time, and the one embed shown; let go on leaving.
     @State private var playback = MediaPlayback()
     @FocusState private var composing: Bool
+    /// Where the composer's caret is, for what the emoji button's picker chooses.
+    @State private var caret = ComposerCaret()
+    /// The composer's picker chose: the keyboard comes back as it goes.
+    @State private var refocus = false
+    /// The `:` list: the server's emoji the `:word` the draft ends in matches, as the core orders them.
+    @State private var emojiRows: [EmojiSummary] = []
+    #if DEBUG
+    @State private var devOpened = false
+    #endif
     /// The message text at the system's text size, which the font size scales.
     @ScaledMetric(relativeTo: .body) private var systemText = LumiaTokens.textMessage.size
 
     private var changer: Changer { Changer(session: session, channelID: channelID, changes: $changes, error: $error) }
+
+    /// The server whose emoji this conversation uses, its channels' and its server DMs'.
+    private var serverID: String { channel?.serverId ?? "" }
 
     /// How the messages are drawn: Preferences' message settings. The list,
     /// and of the rest only the composer's words, which take the font size:
@@ -663,7 +698,7 @@ struct ChannelScreen: View {
             }
             if member {
                 // Who is typing goes under the field, in a server's channel only (protocol 6.7).
-                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading) {
+                LumiaComposer(text: $draft, placeholder: isDM ? "Message \(title)" : "Message #\(name)", hint: nil, typing: session.typingNames(in: channelID), focused: $composing, reply: replyBar, editLast: editLast, textScale: measures.text, room: { session.client.messageRoom($0) }, attach: session.uploadLimits != nil ? AnyView(AttachButton(media: media)) : nil, hasAttachments: !media.strip.draftIDs.isEmpty, waiting: media.strip.uploading, emoji: { sheet = .composer }, caret: caret) {
                     Task { await send() }
                 } above: {
                     composerBars
@@ -688,20 +723,53 @@ struct ChannelScreen: View {
         .onChange(of: draft) { _, draft in
             if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft != placed { session.typed(channelID: channelID) }
         }
+        // The `:` list: what the `:word` the draft ends in matches, the core's to say.
+        .task(id: "\(draft)|\(member)") {
+            guard member, let query = EmojiQuery.at(draft) else { emojiRows = []; return }
+            emojiRows = await session.emojiMatches(serverID: serverID, prefix: query.query)
+        }
         .onChange(of: session.commandError) { _, _ in
             if let refused = session.takeCommandError() { error = refused }
         }
         // A message's sheet takes the keyboard from the composer, so its words can be selected.
         .onChange(of: sheet) { _, open in if open != nil { composing = false } }
-        .sheet(item: $sheet, onDismiss: changer.afterSheet) { sheet in
-            MessageSheetView(sheet: sheet, react: react, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
+        .sheet(item: $sheet, onDismiss: afterSheet) { sheet in
+            MessageSheetView(sheet: sheet, server: PickerServer.of(channelID: channelID, session: session), react: react, insert: insert, reply: { m, part in startReply(id: m.id, authorID: m.authorID, body: m.drawn, part: part) }, chose: { changes.chosen = ($0, $1) })
         }
         .deleteConfirmation(changer)
         .onChange(of: channelID) { _, _ in
             expanded = []
             playback.leave()
         }
+        #if DEBUG
+        .task(id: messages.count) { devOpen() }
+        #endif
     }
+
+    #if DEBUG
+    /// A smoke run's way in (scripts/smoke-emoji.sh): `LUMIA_DEV_SHEET`
+    /// `react` opens the picker from the newest message's Add reaction
+    /// (`LUMIA_DEV_SEARCH` typed in its search) and `composer` the
+    /// composer's; `LUMIA_DEV_DRAFT` puts words in the composer, with the keyboard.
+    private func devOpen() {
+        let env = ProcessInfo.processInfo.environment
+        guard !devOpened, member, let last = messages.last else { return }
+        devOpened = true
+        Task {
+            // After the kept draft has been put in the field.
+            try? await Task.sleep(for: .seconds(1))
+            switch env["LUMIA_DEV_SHEET"] {
+            case "react": sheet = .picker(messageID: last.messageId)
+            case "composer": sheet = .composer
+            default: break
+            }
+            if let words = env["LUMIA_DEV_DRAFT"] {
+                draft = words
+                composing = true
+            }
+        }
+    }
+    #endif
 
     /// The reply bar inside the composer, with its "@ On" for a reply to
     /// someone else; none for a reply to oneself.
@@ -750,6 +818,13 @@ struct ChannelScreen: View {
                 }
             } end: { EmptyView() }
         }
+        if !emojiRows.isEmpty {
+            LumiaEmojiList(rows: emojiRows.map { LumiaEmojiList.Row(id: $0.emojiId, name: $0.name, drawing: session.drawing(of: $0)) }) { n in
+                guard let query = EmojiQuery.at(draft), emojiRows.indices.contains(n) else { return }
+                draft = query.picking(emojiRows[n].name)
+                emojiRows = []
+            }
+        }
         let rows = choices
         if !rows.isEmpty {
             LumiaMentionList(rows: rows.map(row)) { n in
@@ -789,8 +864,11 @@ struct ChannelScreen: View {
         }
         x.mentions = m.mentions
         x.name = { knownName($0, session: session) }
+        let serverID = serverID
+        x.emoji = m.emoji
+        x.held = { session.drawing(emojiID: $0, in: serverID) }
         x.quote = m.reply.map { q in QuoteDisplay(authorID: q.authorAccountId, name: q.authorAccountId.isEmpty ? nil : session.name(of: q.authorAccountId), picture: session.picture(of: q.authorAccountId), text: q.text, deleted: q.originalDeleted, quotesMe: q.authorAccountId == session.me, open: { jump(q.messageId) }) }
-        x.reactions = reactionDisplays(m.reactions, session: session)
+        x.reactions = reactionDisplays(m.reactions, session: session, serverID: serverID)
         x.tinted = m.mentionsMe
         x.flashed = flash == m.messageId
         x.replying = replying?.messageId == m.messageId
@@ -804,7 +882,7 @@ struct ChannelScreen: View {
         guard member else { return x }
         let ref = ref(m)
         x.edit = changer.edit(ref)
-        x.toggle = { react(m.messageId, $0) }
+        x.toggle = { toggle(m.messageId, $0) }
         x.addReaction = { sheet = .picker(messageID: m.messageId) }
         x.reply = { startReply(id: m.messageId, authorID: m.authorAccountId, body: ref.drawn, part: nil) }
         if ref.actions.contains(.edit) { x.editMessage = { changer.start(ref) } }
@@ -841,9 +919,46 @@ struct ChannelScreen: View {
         composing = true
     }
 
-    private func react(_ messageID: String, _ emoji: String) {
+    /// A reaction chosen in the picker: one of Unicode's, or one of the server's by its id.
+    private func react(_ messageID: String, _ emoji: PickedEmoji) {
         Task {
-            do { try await session.react(channelID: channelID, messageID: messageID, emoji: emoji) } catch { self.error = error.lumiaMessage }
+            do {
+                switch emoji {
+                case let .unicode(e): try await session.react(channelID: channelID, messageID: messageID, emoji: e)
+                case let .custom(e): try await session.reactEmoji(channelID: channelID, messageID: messageID, emojiID: e.emojiId)
+                }
+            } catch {
+                self.error = error.lumiaMessage
+            }
+        }
+    }
+
+    /// A chip tapped: its reaction added or taken away, by the emoji's id where it is the server's.
+    private func toggle(_ messageID: String, _ chip: ReactionDisplay) {
+        Task {
+            do {
+                if chip.emojiID.isEmpty {
+                    try await session.react(channelID: channelID, messageID: messageID, emoji: chip.emoji)
+                } else {
+                    try await session.reactEmoji(channelID: channelID, messageID: messageID, emojiID: chip.emojiID)
+                }
+            } catch {
+                self.error = error.lumiaMessage
+            }
+        }
+    }
+
+    /// The composer's picker chose: in the field at the caret, and the keyboard back.
+    private func insert(_ emoji: PickedEmoji) {
+        draft = caret.insert(emoji.typed, into: draft)
+        refocus = true
+    }
+
+    private func afterSheet() {
+        changer.afterSheet()
+        if refocus {
+            refocus = false
+            composing = true
         }
     }
 
