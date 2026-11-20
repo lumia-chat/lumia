@@ -1,8 +1,9 @@
 defmodule Lumia.Workers.EmojiUpdated do
   @moduledoc """
   Tells every member of a server that its custom emoji changed: appends
-  `EmojiUpdated`, the server's live emoji as they now are, to each
-  member's account log (specs/emoji.md 8), as `Lumia.Workers.RolesUpdated`
+  `EmojiUpdated`, the server's live emoji as they now are and those
+  removed in the last day under their names then, to each member's account
+  log (specs/emoji.md 8), as `Lumia.Workers.RolesUpdated`
   tells of its roles: one job for a burst of changes, the emoji read once
   the changes in flight have committed, a server's jobs one at a time.
   """
@@ -30,17 +31,23 @@ defmodule Lumia.Workers.EmojiUpdated do
   end
 
   defp tell(server_id) do
-    case Fanout.settled(server_id, fn -> CustomEmoji.list(server_id) end) do
+    read = fn -> {CustomEmoji.list(server_id), CustomEmoji.recently_removed(server_id)} end
+
+    case Fanout.settled(server_id, read) do
       # The server is gone, and its members with it.
       nil ->
         :ok
 
-      emoji ->
+      {emoji, removed} ->
         Fanout.to_members(server_id, [
           {:emoji_updated,
            %V1.EmojiUpdated{
              server_id: Proto.uuid(server_id),
-             emoji: Enum.map(emoji, &Proto.custom_emoji/1)
+             emoji: Enum.map(emoji, &Proto.custom_emoji/1),
+             # A rename and a removal in one burst are this one event, which
+             # would otherwise never say the name the reactions left behind
+             # are to show (specs/emoji.md 7 and 8).
+             removed: Enum.map(removed, &Proto.custom_emoji/1)
            }}
         ])
     end

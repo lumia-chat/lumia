@@ -33,7 +33,7 @@ A name is one live emoji's alone in its server. A removed emoji's name is free a
 
 1. **The format** is told from the first bytes: PNG (APNG included), JPEG, WebP or GIF, never from what the upload calls itself.
 2. **Still or animated.** An upload is animated when it is a GIF, an APNG or a WebP of more than one frame. A JPEG, or any of the others with one frame, is still.
-3. **Bounds before decoding.** A still picture is held to the avatar's bounds (8,192 a side, 25 million pixels). An animated one's canvas is held to 1,024 a side, and its frames are counted while they are decoded: past 200 frames, or past 64 million pixels decoded across frames, it is refused (`too_large`). Each frame decodes under the allocation limit avatars use.
+3. **Bounds before decoding.** A still picture is held to the avatar's bounds (8,192 a side, 25 million pixels). An animated one's canvas is held to 1,024 a side, and its frames are counted while they are decoded: past 200 frames, or past 64 million pixels decoded across frames, it is refused (`too_large`). Each frame decodes under the allocation limit avatars use. A size given inside the file, as a WebP's lossy bitstream gives its own, is read before the decoder sees it and refused past the canvas it is in, since the decoder allocates by it before it compares the two.
 4. **Colour** is converted to sRGB from an embedded profile, and a still picture is turned upright, as an avatar is.
 5. **Fitted, never cropped.** The picture is scaled to fit within 128 by 128 pixels, keeping its shape, and never enlarged. Every frame of an animated one is scaled the same.
 6. **Encoded here.** A still picture as PNG, alpha kept. An animated one as GIF, looping for ever, each frame's palette quantized from its own pixels, transparency kept where a pixel is less than half opaque, and each frame's delay kept, a delay under 20 ms made 100 ms (as browsers draw them). An animated result over 512 KiB is refused (`too_large`).
@@ -55,7 +55,7 @@ Each change writes an audit row in its transaction (`emoji.create`, `emoji.renam
 
 ## 5. The limit
 
-- **The default** is `LUMIA_SERVER_EMOJI_MAX`, 50 unless set, for every server without a number of its own.
+- **The default** is `LUMIA_SERVER_EMOJI_MAX`, 50 unless set, for every server without a number of its own: a whole number, 0 allowing no uploads; the instance does not start with anything else.
 - **A server's own number** is set by the operator on the instance: `bin/lumia-admin emoji-limit <server_id> <n>`, and `bin/lumia-admin emoji-limit <server_id> default` to go back to the default. It is kept on the server (`servers.emoji_limit`, empty for the default), written to the audit log as `server.emoji_limit` with no actor and `override` set, and told to every member as `ServerUpdated`. Nothing a server's own admins can reach changes it. With plans (architecture 16) the plan's allowance takes this column's place, and the command stays as the operator's override.
 - **`Server.emoji_limit`** carries the limit that applies, so a client says "12 of 50" without asking, and offers no upload at the limit.
 - **Lowering a limit deletes nothing.** A server above its limit keeps every emoji it has; uploads are refused until it is below it again. No limit deletes what a server's own people chose to keep (architecture 16, as for files in 6.7).

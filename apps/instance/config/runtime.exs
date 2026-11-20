@@ -128,8 +128,17 @@ config :lumia, :uploads,
 
 # How many custom emoji a server may have unless the operator gave it a
 # number of its own with `lumia-admin emoji-limit` (specs/emoji.md 5).
+# A whole number; 0 is a limit too, and allows no uploads.
 config :lumia, :emoji,
-  server_max: String.to_integer(System.get_env("LUMIA_SERVER_EMOJI_MAX") || "50")
+  server_max:
+    (case Integer.parse(System.get_env("LUMIA_SERVER_EMOJI_MAX") || "50") do
+       {n, ""} when n in 0..2_147_483_647 ->
+         n
+
+       _ ->
+         raise "LUMIA_SERVER_EMOJI_MAX is a whole number from 0 (no uploads) to 2147483647, " <>
+                 "not #{inspect(System.get_env("LUMIA_SERVER_EMOJI_MAX"))}"
+     end)
 
 # Link cards (specs/media.md 6.4): the instance fetches the pages its
 # members link only when the operator says so (architecture hard rule 3).

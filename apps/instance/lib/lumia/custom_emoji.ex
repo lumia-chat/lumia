@@ -24,17 +24,30 @@ defmodule Lumia.CustomEmoji do
   alias Lumia.Workers.ServerUpdated
 
   @name ~r/\A[a-z0-9_]{2,32}\z/
+  # The most a limit can be: what `servers.emoji_limit` holds, and within
+  # what `Server.emoji_limit` (uint32) carries.
+  @most 2_147_483_647
   @written ~r/\A:[a-z0-9_]{2,32}:\z/
+
+  @doc "The most a server's limit, or the default, can be."
+  def most, do: @most
 
   @doc """
   The limit of a server without a number of its own:
-  `LUMIA_SERVER_EMOJI_MAX`, 50 unless set (specs/emoji.md 5).
+  `LUMIA_SERVER_EMOJI_MAX`, 50 unless set (specs/emoji.md 5). Zero is a
+  limit: no uploads.
   """
   def default_limit, do: Application.get_env(:lumia, :emoji, [])[:server_max] || 50
 
-  @doc "How many live emoji `server` may have: its own number, or the default."
-  def limit(%Server{emoji_limit: nil}), do: default_limit()
-  def limit(%Server{emoji_limit: limit}), do: limit
+  @doc """
+  How many live emoji `server` may have: its own number, or the default.
+  Never below zero nor above `most/0`, whatever the setting says, since it
+  goes out as an unsigned number on every `Server`.
+  """
+  def limit(%Server{emoji_limit: nil}), do: within(default_limit())
+  def limit(%Server{emoji_limit: limit}), do: within(limit)
+
+  defp within(limit) when is_integer(limit), do: limit |> max(0) |> min(@most)
 
   @doc """
   A name as kept: lowercased, and 2 to 32 of a-z, 0-9 and `_`, or
@@ -49,6 +62,30 @@ defmodule Lumia.CustomEmoji do
 
   @doc "Whether `text` has the shape of a name between colons, `:name:`."
   def written?(text) when is_binary(text), do: Regex.match?(@written, text)
+
+  @doc """
+  The server's emoji removed in the last day, each under the name it had
+  when it was removed, oldest removal first: what `EmojiUpdated.removed`
+  carries (specs/emoji.md 8).
+  """
+  def recently_removed(server_id) do
+    day_ago = DateTime.add(DateTime.utc_now(), -1, :day)
+
+    Repo.all(
+      from e in Emoji,
+        where: e.server_id == ^server_id and e.deleted_at > ^day_ago,
+        order_by: [e.deleted_at, e.id]
+    )
+  end
+
+  @doc """
+  Whether a live emoji's picture is the blob at `address`: an emoji's
+  picture is served only then (specs/emoji.md 7).
+  """
+  def live_picture?(address) when is_binary(address) do
+    path = Accounts.picture_path(%Lumia.Blobs.Blob{address: address})
+    Repo.exists?(from e in Emoji, where: e.image_url == ^path and is_nil(e.deleted_at))
+  end
 
   @doc "The server's live emoji, oldest first."
   def list(server_id) do
@@ -225,12 +262,14 @@ defmodule Lumia.CustomEmoji do
 
   @doc """
   Sets the server's own limit, the operator's to set (`bin/lumia-admin
-  emoji-limit`): a number, or `:default` for the instance's default.
+  emoji-limit`): a whole number from 0 to `most/0`, or `:default` for the
+  instance's default.
   Audited with no actor and `override` set, and told to every member as
   `ServerUpdated`. Lowering it deletes nothing (specs/emoji.md 5).
   `{:ok, server}` or `{:error, :not_found | {:invalid_argument, "limit"}}`.
   """
-  def set_limit(server_id, limit) when limit == :default or (is_integer(limit) and limit >= 0) do
+  def set_limit(server_id, limit)
+      when limit == :default or (is_integer(limit) and limit >= 0 and limit <= @most) do
     kept = if limit == :default, do: nil, else: limit
 
     Tx.transact(fn ->

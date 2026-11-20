@@ -77,7 +77,7 @@ defmodule Lumia.Blobs do
 
   @doc """
   The blob at `address` if it is of `kinds` (one kind or a list):
-  `{:ok, %{media_type: type, bytes: bytes}}`, or `{:error, :not_found}`
+  `{:ok, %{kind: kind, media_type: type, bytes: bytes}}`, or `{:error, :not_found}`
   for an address nothing is at, of another kind, or whose bytes do not
   open (a blob store that was tampered with, or another instance's master
   key).
@@ -93,7 +93,7 @@ defmodule Lumia.Blobs do
            Crypto.secure_compare(Crypto.blake3_keyed(address_key(master, kind), object), address),
          {:ok, content_key} <- open(master, blob.wrapped_key, @key_aad <> address),
          {:ok, bytes} <- open(content_key, object, @content_aad) do
-      {:ok, %{media_type: blob.media_type, bytes: bytes}}
+      {:ok, %{kind: kind, media_type: blob.media_type, bytes: bytes}}
     else
       _ -> {:error, :not_found}
     end

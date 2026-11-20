@@ -28,6 +28,10 @@ defmodule Lumia.Repo.Migrations.CustomEmoji do
              name: :custom_emoji_live_name
            )
 
+    # A picture is served only while a live emoji names it (specs/emoji.md 7),
+    # asked on every fetch of one.
+    create index(:custom_emoji, [:image_url], where: "deleted_at IS NULL")
+
     alter table(:servers) do
       add :emoji_limit, :integer
     end

@@ -240,6 +240,44 @@ defmodule LumiaWeb.CustomEmojiTest do
       assert %V1.CustomEmoji{name: "taken"} = uploaded(ctx.conn, ctx.owner, ctx.server, "taken")
     end
 
+    # A store that lets the blob be read and not deleted (a bucket's policy,
+    # say): the removal still answers 204, and the picture must not be
+    # served on, nor wait for the sweep to stop being served.
+    test "a removed emoji's picture is not served even when the store keeps it", ctx do
+      emoji = uploaded(ctx.conn, ctx.owner, ctx.server, "stuck")
+      assert get(build_conn(), emoji.image_url).status == 200
+
+      address = Accounts.avatar_address(emoji.image_url)
+      {:local, dir} = Application.fetch_env!(:lumia, :blob_store)
+
+      folder =
+        Path.dirname(Lumia.Blobs.Store.Local.path(dir, Lumia.Blobs.object_name("emoji", address)))
+
+      File.chmod!(folder, 0o555)
+      on_exit(fn -> File.chmod(folder, 0o755) end)
+      # Root ignores the mode; the store then deletes, and what is served is
+      # still what is checked.
+      kept? = File.touch(Path.join(folder, "probe")) == {:error, :eacces}
+      File.rm(Path.join(folder, "probe"))
+
+      assert remove(ctx.conn, ctx.owner, ctx.server, emoji).status == 204
+
+      if kept?,
+        do: assert({:ok, _} = Lumia.Blobs.Store.get(Lumia.Blobs.object_name("emoji", address)))
+
+      assert get(build_conn(), emoji.image_url).status == 404
+      assert remove(ctx.conn, ctx.owner, ctx.server, emoji).status == 404
+
+      # The hourly sweep lets it go once the store will.
+      File.chmod!(folder, 0o755)
+      hour_ago = DateTime.add(DateTime.utc_now(), -2, :hour)
+      Repo.update_all(Lumia.Blobs.Blob, set: [inserted_at: hour_ago])
+      assert Lumia.Blobs.sweep_pictures() == if(kept?, do: 1, else: 0)
+
+      assert {:error, :not_found} =
+               Lumia.Blobs.Store.get(Lumia.Blobs.object_name("emoji", address))
+    end
+
     test "what is not a picture is refused in words", ctx do
       bad = upload(ctx.conn, ctx.owner, ctx.server, "svg", "<svg onload=alert(1)/>")
 
@@ -297,6 +335,44 @@ defmodule LumiaWeb.CustomEmojiTest do
                Repo.all(from a in Lumia.Audit.Entry, where: a.action == "server.emoji_limit")
     end
 
+    test "a default under zero is no limit below zero, and zero allows no uploads", ctx do
+      on_exit(fn -> Application.delete_env(:lumia, :emoji) end)
+
+      Application.put_env(:lumia, :emoji, server_max: -1)
+
+      assert ctx.conn |> authed(ctx.member) |> get("/api/v1/account/snapshot") |> Map.get(:status) ==
+               200
+
+      shown = ctx.conn |> authed(ctx.member) |> get("/api/v1/servers/#{ctx.server.id}")
+      assert shown.status == 200
+      assert %V1.Server{emoji_limit: 0} = V1.Server.decode(shown.resp_body)
+      assert CustomEmoji.limit(Repo.get!(Lumia.Servers.Server, ctx.server.id)) == 0
+
+      Application.put_env(:lumia, :emoji, server_max: 0)
+      assert upload(ctx.conn, ctx.owner, ctx.server, "none").status == 507
+    end
+
+    test "the instance does not start with a default that is not a whole number" do
+      on_exit(fn -> System.delete_env("LUMIA_SERVER_EMOJI_MAX") end)
+      runtime = Path.expand("../../../config/runtime.exs", __DIR__)
+
+      for bad <- ["-1", "x", "1.5", ""] do
+        System.put_env("LUMIA_SERVER_EMOJI_MAX", bad)
+
+        assert_raise RuntimeError, ~r/LUMIA_SERVER_EMOJI_MAX/, fn ->
+          Config.Reader.read!(runtime, env: :test)
+        end
+      end
+
+      for {set, kept} <- [{"0", 0}, {"12", 12}] do
+        System.put_env("LUMIA_SERVER_EMOJI_MAX", set)
+        assert Config.Reader.read!(runtime, env: :test)[:lumia][:emoji][:server_max] == kept
+      end
+
+      System.delete_env("LUMIA_SERVER_EMOJI_MAX")
+      assert Config.Reader.read!(runtime, env: :test)[:lumia][:emoji][:server_max] == 50
+    end
+
     # Its success opens a connection of its own, outside the test's sandbox;
     # what it then does is `set_limit/2`, tested above.
     test "the operator's command refuses what is not a number or default", ctx do
@@ -305,6 +381,9 @@ defmodule LumiaWeb.CustomEmojiTest do
 
       assert {:error, {:invalid_argument, "limit"}} =
                Lumia.Release.emoji_limit(ctx.server.id, "x")
+
+      assert {:error, {:invalid_argument, "limit"}} =
+               Lumia.Release.emoji_limit(ctx.server.id, "2147483648")
 
       assert {:error, :not_found} = Lumia.Release.emoji_limit("nope", "3")
     end
@@ -326,6 +405,38 @@ defmodule LumiaWeb.CustomEmojiTest do
       assert told_emoji(ctx.member) == [["uno", "two"]]
       assert told_emoji(guest) == [["uno", "two"]]
       assert told_emoji(ctx.owner) == [["uno", "two"]]
+    end
+
+    # Renamed and removed before the job runs: the one event it sends must
+    # still say the name the reactions left behind are to show.
+    test "EmojiUpdated names what was removed in the last day by its name then", ctx do
+      a = uploaded(ctx.conn, ctx.owner, ctx.server, "first")
+      kept = uploaded(ctx.conn, ctx.owner, ctx.server, "kept")
+      old = uploaded(ctx.conn, ctx.owner, ctx.server, "old")
+      assert remove(ctx.conn, ctx.owner, ctx.server, old).status == 204
+
+      Repo.update_all(
+        from(e in CustomEmoji.Emoji, where: e.id == ^Proto.from_uuid(old.emoji_id)),
+        set: [deleted_at: DateTime.add(DateTime.utc_now(), -25, :hour)]
+      )
+
+      run(EmojiUpdated)
+
+      assert rename(ctx.conn, ctx.owner, ctx.server, a, "last").status == 200
+      assert remove(ctx.conn, ctx.owner, ctx.server, a).status == 204
+      assert length(all_enqueued(worker: EmojiUpdated)) == 1
+      run(EmojiUpdated)
+
+      assert [_, %V1.EmojiUpdated{emoji: [live], removed: [removed]}] =
+               for(
+                 %V1.AccountEvent{payload: {:emoji_updated, event}} <-
+                   Accounts.events_after(ctx.member.id, 0),
+                 do: event
+               )
+
+      assert live.emoji_id == kept.emoji_id
+      assert %V1.CustomEmoji{name: "last", image_url: ""} = removed
+      assert removed.emoji_id == a.emoji_id
     end
 
     test "the account snapshot and MembershipAdded carry a server's emoji", ctx do

@@ -258,11 +258,16 @@ defmodule Lumia.Release do
   end
 
   defp emoji_limit_value("default"), do: {:ok, :default}
-  defp emoji_limit_value(n) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  defp emoji_limit_value(n) when is_integer(n) do
+    if n in 0..Lumia.CustomEmoji.most(),
+      do: {:ok, n},
+      else: {:error, {:invalid_argument, "limit"}}
+  end
 
   defp emoji_limit_value(text) when is_binary(text) do
     case Integer.parse(text) do
-      {n, ""} when n >= 0 -> {:ok, n}
+      {n, ""} -> emoji_limit_value(n)
       _ -> {:error, {:invalid_argument, "limit"}}
     end
   end

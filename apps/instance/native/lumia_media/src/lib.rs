@@ -92,6 +92,182 @@ fn reader(bytes: &[u8]) -> Result<Probed<'_>, Refusal> {
     }
 }
 
+/// The chunks of a RIFF body from `at` on, each its code and its payload. A chunk that says
+/// it runs past the bytes is `Invalid`; fewer than a header's eight bytes left is the end.
+struct RiffChunks<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Iterator for RiffChunks<'a> {
+    type Item = Result<([u8; 4], &'a [u8]), Refusal>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let header = self.bytes.get(self.at..self.at.checked_add(8)?)?;
+        let fourcc = [header[0], header[1], header[2], header[3]];
+        let size = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+        let start = self.at + 8;
+        let Some(payload) = start
+            .checked_add(size)
+            .and_then(|end| self.bytes.get(start..end))
+        else {
+            self.at = self.bytes.len();
+            return Some(Err(Refusal::Invalid));
+        };
+        // Padded to an even length; past the end, the next call ends the walk.
+        self.at = start + size + (size & 1);
+        Some(Ok((fourcc, payload)))
+    }
+}
+
+fn le24(b: &[u8]) -> u32 {
+    u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16
+}
+
+/// What a WebP's chunks say, read before any decoder sees them: its frames, the `ANMF`
+/// chunks of an animated one, or 0 for a still one.
+///
+/// image-webp (0.2.4) allocates for a lossy bitstream by the size the bitstream's own header
+/// gives, some 400 MB for 16,383 a side, and only then compares that with the canvas or frame
+/// it is in (`Vp8Decoder::read_frame_header`). So the header of every `VP8 ` chunk, at the top
+/// or in a frame, is read here and refused when it says more than the canvas, which the
+/// bounds have been or will be checked against. It also allocates a metadata chunk by the
+/// size the chunk claims, so a chunk claiming more than the upload holds is refused here too.
+fn webp_frames(bytes: &[u8]) -> Result<usize, Refusal> {
+    if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"WEBP".as_slice()) {
+        return Err(Refusal::Invalid);
+    }
+    let mut chunks = RiffChunks { bytes, at: 12 };
+    let header = match chunks.next() {
+        Some(Ok((fourcc, payload))) if &fourcc == b"VP8X" => {
+            payload.get(..10).ok_or(Refusal::Invalid)?
+        }
+        // A simple WebP is its one bitstream, and the size the decoder reports, which the
+        // bounds are checked against, is the one in that bitstream's header.
+        Some(Ok(_)) => return Ok(0),
+        _ => return Err(Refusal::Invalid),
+    };
+    let canvas = (le24(&header[4..7]) + 1, le24(&header[7..10]) + 1);
+    let animated = header[0] & 0x02 != 0;
+    let mut frames = 0;
+    // To the end of the bytes, not of the RIFF: the decoder reads as far.
+    for chunk in chunks {
+        let (fourcc, payload) = chunk?;
+        match &fourcc {
+            b"VP8 " => vp8_within(payload, canvas)?,
+            b"ANMF" => {
+                frames += 1;
+                // The decoder goes from one frame to the next by the unpadded size, so an
+                // odd one would put a frame where this walk does not look.
+                if payload.len() % 2 == 1 {
+                    return Err(Refusal::Invalid);
+                }
+                let inner = payload.get(16..).ok_or(Refusal::Invalid)?;
+                for sub in (RiffChunks {
+                    bytes: inner,
+                    at: 0,
+                }) {
+                    let (fourcc, payload) = sub?;
+                    if &fourcc == b"VP8 " {
+                        vp8_within(payload, canvas)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(if animated { frames } else { 0 })
+}
+
+/// A lossy bitstream's size, from its keyframe header, refused past `(width, height)`. One
+/// too short to have that header, or not a keyframe, allocates nothing for its size before
+/// the decoder refuses it.
+fn vp8_within(payload: &[u8], (width, height): (u32, u32)) -> Result<(), Refusal> {
+    let Some(h) = payload.get(..10) else {
+        return Ok(());
+    };
+    if h[0] & 1 != 0 {
+        return Ok(());
+    }
+    let w = u32::from(u16::from_le_bytes([h[6], h[7]]) & 0x3FFF);
+    let hh = u32::from(u16::from_le_bytes([h[8], h[9]]) & 0x3FFF);
+    if w > width || hh > height {
+        Err(Refusal::TooLarge)
+    } else {
+        Ok(())
+    }
+}
+
+/// The frames a PNG's `acTL` chunk says it has, read before its image data; 0 for a PNG
+/// without one.
+fn apng_frames(bytes: &[u8]) -> u32 {
+    let mut at = 8usize;
+    while let Some(header) = at.checked_add(8).and_then(|end| bytes.get(at..end)) {
+        let len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        match &header[4..8] {
+            b"acTL" => {
+                return bytes
+                    .get(at + 8..at + 12)
+                    .map_or(0, |n| u32::from_be_bytes([n[0], n[1], n[2], n[3]]));
+            }
+            b"IDAT" => return 0,
+            _ => {}
+        }
+        // Length, type, data and checksum.
+        match at.checked_add(12).and_then(|a| a.checked_add(len)) {
+            Some(next) => at = next,
+            None => return 0,
+        }
+    }
+    0
+}
+
+/// How many images a GIF holds, counted to two, by walking its blocks without decoding any.
+fn gif_images(bytes: &[u8]) -> usize {
+    // A colour table's bytes, from the flags of the block it follows.
+    let table = |flags: u8| {
+        if flags & 0x80 != 0 {
+            3usize << ((flags & 7) + 1)
+        } else {
+            0
+        }
+    };
+    // Past a run of sub-blocks, each its length and its bytes, ended by a zero.
+    let blocks = |mut at: usize| -> Option<usize> {
+        loop {
+            let len = usize::from(*bytes.get(at)?);
+            at += 1 + len;
+            if len == 0 {
+                return Some(at);
+            }
+        }
+    };
+    let Some(&flags) = bytes.get(10) else {
+        return 0;
+    };
+    let mut at = 13 + table(flags);
+    let mut images = 0;
+    while images < 2 {
+        let next = match bytes.get(at) {
+            // An extension: its label, then its sub-blocks.
+            Some(0x21) => blocks(at + 2),
+            // An image: its descriptor, its own colour table, the LZW code size, its data.
+            Some(0x2C) => {
+                images += 1;
+                bytes
+                    .get(at + 9)
+                    .and_then(|&flags| blocks(at + 10 + table(flags) + 1))
+            }
+            _ => None,
+        };
+        match next {
+            Some(next) => at = next,
+            None => break,
+        }
+    }
+    images
+}
+
 /// The upload as pixels, upright and in sRGB: bounds first, then the decode under its
 /// limits, then its colour profile applied and the turn its metadata asks for (a phone's
 /// photo is stored on its side and says so, in Display P3 and says so).
@@ -101,7 +277,10 @@ fn decode(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
 
 /// [`decode`] under an allocation limit of `max_alloc` bytes.
 fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<DynamicImage, Refusal> {
-    let (probe, _) = reader(bytes)?;
+    let (probe, format) = reader(bytes)?;
+    if format == ImageFormat::WebP {
+        webp_frames(bytes)?;
+    }
     let (width, height) = probe.into_dimensions().map_err(|_| Refusal::Invalid)?;
     if width == 0
         || height == 0
@@ -249,27 +428,38 @@ fn fit_within(image: &DynamicImage, side: u32) -> DynamicImage {
 /// the same.
 fn emoji_picture(bytes: &[u8]) -> Result<(&'static str, Vec<u8>, u32, u32, bool), Refusal> {
     let (_, format) = reader(bytes)?;
+    // Still or animated first, from the frames the file says it has, and only then the bounds
+    // of the one it is: a single frame is a still picture whatever its format, held to a
+    // still picture's bounds, and more than one are held to an animation's.
     let frames = match format {
-        ImageFormat::Gif => Some(animated_frames(gif_decoder(bytes)?)?),
-        ImageFormat::Png => {
-            // A PNG the animated limits refuse at its header is no APNG of an allowed size,
-            // and the still path says why it is refused.
-            match PngDecoder::with_limits(Cursor::new(bytes), animated_limits()) {
-                Ok(decoder) if decoder.is_apng().unwrap_or(false) => {
-                    let canvas = check_canvas(decoder.dimensions())?;
-                    let apng = decoder.apng().map_err(|_| Refusal::Invalid)?;
-                    Some(collect_frames(apng.into_frames(), canvas)?)
-                }
-                _ => None,
-            }
-        }
-        ImageFormat::WebP => {
-            let decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Refusal::Invalid)?;
-            if decoder.has_animation() {
-                Some(animated_frames(decoder)?)
+        ImageFormat::Gif if gif_images(bytes) > 1 => Some(animated_frames(gif_decoder(bytes)?)?),
+        ImageFormat::Png if apng_frames(bytes) > 1 => {
+            // The allocation limit goes to the png crate only here, at construction
+            // (`set_limits` checks dimensions alone); the canvas is checked by hand after
+            // the header, so that one too large says so.
+            let mut limits = animated_limits();
+            limits.max_image_width = None;
+            limits.max_image_height = None;
+            let mut decoder = PngDecoder::with_limits(Cursor::new(bytes), limits)
+                .map_err(|_| Refusal::Invalid)?;
+            let canvas = check_canvas(decoder.dimensions())?;
+            decoder
+                .set_limits(animated_limits())
+                .map_err(|_| Refusal::TooLarge)?;
+            if decoder.is_apng().unwrap_or(false) {
+                let apng = decoder.apng().map_err(|_| Refusal::Invalid)?;
+                Some(collect_frames(apng.into_frames(), canvas)?)
             } else {
                 None
             }
+        }
+        ImageFormat::WebP if webp_frames(bytes)? > 1 => {
+            let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Refusal::Invalid)?;
+            check_canvas(decoder.dimensions())?;
+            decoder
+                .set_limits(animated_limits())
+                .map_err(|_| Refusal::TooLarge)?;
+            Some(animated_frames(decoder)?)
         }
         _ => None,
     };
@@ -790,6 +980,202 @@ mod tests {
         assert!(matches!(
             emoji_picture(fixture!("not-a-picture.txt")),
             Err(Refusal::Unsupported)
+        ));
+    }
+
+    fn riff_chunk(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = fourcc.to_vec();
+        out.extend_from_slice(&u32::try_from(payload.len()).unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(payload);
+        if payload.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn u24(n: u32) -> [u8; 3] {
+        let b = n.to_le_bytes();
+        [b[0], b[1], b[2]]
+    }
+
+    fn riff_webp(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = chunks.concat();
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&u32::try_from(body.len() + 4).unwrap_or(0).to_le_bytes());
+        out.extend_from_slice(b"WEBP");
+        out.extend_from_slice(&body);
+        out
+    }
+
+    fn vp8x(flags: u8, (width, height): (u32, u32)) -> Vec<u8> {
+        let mut payload = vec![flags, 0, 0, 0];
+        payload.extend_from_slice(&u24(width - 1));
+        payload.extend_from_slice(&u24(height - 1));
+        riff_chunk(b"VP8X", &payload)
+    }
+
+    /// A WebP of the frames' image chunks (`VP8 ` or `VP8L`, with an `ALPH` before a `VP8 `
+    /// where it has one), each `size` and on a canvas of `canvas`, 80 ms apart.
+    fn animated_webp(canvas: (u32, u32), frames: &[((u32, u32), Vec<u8>)]) -> Vec<u8> {
+        let mut chunks = vec![
+            vp8x(0x02 | 0x10, canvas),
+            riff_chunk(b"ANIM", &[0, 0, 0, 0, 0, 0]),
+        ];
+        for ((width, height), image) in frames {
+            let mut payload = Vec::new();
+            payload.extend_from_slice(&u24(0));
+            payload.extend_from_slice(&u24(0));
+            payload.extend_from_slice(&u24(width - 1));
+            payload.extend_from_slice(&u24(height - 1));
+            payload.extend_from_slice(&u24(80));
+            payload.push(0);
+            payload.extend_from_slice(image);
+            chunks.push(riff_chunk(b"ANMF", &payload));
+        }
+        riff_webp(&chunks)
+    }
+
+    /// A lossy keyframe's header claiming `width` by `height`, and bytes that are no picture.
+    fn vp8_claiming(width: u16, height: u16) -> Vec<u8> {
+        let first_partition = 64u32;
+        let mut payload = u24((first_partition << 5) | 0x10).to_vec();
+        payload.extend_from_slice(&[0x9d, 0x01, 0x2a]);
+        payload.extend_from_slice(&width.to_le_bytes());
+        payload.extend_from_slice(&height.to_le_bytes());
+        payload.extend(std::iter::repeat_n(0x55, 64));
+        riff_chunk(b"VP8 ", &payload)
+    }
+
+    /// The image chunk of a still WebP of one chunk (`VP8 ` or `VP8L`).
+    fn image_chunk(webp: &[u8]) -> Vec<u8> {
+        webp[12..].to_vec()
+    }
+
+    /// A lossless WebP of `pixels`, as `image` writes one.
+    fn lossless(pixels: &RgbaImage) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut out)
+            .encode(
+                pixels.as_raw(),
+                pixels.width(),
+                pixels.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .expect("it encodes");
+        out
+    }
+
+    #[test]
+    fn an_animated_webp_lossy_or_lossless_comes_out_as_an_animated_gif() {
+        let lossy = image_chunk(fixture!("lossy.webp"));
+        let upload = animated_webp((40, 30), &[((40, 30), lossy.clone()), ((40, 30), lossy)]);
+        let (media_type, bytes, width, height, animated) =
+            emoji_picture(&upload).unwrap_or_else(|_| panic!("made"));
+        assert_eq!(
+            (media_type, width, height, animated),
+            ("image/gif", 40, 30, true)
+        );
+        assert_eq!(gif_frames(&bytes).len(), 2);
+
+        use image::Rgba;
+        let frames: Vec<_> = (0..3u8)
+            .map(|i| {
+                let pixels = RgbaImage::from_pixel(20, 10, Rgba([i * 80, 10, 200, 255]));
+                ((20, 10), image_chunk(&lossless(&pixels)))
+            })
+            .collect();
+        let (media_type, bytes, ..) =
+            emoji_picture(&animated_webp((20, 10), &frames)).unwrap_or_else(|_| panic!("made"));
+        assert_eq!(media_type, "image/gif");
+        let read = gif_frames(&bytes);
+        assert_eq!(read.len(), 3);
+        assert_eq!(read[0].delay().numer_denom_ms(), (80, 1));
+    }
+
+    #[test]
+    fn a_lossy_frame_that_claims_more_than_its_frame_is_refused_before_it_is_decoded() {
+        // Frames of 16 by 16 on a canvas of 16 by 16, whose bitstreams each say 16,383 by
+        // 16,383: the decoder would allocate for that (some 400 MB) before it compared the
+        // two.
+        let claims = vp8_claiming(16383, 16383);
+        let upload = animated_webp((16, 16), &[((16, 16), claims.clone()), ((16, 16), claims)]);
+        assert!(matches!(emoji_picture(&upload), Err(Refusal::TooLarge)));
+
+        // After an alpha chunk, as a lossy frame with transparency has it.
+        let alph = riff_chunk(b"ALPH", &[0; 17]);
+        let framed = [alph, vp8_claiming(16383, 16383)].concat();
+        let upload = animated_webp((16, 16), &[((16, 16), framed.clone()), ((16, 16), framed)]);
+        assert!(matches!(emoji_picture(&upload), Err(Refusal::TooLarge)));
+
+        // A still one, as an avatar or a card's picture would read it: the canvas is what
+        // the header says, and the bitstream inside says otherwise.
+        let still = riff_webp(&[vp8x(0, (16, 16)), vp8_claiming(16383, 16383)]);
+        assert!(matches!(decode(&still), Err(Refusal::TooLarge)));
+        assert!(matches!(emoji_picture(&still), Err(Refusal::TooLarge)));
+
+        // The same container with a bitstream that fits it decodes.
+        let lossy = image_chunk(fixture!("lossy.webp"));
+        let fits = riff_webp(&[vp8x(0, (40, 30)), lossy.clone()]);
+        let image = decode(&fits).unwrap_or_else(|_| panic!("it decodes"));
+        assert_eq!((image.width(), image.height()), (40, 30));
+
+        // A colour profile claiming 4 GB, which the decoder would allocate before it found
+        // the upload ends.
+        let mut claims = riff_chunk(b"ICCP", &[0; 8]);
+        claims[4..8].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
+        let profile = riff_webp(&[vp8x(0x20, (40, 30)), lossy, claims]);
+        assert!(matches!(decode(&profile), Err(Refusal::Invalid)));
+    }
+
+    #[test]
+    fn what_is_animated_is_told_by_its_frames_before_any_bounds_apply() {
+        // One frame is a still picture, held to a still picture's bounds: 1,026 wide fits.
+        let (media_type, _, width, _, animated) =
+            emoji_picture(&animated_gif(1026, 8, 1, 50)).unwrap_or_else(|_| panic!("made"));
+        assert_eq!((media_type, width, animated), ("image/png", 128, false));
+
+        let pixels = RgbaImage::new(1026, 8);
+        let one = animated_webp((1026, 8), &[((1026, 8), image_chunk(&lossless(&pixels)))]);
+        let (media_type, _, width, _, animated) =
+            emoji_picture(&one).unwrap_or_else(|_| panic!("made"));
+        assert_eq!((media_type, width, animated), ("image/png", 128, false));
+
+        let apng = |width: u32, frames: u32| {
+            let mut out = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut out, width, 8);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_animated(frames, 0).expect("animated");
+                let mut writer = encoder.write_header().expect("a header");
+                for i in 0..frames {
+                    let data = vec![u8::try_from(i * 40).unwrap_or(0); (width * 8 * 4) as usize];
+                    writer.write_image_data(&data).expect("a frame");
+                }
+            }
+            out
+        };
+        let (media_type, _, _, _, animated) =
+            emoji_picture(&apng(1026, 1)).unwrap_or_else(|_| panic!("made"));
+        assert_eq!((media_type, animated), ("image/png", false));
+
+        // More than one is animated, held to an animation's canvas: 1,025 wide does not.
+        assert!(matches!(
+            emoji_picture(&apng(1025, 2)),
+            Err(Refusal::TooLarge)
+        ));
+        assert!(matches!(
+            emoji_picture(&animated_webp(
+                (1025, 8),
+                &[
+                    ((1025, 8), image_chunk(&lossless(&RgbaImage::new(1025, 8)))),
+                    ((1025, 8), image_chunk(&lossless(&RgbaImage::new(1025, 8)))),
+                ]
+            )),
+            Err(Refusal::TooLarge)
+        ));
+        assert!(matches!(
+            emoji_picture(&animated_gif(1025, 8, 2, 50)),
+            Err(Refusal::TooLarge)
         ));
     }
 
