@@ -7,7 +7,7 @@
 //   bun run e2e              # both browsers
 //   bun run e2e -- webkit    # one
 import { chromium, webkit, type BrowserContext, type Page } from "playwright";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 
@@ -1590,6 +1590,240 @@ async function rolesStep(which: string, stamp: number) {
     await theirs?.ctx.close();
   }
   console.log(`  ${which}: made roles, found the one just made in its editor as saved, gave it from there and saw its tag${theirs ? " in two browsers" : ""}, read “You” and “Owner” on the owner's own card, moved one by its menu and by its handle, was asked before Administrator, was refused a name taken and a name and a title with a hidden character, set titles, was refused the owner's eleventh change of their own in an hour, saw titles as tags once the server showed them, ${theirs ? "let the member's role manage members and found the row of someone below them opening in their browser with no reload, " : ""}saw an untouched editor follow a change made elsewhere and a rename leave Administrator off as another session had just switched it, took one role in a row opened before another was given elsewhere and found that one kept, deleted a role after its question, and kicked a member, in ${Date.now() - t0} ms`);
+}
+
+// A server's own emoji (specs/emoji.md, plan step 12). The owner uploads
+// two (a still picture and an animated GIF) from Server settings' Emoji
+// section in Chromium, one refused for a name taken; in WebKit, where two
+// of Playwright's WebKits open at once share one origin-private file
+// system, over HTTP. The member's browser, open all the while, finds them
+// with no reload: in the picker's section and its search, reacting with
+// one; in the composer's `:` list, sending a message that draws both as
+// pictures; through the composer's emoji button, which puts them in at the
+// caret and stays open; the animated one still under reduced motion. Then
+// a rename, which the member's message and chip follow by the new name,
+// and a removal, after which the message reads as it was typed and the
+// chip as `:name:`, still taken back.
+async function emojiStep(which: string, stamp: number) {
+  const ownerDir = resolve(work, `cli-emoji-owner-${which}`);
+  const memberDir = resolve(work, `cli-emoji-member-${which}`);
+  const owner = `mojo${which}${stamp}`;
+  const member = `fan${which}${stamp}`;
+  const serverName = `Emoji ${stamp}`;
+  lumia(ownerDir, "instance", "add", instance);
+  lumia(ownerDir, "account", "create", "--handle", owner, "--password", password);
+  const server = lumia(ownerDir, "server-create", serverName).match(/[0-9a-f-]{36}/)?.[0];
+  if (!server) throw new Error("no server id");
+  const general = lumia(ownerDir, "channel-create", server, "general").match(/[0-9a-f-]{36}/)?.[0];
+  if (!general) throw new Error("no channel id");
+  const code = lumia(ownerDir, "invite-create", server).trim().split(/\s+/)[0];
+  if (!code) throw new Error("no invite code");
+  lumia(memberDir, "instance", "add", instance);
+  lumia(memberDir, "account", "create", "--handle", member, "--password", password, "--invite", code);
+  lumia(memberDir, "send", general, "Reporting in.");
+  const animated = readFileSync(resolve(web, "../instance/test/support/fixtures/media/animated.gif"));
+  const signIn = async (page: Page, handle: string) => {
+    await trustCard(page);
+    await page.getByLabel("Email or handle").fill(handle);
+    await page.getByRole("textbox", { name: "Password" }).fill(password);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await later(page);
+    await page.getByPlaceholder("Message #general").waitFor();
+  };
+  // The owner over HTTP: WebKit's owner, and what the suite reads back.
+  let token: string | undefined;
+  const asOwner = async (method: string, path: string, body?: unknown, picture?: Buffer): Promise<unknown> => {
+    const json = { "content-type": "application/json", accept: "application/json" };
+    if (!token) {
+      const pair = (await (await fetch(`${instance}/api/v1/auth/sign-in/password`, { method: "POST", headers: json, body: JSON.stringify({ handleOrEmail: owner, password }) })).json()) as { accessToken?: string };
+      if (!pair.accessToken) throw new Error("the suite could not sign in as the owner");
+      token = pair.accessToken;
+    }
+    const headers = picture ? { "content-type": "application/octet-stream", accept: "application/json" } : json;
+    const answer = await fetch(`${instance}/api/v1${path}`, { method, headers: { ...headers, authorization: `Bearer ${token}` }, body: picture ? new Uint8Array(picture) : body === undefined ? undefined : JSON.stringify(body) });
+    const text = await answer.text();
+    if (!answer.ok) throw new Error(`${method} ${path}: ${answer.status} ${text}`);
+    return text ? JSON.parse(text) : undefined;
+  };
+  const listed = async () => ((await asOwner("GET", `/servers/${server}/emoji`)) as { emoji?: { emojiId: string; name: string }[] }).emoji ?? [];
+
+  const t0 = Date.now();
+  // Chromium: the owner's browser beside the member's. WebKit: the member's alone.
+  const mine = which === "chromium" ? await open(which, "emoji-owner") : null;
+  const theirs = await open(which, "emoji-member");
+  const page = theirs.page;
+  try {
+    if (mine) {
+      live.page = mine.page;
+      await signIn(mine.page, owner);
+    }
+    live.page = page;
+    await signIn(page, member);
+    const message = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Reporting in." }) });
+    await message.waitFor();
+
+    phase("upload");
+    if (mine) {
+      const o = mine.page;
+      live.page = o;
+      await o.getByRole("button", { name: /server menu/ }).click();
+      await o.getByRole("menuitem", { name: "Server settings" }).click();
+      const sections = o.getByRole("navigation", { name: "Server settings" });
+      await sections.getByRole("button", { name: /^Emoji/ }).click();
+      const heading = o.getByRole("heading", { name: /^Emoji/ });
+      await heading.getByText("0 of 50").waitFor();
+      const upload = async (file: string, type: string, bytes: Buffer, made: string, name?: string) => {
+        await o.getByRole("button", { name: "Upload emoji" }).click();
+        await o.getByLabel("Emoji picture").setInputFiles({ name: file, mimeType: type, buffer: bytes });
+        const field = o.getByRole("textbox", { name: "Name" });
+        for (let i = 0; i < 50 && (await field.inputValue()) !== made; i++) await Bun.sleep(100);
+        if ((await field.inputValue()) !== made) throw new Error(`the name made from ${file} is ${JSON.stringify(await field.inputValue())}, not ${made}`);
+        if (name) await field.fill(name);
+        await o.getByRole("button", { name: "Save", exact: true }).click();
+      };
+      await upload("Party Parrot.png", "image/png", png(64, [240, 120, 40]), "party_parrot");
+      await o.getByText(":party_parrot:", { exact: true }).waitFor();
+      await upload("dance.gif", "image/gif", animated, "dance");
+      await o.getByText(":dance:", { exact: true }).waitFor();
+      await heading.getByText("2 of 50").waitFor();
+      // A name the server already has is refused in the form's words, and the form stays.
+      await upload("again.png", "image/png", png(32, [10, 200, 90]), "again", "party_parrot");
+      await o.getByText(`${serverName} already has :party_parrot:. Choose another name.`).waitFor();
+      await o.getByRole("button", { name: "Cancel" }).click();
+      await o.screenshot({ path: `${out}/${which}-emoji-settings.png` });
+      live.page = page;
+    } else {
+      await asOwner("POST", `/servers/${server}/emoji?name=party_parrot`, undefined, png(64, [240, 120, 40]));
+      await asOwner("POST", `/servers/${server}/emoji?name=dance`, undefined, animated);
+    }
+    if ((await listed()).map((e) => e.name).join() !== "party_parrot,dance") throw new Error(`the server lists ${(await listed()).map((e) => e.name).join(", ")}`);
+
+    phase("the picker");
+    // In the member's browser, with no reload: the server's section, then a search, then a reaction with one.
+    await message.hover();
+    await message.getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Add reaction" }).click();
+    const picker = page.getByRole("dialog", { name: "Emoji" });
+    await picker.getByRole("heading", { name: serverName }).waitFor();
+    await picker.getByRole("button", { name: ":party_parrot:" }).first().waitFor();
+    await picker.getByLabel("Search emoji").fill("dan");
+    await picker.getByRole("button", { name: ":dance:" }).waitFor();
+    await picker.getByLabel("Search emoji").fill("parrot");
+    await page.screenshot({ path: `${out}/${which}-emoji-picker.png` });
+    await picker.getByRole("button", { name: ":party_parrot:" }).click();
+    const chip = (name: string) => message.getByRole("button", { name: `You reacted with :${name}:` });
+    await chip("party_parrot").waitFor();
+    if ((await chip("party_parrot").locator("img").count()) !== 1) throw new Error("the reaction's chip does not draw the emoji's picture");
+
+    phase("the : list");
+    const composer = page.getByPlaceholder("Message #general");
+    await composer.fill("Look :par");
+    await page.getByRole("option", { name: ":party_parrot:" }).waitFor();
+    await page.screenshot({ path: `${out}/${which}-emoji-list.png` });
+    await composer.press("Enter");
+    if ((await composer.inputValue()) !== "Look :party_parrot: ") throw new Error(`choosing from the list left ${JSON.stringify(await composer.inputValue())}`);
+    // One letter lists nothing; a time lists nothing.
+    await composer.pressSequentially("at 10:30 :d");
+    await Bun.sleep(300);
+    if ((await page.getByRole("option").count()) !== 0) throw new Error("the list opened for one letter");
+    await composer.pressSequentially("a");
+    await page.getByRole("option", { name: ":dance:" }).waitFor();
+    await composer.press("Tab");
+    await composer.press("Enter");
+    const sent = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Look" }) });
+    await sent.getByRole("img", { name: ":party_parrot:" }).waitFor();
+    await sent.getByRole("img", { name: ":dance:" }).waitFor();
+    // At the height of an emoji in the text, as wide as its shape (both square).
+    const box = await sent.getByRole("img", { name: ":party_parrot:" }).boundingBox();
+    if (!box || box.height < 15 || box.height > 30 || Math.abs(box.width - box.height) > 1) throw new Error(`the emoji in the text is ${box?.width} by ${box?.height}`);
+    if (mine) {
+      // The owner's browser draws the member's message the same.
+      await mine.page.getByRole("link", { name: "general" }).click();
+      await mine.page.locator(".lu-msglist").getByRole("img", { name: ":dance:" }).waitFor();
+    }
+
+    phase("the emoji button");
+    await composer.fill("Two ");
+    await page.getByRole("button", { name: "Emoji", exact: true }).click();
+    const fromButton = page.getByRole("dialog", { name: "Emoji" });
+    await fromButton.getByRole("button", { name: ":dance:" }).first().click();
+    const focused = () => page.evaluate(() => document.activeElement?.getAttribute("placeholder") ?? document.activeElement?.tagName ?? "");
+    for (let i = 0; i < 20 && (await focused()) !== "Message #general"; i++) await Bun.sleep(50);
+    if ((await focused()) !== "Message #general") throw new Error(`after a choice the keyboard is in ${await focused()}, not the field`);
+    if ((await composer.inputValue()) !== "Two :dance: ") throw new Error(`the button's picker put in ${JSON.stringify(await composer.inputValue())}`);
+    // Still open, for another.
+    await fromButton.getByLabel("Search emoji").fill("thumbs up");
+    await fromButton.getByRole("button", { name: "thumbs up", exact: true }).first().click();
+    if ((await composer.inputValue()) !== "Two :dance: 👍") throw new Error(`a second choice left ${JSON.stringify(await composer.inputValue())}`);
+    await page.screenshot({ path: `${out}/${which}-emoji-button.png` });
+    await page.keyboard.press("Escape");
+    await fromButton.waitFor({ state: "detached" });
+    if ((await focused()) !== "Message #general") throw new Error(`Escape left the keyboard in ${await focused()}`);
+    await composer.fill("");
+
+    phase("reduced motion");
+    const dance = sent.getByRole("img", { name: ":dance:" }).locator("img");
+    if (!(await dance.getAttribute("src"))?.startsWith("http")) throw new Error("the animated emoji is not drawn from its picture");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    for (let i = 0; i < 50 && !(await dance.getAttribute("src"))?.startsWith("blob:"); i++) await Bun.sleep(100);
+    if (!(await dance.getAttribute("src"))?.startsWith("blob:")) throw new Error(`under reduced motion the animated emoji is drawn from ${await dance.getAttribute("src")}`);
+    const drawn = await dance.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
+    if (!drawn) throw new Error("the still frame was not drawn");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    for (let i = 0; i < 50 && !(await dance.getAttribute("src"))?.startsWith("http"); i++) await Bun.sleep(100);
+
+    phase("rename");
+    const parrot = (await listed()).find((e) => e.name === "party_parrot");
+    if (!parrot) throw new Error("no party_parrot listed");
+    if (mine) {
+      const o = mine.page;
+      await o.getByRole("button", { name: /server menu/ }).click();
+      await o.getByRole("menuitem", { name: "Server settings" }).click();
+      await o.getByRole("navigation", { name: "Server settings" }).getByRole("button", { name: /^Emoji/ }).click();
+      await o.getByRole("button", { name: "Rename :party_parrot:" }).click();
+      const field = o.getByRole("textbox", { name: "New name for :party_parrot:" });
+      await field.fill("parrot");
+      await o.getByRole("button", { name: "Save", exact: true }).click();
+      await o.getByText(":parrot:", { exact: true }).waitFor();
+    } else {
+      await asOwner("PATCH", `/servers/${server}/emoji/${parrot.emojiId}`, { name: "parrot" });
+    }
+    // The message keeps what was typed and draws the emoji by its new name; the chip too.
+    await sent.getByRole("img", { name: ":parrot:" }).waitFor();
+    await chip("parrot").waitFor();
+
+    phase("remove");
+    if (mine) {
+      const o = mine.page;
+      await o.getByRole("button", { name: "Remove :parrot:" }).click();
+      await o.getByText("Remove :parrot:?").waitFor();
+      await o.getByText("Messages that used it will show its name instead.").waitFor();
+      await o.getByRole("button", { name: "Remove", exact: true }).click();
+      await o.getByText(":parrot:", { exact: true }).waitFor({ state: "detached" });
+      await o.getByRole("heading", { name: /^Emoji/ }).getByText("1 of 50").waitFor();
+      await o.screenshot({ path: `${out}/${which}-emoji-removed.png` });
+    } else {
+      await asOwner("DELETE", `/servers/${server}/emoji/${parrot.emojiId}`);
+    }
+    // The message reads as it was typed; the reaction is its name, still this account's to take back.
+    await sent.getByRole("img", { name: ":parrot:" }).waitFor({ state: "detached" });
+    await sent.locator(".lu-msg__body", { hasText: "Look :party_parrot:" }).waitFor();
+    await sent.getByRole("img", { name: ":dance:" }).waitFor();
+    // Named as the core last heard it named, by a reaction event (`relabel` in its store): with no
+    // reaction since the rename, the name it was reacted with.
+    const left = message.locator(".lu-reaction", { has: page.locator(".lu-reaction__name") });
+    await left.waitFor();
+    const named = (await left.locator(".lu-reaction__name").textContent())?.trim();
+    if (named !== ":parrot:" && named !== ":party_parrot:") throw new Error(`the removed emoji's chip reads ${named}`);
+    if ((await left.locator("img").count()) !== 0) throw new Error("the removed emoji's chip still draws a picture");
+    if (named !== ":parrot:") console.log(`  [${which}] emoji: the removed emoji's chip reads ${named}, the name it was reacted with, not the name it had when removed (the core relabels on reaction events only)`);
+    await page.screenshot({ path: `${out}/${which}-emoji-after.png` });
+    await left.click();
+    await left.waitFor({ state: "detached" });
+  } finally {
+    await theirs.ctx.close();
+    await mine?.ctx.close();
+  }
+  console.log(`  ${which}: ${mine ? "uploaded a still and an animated emoji from Server settings, refused a name taken" : "had the owner upload a still and an animated emoji over HTTP"}, found them in the member's picker and its search with no reload, reacted with one, completed both from the : list and sent them drawn as pictures, put one and a Unicode emoji in from the composer's button with the keyboard kept in the field, drew the animated one still under reduced motion, followed a rename in the message and the chip, and after a removal read the message as typed and the chip as its :name:, taken back, in ${Date.now() - t0} ms`);
 }
 
 // The middle button held over a pane and moved up from where it came down
@@ -3512,6 +3746,7 @@ try {
       ["preferences", () => preferencesStep(which, stamp)],
       ["server settings", () => serverSettings(which, stamp)],
       ["roles", () => rolesStep(which, stamp)],
+      ["emoji", () => emojiStep(which, stamp)],
       ["autoscroll", () => autoscrollStep(which, stamp)],
       ["aside", () => asideStep(which, stamp)],
       ["rail", () => railStep(which, stamp)],

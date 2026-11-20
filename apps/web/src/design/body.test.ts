@@ -75,6 +75,15 @@ describe("a paragraph's pieces", () => {
     expect(ada?.strong).toBe(true);
   });
 
+  test("a server's emoji is a piece of its own, by its place in the message's emoji", () => {
+    const out = stretches("shipped :party_parrot: ok", [{ start: 8, end: 22, style: { kind: "emoji", index: 1 } }], []);
+    const pieces = out[0]?.pieces ?? [];
+    expect(pieces.map((p) => p.text)).toEqual(["shipped ", ":party_parrot:", " ok"]);
+    expect(pieces[1]?.emoji).toBe(1);
+    expect(pieces[1]?.mention).toBeUndefined();
+    expect(pieces[0]?.emoji).toBeUndefined();
+  });
+
   test("a link's pieces are grouped under it, styled inside", () => {
     const out = stretches("see the docs now", [{ start: 8, end: 12, style: { kind: "code" } }], [{ start: 4, end: 12, url: "https://lumia.chat" }]);
     expect(out.map((s) => [s.url, s.pieces.map((p) => p.text)])).toEqual([

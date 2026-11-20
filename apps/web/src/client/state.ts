@@ -464,6 +464,10 @@ function onGatewayEvent(e: ClientEvent): void {
       // What the core keeps has the change already: the members are read from it, and nothing is asked.
       void membersKept(e.serverId);
       break;
+    case "emojiChanged":
+      // The same: the server's emoji are read from what the core keeps and written into the snapshot held.
+      void emojiKept(e.serverId);
+      break;
     case "profileUpdated":
       // Written in where the page holds the person, not asked again (issue #15),
       // and kept for a list already being fetched, whose answer may be older.
@@ -753,6 +757,17 @@ export async function membersKept(serverId: string): Promise<void> {
   await queryClient.cancelQueries({ queryKey: ["members", serverId] });
   const kept = await client().keptMembers(serverId);
   if (kept.length) queryClient.setQueryData(["members", serverId], kept);
+}
+
+/**
+ * A server's custom emoji read again from what the core keeps (after
+ * `emojiChanged`, specs/emoji.md 8) and written into the snapshot the page
+ * holds, with no request: the picker, the `:` list, the messages and the
+ * Emoji section all draw from the snapshot's.
+ */
+export async function emojiKept(serverId: string): Promise<void> {
+  const emoji = await client().serverEmoji(serverId);
+  queryClient.setQueryData<SnapshotSummary>(["snapshot"], (snapshot) => snapshot && { ...snapshot, servers: snapshot.servers.map((s) => (s.serverId === serverId ? { ...s, emoji } : s)) });
 }
 
 /** A member as a call answered them, written into the server's list where the page holds it; `null` takes them out (kicked). */

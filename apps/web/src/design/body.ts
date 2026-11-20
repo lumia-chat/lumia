@@ -42,7 +42,7 @@ export function composing(e: { isComposing: boolean; keyCode: number }): boolean
   return e.isComposing || e.keyCode === 229;
 }
 
-/** A stretch of a paragraph drawn one way: the styles over all of it, and the mention it is. */
+/** A stretch of a paragraph drawn one way: the styles over all of it, and the mention or custom emoji it is. */
 export interface Piece {
   text: string;
   emphasis: boolean;
@@ -51,6 +51,8 @@ export interface Piece {
   code: boolean;
   /** Its place in the message's mentions, when it is one. */
   mention?: number;
+  /** Its place in the message's custom emoji, when it is one (specs/emoji.md 6). */
+  emoji?: number;
 }
 
 /** A paragraph's pieces in order, those of a link under it, so that a link is one element however it is styled inside. */
@@ -83,6 +85,8 @@ export function stretches(text: string, runs: BodyRun[], links: BodyLink[]): Str
     const mention = over.find((r) => r.style.kind === "mention")?.style;
     const piece: Piece = { text: text.slice(start, end), emphasis: has("emphasis"), strong: has("strong"), strike: has("strike"), code: has("code") };
     if (mention && "index" in mention) piece.mention = mention.index;
+    const emoji = over.find((r) => r.style.kind === "emoji")?.style;
+    if (emoji && "index" in emoji) piece.emoji = emoji.index;
     const link = links.findIndex((l) => l.start <= start && end <= l.end);
     const last = out[out.length - 1];
     if (last && link === lastLink) last.pieces.push(piece);

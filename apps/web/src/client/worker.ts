@@ -60,14 +60,16 @@ async function dispatch(method: string, args: unknown[]): Promise<unknown> {
   if (typeof fn !== "function") throw new Error(`unknown method ${method}`);
   const result = await (fn as (...a: unknown[]) => unknown).apply(client, args);
   const messages = BODIES[method]?.(result);
-  if (messages) for (const m of messages) m.blocks = blocksOf(client, m.body, m.mentions ?? []);
+  if (messages) for (const m of messages) m.blocks = blocksOf(client, m.body, m.mentions ?? [], m.emoji ?? []);
   return result;
 }
 
 // Every message handed to the page carries its body read into blocks by
 // the core (protocol 14), so the page draws them and parses nothing: the
-// calls that answer messages, and where in each answer they are.
-type Drawn = { body: string; mentions?: { start: number; end: number }[]; blocks?: unknown };
+// calls that answer messages, and where in each answer they are. A server's
+// message with custom emoji is read with them marked (specs/emoji.md 6).
+type Range = { start: number; end: number };
+type Drawn = { body: string; mentions?: Range[]; emoji?: Range[]; blocks?: unknown };
 const BODIES: Record<string, (result: unknown) => Drawn[] | undefined> = {
   messages: (r) => r as Drawn[],
   olderMessages: (r) => (r as { messages: Drawn[] }).messages,
@@ -77,17 +79,18 @@ const BODIES: Record<string, (result: unknown) => Drawn[] | undefined> = {
 
 // A conversation's messages are read again after every event in it, and
 // most of them have not changed: each body is read once, kept by its text
-// and its mentions' ranges, the least recently drawn let go first once the
+// and its mentions' and emoji's ranges, the least recently drawn let go first once the
 // kept bodies come to READ_KEPT_BYTES.
 const read = new Map<string, unknown>();
 const READ_KEPT_BYTES = 4 * 1024 * 1024;
 let readBytes = 0;
 
-function blocksOf(c: Client, body: string, mentions: { start: number; end: number }[]): unknown {
-  const key = mentions.map((m) => `${m.start}-${m.end}`).join(",") + "\u0000" + body;
+function blocksOf(c: Client, body: string, mentions: Range[], emoji: Range[]): unknown {
+  const ranges = (list: Range[]) => list.map((r) => `${r.start}-${r.end}`).join(",");
+  const key = ranges(mentions) + "\u0000" + ranges(emoji) + "\u0000" + body;
   let blocks = read.get(key);
   if (blocks === undefined) {
-    blocks = c.parseBody(body, mentions);
+    blocks = emoji.length ? c.parseBodyMarked(body, mentions, emoji) : c.parseBody(body, mentions);
     readBytes += key.length;
     while (readBytes > READ_KEPT_BYTES && read.size > 0) {
       const oldest = read.keys().next().value as string;

@@ -2,7 +2,8 @@
 // emojibase-data package carries it, up to Unicode 16 and slimmed by a
 // plugin in vite.config.ts, loaded the first time a picker opens (its own
 // chunk), in Unicode's order and groups, default skin tone only.
-// What this device chose most is kept here too, for "Frequently used".
+// What this device chose most is kept here too, for "Frequently used": a
+// server's own emoji by their id (`customKey`), offered only in that server.
 
 /** The quick row over a message, and where "Frequently used" starts. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
@@ -77,8 +78,17 @@ export function emojiMatches(e: EmojiEntry, query: string): boolean {
 const FREQUENT_KEY = "lumia:emoji-frequent";
 const FREQUENT_MAX = 16;
 
-/** This device's most used emoji, most first; the quick six until it has used any. */
-export function frequentEmoji(): string[] {
+/** What a server's own emoji is counted under, beside Unicode's, which are counted as themselves. */
+export function customKey(emojiId: string): string {
+  return "custom:" + emojiId;
+}
+
+/**
+ * This device's most used emoji, most first; the quick six until it has
+ * used any. A server's own are among them only where `held` has them (the
+ * server whose conversation it is: specs/emoji.md 10), as `held` gives them.
+ */
+export function frequentEmoji<T>(held?: ReadonlyMap<string, T>): (string | T)[] {
   let used: Record<string, number> = {};
   try {
     used = JSON.parse(localStorage.getItem(FREQUENT_KEY) ?? "{}") as Record<string, number>;
@@ -89,7 +99,14 @@ export function frequentEmoji(): string[] {
     .filter(([, n]) => typeof n === "number" && n > 0)
     .sort((a, b) => b[1] - a[1])
     .map(([e]) => e);
-  const list = [...ranked];
+  const list: (string | T)[] = [];
+  for (const e of ranked) {
+    if (!e.startsWith("custom:")) list.push(e);
+    else {
+      const custom = held?.get(e.slice("custom:".length));
+      if (custom) list.push(custom);
+    }
+  }
   for (const e of QUICK_REACTIONS) if (!list.includes(e)) list.push(e);
   return list.slice(0, FREQUENT_MAX);
 }

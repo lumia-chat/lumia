@@ -67,6 +67,10 @@ a { color: var(--link); }
 /* A server's own emoji (plan step 12): the picker over the conversation, a tooltip drawn, a section's top, a phone's sheets and keyboard. */
 .gallery-emoji .lu-shell__conversation { position: relative; }
 .gallery-emoji__over { position: absolute; left: 232px; top: 186px; z-index: 6; }
+.gallery-emoji__frombutton { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-8); }
+.gallery-emoji__frombutton > .lu-composer { align-self: stretch; }
+/* Over the emoji button, as the app places it: their right edges in line. */
+.gallery-emoji__frombutton > .lu-emojipicker { margin-right: 56px; }
 .gallery-emoji__tipat { position: relative; display: inline-block; }
 .gallery-emoji__tip { position: absolute; left: 50%; bottom: calc(100% + var(--space-6)); transform: translateX(-50%); padding: 3px 8px; border-radius: var(--radius-6); background: var(--ink); color: var(--surface); font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; }
 .gallery-emoji__tipped .lu-msg { padding-top: var(--space-28); }

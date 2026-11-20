@@ -13,13 +13,18 @@
 // where it is drawn, and a delete asks first unless Shift is held. The
 // composer over a conversation is here too, with the reply bar atop its
 // frame, the @ list, the note after a send and the counter near the limit.
+// In a server's conversation its own emoji (specs/emoji.md) are drawn in
+// bodies and chips, offered in the picker and listed after a `:` typed in
+// the composer, whose emoji button opens the picker for the field.
 import { For, Show, createEffect, createMemo, createSignal, mapArray, on, onCleanup, onMount, type JSX } from "solid-js";
 import {
   ComposerNote,
   Composer,
   ConfirmDelete,
   ContextMenu,
+  CustomEmoji,
   Divider,
+  EmojiList,
   EmojiPicker,
   Mention,
   MentionList,
@@ -36,14 +41,17 @@ import {
   ReplyBar,
   ReplyRef,
   menuPressAt,
+  type CustomEmojiEntry,
   type MentionOption,
   type MessagePart,
   type ReactionChipProps,
   type TagTone,
   type Tone,
 } from "../design/components";
-import { frequentEmoji, usedEmoji } from "../design/emoji";
-import { ClientError, type AttachmentSummary, type BodyBlock, type CardSummary, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
+import { customKey, frequentEmoji, usedEmoji } from "../design/emoji";
+import { ClientError, type AttachmentSummary, type BodyBlock, type CardSummary, type EmojiRefSummary, type EmojiSummary, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
+import { colonAt, spliced, typedEmoji } from "../client/emoji";
+import { pictureOf } from "./emoji";
 import { avatarSrc, client, markRead } from "../client/state";
 import { composing } from "../design/body";
 import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
@@ -81,6 +89,15 @@ export interface TimelineItem {
   attachments: AttachmentSummary[];
   /** Its link cards. */
   cards: CardSummary[];
+  /** The server's custom emoji its body uses, by byte range (specs/emoji.md 6); none in a personal conversation. */
+  emoji: EmojiRefSummary[];
+}
+
+/** A server's own emoji where a conversation is one of its: the server's name, which heads the picker's section, and its emoji by id as drawn. */
+export interface ServerEmoji {
+  serverId: string;
+  name: string;
+  held: ReadonlyMap<string, CustomEmojiEntry>;
 }
 
 /**
@@ -267,6 +284,10 @@ export interface TimelineProps {
   replyingTo?: string;
   onCancelReply: () => void;
   onReact: (item: TimelineItem, emoji: string, remove: boolean) => void;
+  /** In a server's conversation, its own emoji (specs/emoji.md): drawn in bodies and chips, offered in the picker. */
+  emoji?: ServerEmoji;
+  /** A reaction with one of the server's emoji, by its id, added or taken away. */
+  onReactEmoji?: (item: TimelineItem, emojiId: string, remove: boolean) => void;
   /** Whether this account may delete a message: its own, or another's as a moderator (the instance decides either way). */
   canDelete: (item: TimelineItem) => boolean;
   /** The message being edited where it is drawn, and the way in and out of it. */
@@ -414,6 +435,12 @@ export function Timeline(props: TimelineProps) {
     if (!remove) usedEmoji(emoji);
     props.onReact(item, emoji, remove);
   };
+  const reactCustom = (item: TimelineItem, emojiId: string, remove: boolean) => {
+    if (!remove) usedEmoji(customKey(emojiId));
+    props.onReactEmoji?.(item, emojiId, remove);
+  };
+  // One of the server's emoji where it is held: a ref to one that is not (removed, or not yet known) is its text.
+  const held = (emojiId: string | undefined) => (emojiId ? props.emoji?.held.get(emojiId) : undefined);
   // More actions' menu, and the question a delete asks, each against what opened it.
   const [menu, setMenu] = createSignal<{ anchor: HTMLElement; item: TimelineItem } | null>(null);
   const [confirming, setConfirming] = createSignal<{ anchor: HTMLElement | null; item: TimelineItem } | null>(null);
@@ -610,6 +637,11 @@ export function Timeline(props: TimelineProps) {
                   </Show>
                 );
               }}
+              emoji={(index, typed) => (
+                <Show when={held(m.emoji[index]?.emojiId)} fallback={typed}>
+                  {(e) => <CustomEmoji {...e()} />}
+                </Show>
+              )}
               edited={m.edited}
               expanded={expanded().has(m.id)}
               onExpanded={(open) => expand(m.id, open)}
@@ -638,14 +670,30 @@ export function Timeline(props: TimelineProps) {
       ? []
       : m.reactions
           .filter((r) => r.count > 0)
-          .map((r) => ({
-            emoji: r.reaction,
-            label: r.reaction,
-            count: r.count,
-            selected: r.me,
-            who: reactedWords(r, props.me, props.knownName),
-            onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
-          }));
+          .map((r): ReactionChipProps => {
+            if (!r.emojiId)
+              return {
+                emoji: r.reaction,
+                label: r.reaction,
+                count: r.count,
+                selected: r.me,
+                who: reactedWords(r, props.me, props.knownName),
+                onToggle: props.canAct ? () => react(m, r.reaction, r.me) : undefined,
+              };
+            // One of the server's emoji: its picture by its present name where it is held, else
+            // `:name:` as the reaction was last named, which those who reacted may still take back
+            // but nobody may add to (specs/emoji.md 7).
+            const e = held(r.emojiId);
+            const label = e ? `:${e.name}:` : r.reaction;
+            return {
+              custom: e ?? { name: r.reaction.replace(/^:|:$/g, "") },
+              label,
+              count: r.count,
+              selected: r.me,
+              who: reactedWords({ ...r, reaction: label }, props.me, props.knownName),
+              onToggle: props.canAct && (e || r.me) ? () => reactCustom(m, r.emojiId, r.me) : undefined,
+            };
+          });
   const tools = (m: TimelineItem) => (
     <Show when={acts(m)}>
       <MessageActions
@@ -785,12 +833,19 @@ export function Timeline(props: TimelineProps) {
         {(p) => (
           <Popover anchor={p.anchor} onClose={() => setPicking(null)} closeLabel="Close the emoji">
             <EmojiPicker
-              frequent={frequentEmoji()}
+              frequent={frequentEmoji(props.emoji?.held)}
+              server={props.emoji ? { name: props.emoji.name, emoji: [...props.emoji.held.values()] } : undefined}
               onPick={(emoji) => {
                 const item = p.item;
                 setPicking(null);
-                const has = item.reactions.some((r) => r.reaction === emoji && r.me);
+                const has = item.reactions.some((r) => !r.emojiId && r.reaction === emoji && r.me);
                 react(item, emoji, has);
+              }}
+              onPickCustom={(e) => {
+                const item = p.item;
+                setPicking(null);
+                const has = item.reactions.some((r) => r.emojiId === e.id && r.me);
+                reactCustom(item, e.id, has);
               }}
             />
           </Popover>
@@ -877,6 +932,8 @@ export interface ComposeProps {
   onEditLast?: () => void;
   /** The @ list's people; none in a DM. */
   mentions?: MentionSource;
+  /** In a server's conversation, its own emoji: the `:` list, and the picker's section; none in a personal one (specs/emoji.md 10). */
+  emoji?: ServerEmoji;
   /** What a send left to say, over the field. */
   note?: JSX.Element;
   inputRef?: (el: HTMLTextAreaElement) => void;
@@ -920,8 +977,9 @@ export function Compose(props: ComposeProps) {
   const [at, setAt] = createSignal<{ start: number; query: string } | null>(null);
   const [active, setActive] = createSignal(0);
   const look = () => {
-    if (!input || !props.mentions) return setAt(null);
-    setAt(mentionAt(input.value, input.selectionStart ?? input.value.length));
+    const caret = input ? (input.selectionStart ?? input.value.length) : 0;
+    setAt(input && props.mentions ? mentionAt(input.value, caret) : null);
+    setColon(input && props.emoji ? colonAt(input.value, caret) : null);
     setActive(0);
   };
   const options = createMemo<MentionOption[]>(() => {
@@ -949,22 +1007,75 @@ export function Compose(props: ComposeProps) {
     const everyone = src.canEveryone && "everyone".startsWith(q) ? [{ id: "everyone", name: "everyone", everyone: true, note: `Notify everyone in #${src.channel}` }] : [];
     return [...everyone, ...people];
   });
+  // The `:` list (specs/emoji.md 10): the server's emoji the core matches to what follows the
+  // colon, asked again as it changes, the latest answer drawn; nothing in a personal conversation.
+  const emojiListId = `lu-emoji-${listIds}`;
+  const [colon, setColon] = createSignal<{ start: number; query: string } | null>(null);
+  const [matched, setMatched] = createSignal<EmojiSummary[]>([]);
+  let matching = 0;
+  createEffect(
+    on(colon, (c) => {
+      const n = ++matching;
+      const server = props.emoji?.serverId;
+      if (!c || !server || c.query.length < 2) return setMatched([]);
+      client()
+        .emojiMatches(server, c.query)
+        .then((list) => n === matching && setMatched(list))
+        .catch((e) => console.warn("emoji matches:", e));
+    }),
+  );
+  // Each as the conversation draws it where it holds it (its picture following reduced motion).
+  const emojiOptions = createMemo<CustomEmojiEntry[]>(() => (colon() ? matched().map((e) => props.emoji?.held.get(e.emojiId) ?? pictureOf(e)) : []));
+  const emojiOpen = () => emojiOptions().length > 0;
   const open = () => options().length > 0;
+  /** Puts `what` in place of the field's text from `from` to the caret (or to `to`), the caret after it and the keyboard in the field. */
+  const put = (from: number, what: string, to?: number) => {
+    if (!input) return;
+    const r = spliced(input.value, from, to ?? input.selectionStart ?? input.value.length, what);
+    props.onInput(r.text);
+    queueMicrotask(() => {
+      input?.focus();
+      input?.setSelectionRange(r.caret, r.caret);
+    });
+  };
   const pick = (o: MentionOption) => {
     const a = at();
     if (!a || !input) return;
-    const caret = input.selectionStart ?? input.value.length;
-    const word = `@${o.everyone ? "everyone" : o.handle} `;
-    const text = input.value.slice(0, a.start) + word + input.value.slice(caret);
-    props.onInput(text);
+    put(a.start, `@${o.everyone ? "everyone" : o.handle} `);
     setAt(null);
-    const to = a.start + word.length;
-    queueMicrotask(() => {
-      input?.focus();
-      input?.setSelectionRange(to, to);
-    });
+  };
+  const pickEmoji = (e: CustomEmojiEntry) => {
+    const c = colon();
+    if (!c || !input) return;
+    usedEmoji(customKey(e.id));
+    put(c.start, typedEmoji(e.name));
+    setColon(null);
+  };
+  // The list open over the field, whichever it is, for the keys.
+  const listed = () => (open() ? options().length : emojiOpen() ? emojiOptions().length : 0);
+  const choose = () => {
+    if (open()) {
+      const o = options()[active()];
+      if (o) pick(o);
+    } else {
+      const e = emojiOptions()[active()];
+      if (e) pickEmoji(e);
+    }
+  };
+  const close = () => {
+    setAt(null);
+    setColon(null);
+  };
+  // The picker from the emoji button: what is chosen goes in at the caret (a server's emoji as
+  // `:name: `), the keyboard back in the field, and it stays open for more until Escape or a
+  // press outside it.
+  const [emojiAnchor, setEmojiAnchor] = createSignal<HTMLElement | null>(null);
+  const insert = (what: string) => {
+    if (!input) return;
+    put(input.selectionStart ?? input.value.length, what, input.selectionEnd ?? undefined);
   };
   return (
+    <>
     <Composer
       placeholder={props.placeholder}
       tools={false}
@@ -976,16 +1087,18 @@ export function Compose(props: ComposeProps) {
         input = el;
         props.inputRef?.(el);
       }}
-      aria-controls={open() ? listId : undefined}
-      aria-autocomplete={props.mentions ? "list" : undefined}
-      aria-activedescendant={open() ? `${listId}-${active()}` : undefined}
+      aria-controls={open() ? listId : emojiOpen() ? emojiListId : undefined}
+      aria-autocomplete={props.mentions || props.emoji ? "list" : undefined}
+      aria-activedescendant={open() ? `${listId}-${active()}` : emojiOpen() ? `${emojiListId}-${active()}` : undefined}
       onInput={(e) => {
         props.onInput(e.currentTarget.value);
         look();
       }}
       onClick={look}
-      onBlur={() => setAt(null)}
+      onBlur={close}
       onAttach={props.media?.onFiles ? () => picker?.click() : undefined}
+      onEmoji={props.disabled ? undefined : (anchor) => setEmojiAnchor((was) => (was ? null : anchor))}
+      emojiOpen={!!emojiAnchor()}
       onPaste={(e) => {
         const onFiles = props.media?.onFiles;
         if (!onFiles) return;
@@ -995,22 +1108,21 @@ export function Compose(props: ComposeProps) {
         onFiles(files);
       }}
       onKeyDown={(e) => {
-        if (open()) {
+        const n = listed();
+        if (n > 0) {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
-            const n = options().length;
             setActive((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
             return;
           }
           if ((e.key === "Enter" || e.key === "Tab") && !composing(e)) {
             e.preventDefault();
-            const o = options()[active()];
-            if (o) pick(o);
+            choose();
             return;
           }
           if (e.key === "Escape") {
             e.preventDefault();
-            setAt(null);
+            close();
             return;
           }
         }
@@ -1039,9 +1151,12 @@ export function Compose(props: ComposeProps) {
           <Show when={open()}>
             <MentionList id={listId} options={options()} active={active()} onActive={setActive} onPick={pick} />
           </Show>
+          <Show when={!open() && emojiOpen()}>
+            <EmojiList id={emojiListId} options={emojiOptions()} active={active()} onActive={setActive} onPick={pickEmoji} />
+          </Show>
           {/* A textarea cannot be a combobox, so nothing says the list opened: this does. */}
           <span class="lu-sr" aria-live="polite">
-            {open() ? `${options().length} to mention, Up and Down to choose, Return to pick` : ""}
+            {open() ? `${options().length} to mention, Up and Down to choose, Return to pick` : emojiOpen() ? `${emojiOptions().length} emoji, Up and Down to choose, Return to pick` : ""}
           </span>
           <Show when={props.media}>
             {(m) => <ComposerMedia drafts={m().drafts} cards={m().cards} note={m().note} />}
@@ -1083,6 +1198,26 @@ export function Compose(props: ComposeProps) {
         ) : undefined
       }
     />
+    {/* Keyed: the popover gives the keyboard back to the field as it closes, after the signal has gone. */}
+    <Show when={emojiAnchor()} keyed>
+      {(anchor) => (
+        <Popover anchor={anchor} placement="above" restore={() => input} onClose={() => setEmojiAnchor(null)} closeLabel="Close the emoji">
+          <EmojiPicker
+            frequent={frequentEmoji(props.emoji?.held)}
+            server={props.emoji ? { name: props.emoji.name, emoji: [...props.emoji.held.values()] } : undefined}
+            onPick={(emoji) => {
+              usedEmoji(emoji);
+              insert(emoji);
+            }}
+            onPickCustom={(e) => {
+              usedEmoji(customKey(e.id));
+              insert(typedEmoji(e.name));
+            }}
+          />
+        </Popover>
+      )}
+    </Show>
+    </>
   );
 }
 

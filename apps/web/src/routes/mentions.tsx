@@ -4,7 +4,7 @@
 // item is where it was said over the message as the timeline draws it;
 // pressing it opens the channel at that message.
 import { For, Show, createSignal } from "solid-js";
-import { ChannelHeader, EmptyState, Mention, MentionEntry, Message, MessageBody, ReplyRef } from "../design/components";
+import { ChannelHeader, CustomEmoji, EmptyState, Mention, MentionEntry, Message, MessageBody, ReplyRef } from "../design/components";
 import type { MessageSummary, ServerSummary, SnapshotSummary } from "../client/bridge";
 import { mentionsQuery } from "../client/state";
 import { keptById } from "../client/live";
@@ -12,6 +12,7 @@ import { useNames } from "../client/names";
 import { preferences } from "../client/preferences";
 import { dayLabel, initialsOf, timeOf, toneFor } from "./app";
 import { mentionWords } from "./timeline";
+import { heldEmoji } from "./emoji";
 
 export interface MentionsPageProps {
   /** The server whose mentions these are; every server's at Home. */
@@ -27,6 +28,8 @@ export function MentionsPage(props: MentionsPageProps) {
   const pages = mentionsQuery(() => props.server?.serverId ?? null);
   // Kept by id: the pages are read again whenever a message arrives anywhere, and an item is drawn from its message itself.
   const messages = keptById(() => pages.data?.pages.flatMap((p) => p.messages) ?? [], { key: "messageId" });
+  // Every server's emoji by id: a message's refs name only its own server's, and ids are not shared.
+  const held = heldEmoji(() => props.snapshot?.servers.flatMap((s) => s.emoji));
   const where = (m: MessageSummary) => {
     const ch = props.snapshot?.channels.find((c) => c.channelId === m.channelId);
     const channel = ch ? (ch.kind === "SERVER_DM" ? nameOf(ch.participantAccountIds.find((id) => id !== props.snapshot?.accountId) ?? "") : `#${ch.name}`) : "A channel you left";
@@ -102,6 +105,11 @@ export function MentionsPage(props: MentionsPageProps) {
                           const mention = m.mentions[index];
                           return <Mention>{mention ? mentionWords(typed, mention, quoted) : typed}</Mention>;
                         }}
+                        emoji={(index, typed) => (
+                          <Show when={held().get(m.emoji?.[index]?.emojiId ?? "")} fallback={typed}>
+                            {(e) => <CustomEmoji {...e()} />}
+                          </Show>
+                        )}
                         edited={m.edited}
                         expanded={expanded().has(m.messageId)}
                         onExpanded={(open) =>

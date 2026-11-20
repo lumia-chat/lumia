@@ -2323,6 +2323,11 @@ function EmojiTalk(props: { addReaction?: boolean }) {
   );
 }
 
+/** The composer as the app draws it: attach, the field, the emoji button at its end, Send (no formatting or mention buttons, which have nothing behind them). */
+function AppComposer(props: { placeholder: string; value?: string; above?: JSX.Element; emojiOpen?: boolean }) {
+  return <Composer placeholder={props.placeholder} value={props.value} above={props.above} tools={false} onAttach={() => {}} onEmoji={() => {}} emojiOpen={props.emojiOpen} />;
+}
+
 function EmojiShell(props: { height?: number; composer?: JSX.Element; over?: JSX.Element; addReaction?: boolean }) {
   return (
     <AppShell
@@ -2334,7 +2339,7 @@ function EmojiShell(props: { height?: number; composer?: JSX.Element; over?: JSX
         <>
           <ChannelHeader name="general" topic="Company-wide announcements and water-cooler chat" />
           <EmojiTalk addReaction={props.addReaction} />
-          {props.composer ?? <Composer placeholder="Message #general" />}
+          {props.composer ?? <AppComposer placeholder="Message #general" />}
           {props.over}
         </>
       }
@@ -2372,11 +2377,17 @@ function EmojiPickerBoard() {
 function EmojiComposerBoard() {
   return (
     <div class="gallery-roles gallery-emoji">
-      <p class="gallery-roles__lead">Typing a colon and two or more letters lists Acme’s emoji whose names match, by the start of the name and then anywhere in it, each with its picture; the first is highlighted. The arrow keys move, Return or Tab chooses, Escape closes it. Choosing one completes the :name: with a space after it.</p>
-      <EmojiShell composer={<Composer placeholder="Message #general" value="Shipped the importer :par" above={<EmojiList id="gallery-emoji-list" options={PAR} active={0} />} />} />
+      <p class="gallery-roles__lead">Typing a colon and two or more letters lists Acme’s emoji whose names match, by the start of the name and then anywhere in it, each with its picture; the first is highlighted. The arrow keys move, Return or Tab chooses, Escape closes it. Choosing one completes the :name: with a space after it. The emoji button at the field’s end opens the picker over it.</p>
+      <EmojiShell composer={<AppComposer placeholder="Message #general" value="Shipped the importer :par" above={<EmojiList id="gallery-emoji-list" options={PAR} active={0} />} />} />
       <div class="gallery-roles__more">
+        <Figure wide caption="The emoji button opens the picker over itself, clear of the field: Acme’s section in a server’s conversation, none in a personal one. Choosing puts it in at the caret (Unicode’s as itself, Acme’s as :name: and a space) with the keyboard back in the field, and the picker stays open for more until Escape or a press outside it.">
+          <div class="gallery-emoji__frombutton">
+            <EmojiPicker frequent={FREQUENT_IN_ACME} server={{ name: "Acme", emoji: ACME_EMOJI }} />
+            <AppComposer placeholder="Message #general" value="Shipped the importer :partyparrot: 🎉" emojiOpen />
+          </div>
+        </Figure>
         <Figure wide caption="Chosen: the composer holds :partyparrot: as text, a space after it. The core finds it when the message is sent and keeps the emoji beside the text; the field never draws the picture.">
-          <Composer placeholder="Message #general" value="Shipped the importer :partyparrot: " />
+          <AppComposer placeholder="Message #general" value="Shipped the importer :partyparrot: " />
         </Figure>
         <Figure wide caption="Sent, it is drawn as its picture in the message.">
           <MessageList class="pieces__list">
@@ -2387,11 +2398,11 @@ function EmojiComposerBoard() {
             </Message>
           </MessageList>
         </Figure>
-        <Figure wide caption="One letter after the colon lists nothing yet: two or more are needed, so a time like 10:30 or a :) is not interrupted.">
-          <Composer placeholder="Message #general" value="Shipped the importer :p" />
+        <Figure wide caption="One letter after the colon lists nothing yet: two or more are needed, and a colon right after a letter or a digit opens nothing, so a time like 10:30 or a :) is not interrupted.">
+          <AppComposer placeholder="Message #general" value="Shipped the importer :p" />
         </Figure>
         <Figure wide caption="In a personal conversation nothing is listed, and :partyparrot: typed there stays text.">
-          <Composer placeholder="Message Maya Chen" value="Shipped the importer :par" />
+          <AppComposer placeholder="Message Maya Chen" value="Shipped the importer :par" />
         </Figure>
       </div>
     </div>

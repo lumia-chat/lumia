@@ -87,7 +87,8 @@
       "args": {
         "canManage": true,
         "canManageRoles": true,
-        "canManageMembers": true
+        "canManageMembers": true,
+        "canManageEmoji": false
       },
       "answer": [
         "overview",
@@ -101,7 +102,8 @@
       "args": {
         "canManage": true,
         "canManageRoles": false,
-        "canManageMembers": false
+        "canManageMembers": false,
+        "canManageEmoji": false
       },
       "answer": [
         "overview"
@@ -113,7 +115,8 @@
       "args": {
         "canManage": false,
         "canManageRoles": true,
-        "canManageMembers": false
+        "canManageMembers": false,
+        "canManageEmoji": false
       },
       "answer": [
         "roles",
@@ -126,7 +129,8 @@
       "args": {
         "canManage": false,
         "canManageRoles": false,
-        "canManageMembers": true
+        "canManageMembers": true,
+        "canManageEmoji": false
       },
       "answer": [
         "members"
@@ -138,10 +142,40 @@
       "args": {
         "canManage": false,
         "canManageRoles": false,
-        "canManageMembers": false
+        "canManageMembers": false,
+        "canManageEmoji": false
       },
       "answer": [],
       "why": "none, and the settings do not open"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": true,
+        "canManageRoles": true,
+        "canManageMembers": true,
+        "canManageEmoji": true
+      },
+      "answer": [
+        "overview",
+        "roles",
+        "members",
+        "emoji"
+      ],
+      "why": "Emoji comes last, after Members (specs/emoji.md 10)"
+    },
+    {
+      "rule": "settingsSections",
+      "args": {
+        "canManage": false,
+        "canManageRoles": false,
+        "canManageMembers": false,
+        "canManageEmoji": true
+      },
+      "answer": [
+        "emoji"
+      ],
+      "why": "Manage emoji alone: Emoji"
     },
     {
       "rule": "sectionLabel",
@@ -165,6 +199,14 @@
         "section": "members"
       },
       "answer": "Members",
+      "why": "the section's name"
+    },
+    {
+      "rule": "sectionLabel",
+      "args": {
+        "section": "emoji"
+      },
+      "answer": "Emoji",
       "why": "the section's name"
     },
     {

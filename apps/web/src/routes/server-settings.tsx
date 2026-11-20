@@ -1,8 +1,8 @@
 // A server's settings, in sections (architecture 6.7 and 7.5; the "Server
 // settings" board): Overview, its picture and name, what the tag beside a
 // name shows, the channels newcomers join (architecture 6.8), how long it
-// keeps its messages, and its files (specs/media.md 4.5); Roles; and
-// Members (`roles.tsx`). Offered from the menu under the server's name to
+// keeps its messages, and its files (specs/media.md 4.5); Roles; Members
+// (`roles.tsx`); and Emoji, the server's own (`emoji.tsx`, specs/emoji.md). Offered from the menu under the server's name to
 // whoever may use a section (`settingsSections`, from the account's own
 // membership); the instance decides all the same. Shown in the server's
 // main pane until a channel is chosen, the sections beside the page, or
@@ -15,6 +15,8 @@ import { TAG_CHOICES, TAG_HEADING, TAG_NOTE, TAG_SUBTITLE, rolesCount, sectionLa
 import { avatarSrc, client, membersKept, membersQuery, pictureRefusal, queryClient } from "../client/state";
 import { initialsOf } from "./app";
 import { DefaultChannelsCard } from "./channels";
+import { EmojiSection } from "./emoji";
+import { emojiCount } from "../client/emoji";
 import { MembersSection, RolesSection } from "./roles";
 
 /** The choices offered, in days; 0 keeps messages for ever. */
@@ -38,7 +40,7 @@ function settingRefusal(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const ICONS: Record<SettingsSection, IconName> = { overview: "settings", roles: "shield", members: "members" };
+const ICONS: Record<SettingsSection, IconName> = { overview: "settings", roles: "shield", members: "members", emoji: "emoji" };
 
 /** True while the window matches `query`. */
 function useMedia(query: string): () => boolean {
@@ -68,10 +70,10 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
   createEffect(() => {
     if (sections().length === 0) props.close();
   });
-  // The members, for Members and for how many hold each role; read only by those sections.
-  const members = membersQuery(() => (section() === "roles" || section() === "members" ? props.server.serverId : undefined));
+  // The members, for Members, for how many hold each role and for who uploaded each emoji; read only by those sections.
+  const members = membersQuery(() => (section() === "roles" || section() === "members" || section() === "emoji" ? props.server.serverId : undefined));
   const me = () => members.data?.find((m) => m.accountId === props.snapshot?.accountId);
-  const note = (id: SettingsSection) => (id === "roles" ? rolesCount(props.server.roles) : undefined);
+  const note = (id: SettingsSection) => (id === "roles" ? rolesCount(props.server.roles) : id === "emoji" ? emojiCount(props.server.emoji.length, props.server.emojiLimit) : undefined);
   const list = () => sections().map((id) => ({ id, label: sectionLabel(id), icon: ICONS[id], note: note(id) }));
   return (
     <>
@@ -96,6 +98,9 @@ export function ServerSettings(props: { server: ServerSummary; snapshot: Snapsho
               </Match>
               <Match when={section() === "members"}>
                 <MembersSection server={props.server} members={members.data} myId={props.snapshot?.accountId ?? ""} error={members.error ? settingRefusal(members.error) : undefined} />
+              </Match>
+              <Match when={section() === "emoji"}>
+                <EmojiSection server={props.server} members={members.data} took={(snap) => queryClient.setQueryData(["snapshot"], snap)} />
               </Match>
             </Switch>
           </div>

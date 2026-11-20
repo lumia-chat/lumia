@@ -65,6 +65,32 @@ export interface ServerSummary {
   roleIds: string[];
   title: string;
   guest: boolean;
+  /** The server's live custom emoji, oldest first (specs/emoji.md 8). */
+  emoji: EmojiSummary[];
+  /** How many it may have, as the instance says (specs/emoji.md 5). */
+  emojiLimit: number;
+  /** Whether this account may upload, rename and remove them (`MANAGE_EMOJI`, or the owner). */
+  canManageEmoji: boolean;
+}
+/** One of a server's custom emoji (specs/emoji.md 2), as the core's `EmojiSummary` serializes it. */
+export interface EmojiSummary {
+  emojiId: string;
+  /** Written in messages as `:name:`. */
+  name: string;
+  /** The picture, a path of this instance as an avatar's is (`avatarSrc` makes it a URL). */
+  imageUrl: string;
+  /** Whether the picture is an animated GIF; otherwise it is a PNG. */
+  animated: boolean;
+  /** Its pixels, at most 128 each way: its shape. */
+  width: number;
+  height: number;
+  createdByAccountId: string;
+}
+/** Where a message's body uses one of its server's custom emoji: UTF-8 byte offsets into the body, half-open, over its `:name:`. */
+export interface EmojiRefSummary {
+  emojiId: string;
+  start: number;
+  end: number;
 }
 /** A role of a server (architecture 7.5), as the snapshot's servers list theirs. */
 export interface RoleSummary {
@@ -257,8 +283,8 @@ export type BodyBlock =
 export interface BodyRun {
   start: number;
   end: number;
-  /** `mention`: `index` is its place in the message's `mentions`, and its text is the mention as typed. */
-  style: { kind: "emphasis" | "strong" | "strike" | "code" } | { kind: "mention"; index: number };
+  /** `mention`: `index` is its place in the message's `mentions`, and its text is the mention as typed; `emoji`: its place in the message's `emoji`, its text the `:name:` as typed (specs/emoji.md 6). */
+  style: { kind: "emphasis" | "strong" | "strike" | "code" } | { kind: "mention"; index: number } | { kind: "emoji"; index: number };
 }
 /** A web link: the stretch of text it is, and where it goes (only ever http or https; the core keeps no other). */
 export interface BodyLink {
@@ -279,6 +305,8 @@ export interface ReactionSummary {
   me: boolean;
   /** Who reacted, as many as are known. */
   accountIds: string[];
+  /** The server's custom emoji it is, whose `:name:` `reaction` then is (specs/emoji.md 9); empty for a Unicode emoji. */
+  emojiId: string;
 }
 /** A conversation's read state: the last event read, how many messages others sent after it, and how many of those notify (in a DM, every one). */
 export interface ReadStateSummary {
@@ -378,6 +406,8 @@ export interface MessageSummary {
   attachments: AttachmentSummary[];
   /** Its link cards, in the order their links appear. */
   cards: CardSummary[];
+  /** The server's custom emoji its body uses, by byte range (specs/emoji.md 6); none in a personal conversation. */
+  emoji?: EmojiRefSummary[];
   /** The body read into blocks, which the worker adds to every message it hands the page. */
   blocks: BodyBlock[];
 }
@@ -545,6 +575,8 @@ export type ClientEvent =
   | { kind: "linkSessionUpdated"; sessionId: string }
   /** What a server's tags are drawn from changed (its roles, some members' roles or titles, or which of the two it shows), after the `accountApplied` it came in: what the core keeps has it already. */
   | { kind: "tagsChanged"; serverId: string }
+  /** A server's custom emoji changed (specs/emoji.md 8), after the `accountApplied` it came in: what the core keeps has them already (`serverEmoji`). */
+  | { kind: "emojiChanged"; serverId: string }
   | { kind: "acked"; commandId: string; seq: number }
   | { kind: "error"; code: string; message: string; commandId: string }
   | { kind: "subscriptionFailed"; channelId: string; message: string }
@@ -990,6 +1022,38 @@ export class Bridge {
   /** Adds this account's reaction to a message of a server channel, or takes it away. */
   react(channelId: string, messageId: string, emoji: string, remove: boolean): Promise<void> {
     return this.call("react", channelId, messageId, emoji, remove);
+  }
+  /** Reacts to a message of a server's channel with one of the server's custom emoji, or takes the reaction away (specs/emoji.md 9). */
+  reactEmoji(channelId: string, messageId: string, emojiId: string, remove: boolean): Promise<void> {
+    return this.call("reactEmoji", channelId, messageId, emojiId, remove);
+  }
+  /** A server's live custom emoji as the core keeps them, oldest first: what is read again on `emojiChanged`. */
+  serverEmoji(serverId: string): Promise<EmojiSummary[]> {
+    return this.call("serverEmoji", serverId);
+  }
+  /** The server's emoji what follows a `:` in the composer matches, in the order the list shows them; none under two characters (the core's rule). */
+  emojiMatches(serverId: string, prefix: string): Promise<EmojiSummary[]> {
+    return this.call("emojiMatches", serverId, prefix);
+  }
+  /** `POST /servers/{id}/emoji`: a new custom emoji from a file's bytes as chosen, which the instance makes its own (specs/emoji.md 3). The snapshot as it then is. */
+  uploadEmoji(serverId: string, name: string, picture: Uint8Array, mediaType: string): Promise<SnapshotSummary> {
+    return this.call("uploadEmoji", serverId, name, picture, mediaType);
+  }
+  /** `PATCH /servers/{id}/emoji/{emoji_id}`: a new name. The snapshot as it then is. */
+  renameEmoji(serverId: string, emojiId: string, name: string): Promise<SnapshotSummary> {
+    return this.call("renameEmoji", serverId, emojiId, name);
+  }
+  /** `DELETE /servers/{id}/emoji/{emoji_id}`: removed, its name left behind (specs/emoji.md 7). The snapshot as it then is. */
+  removeEmoji(serverId: string, emojiId: string): Promise<SnapshotSummary> {
+    return this.call("removeEmoji", serverId, emojiId);
+  }
+  /** A custom emoji's name made from a picture's file name, for the upload form to start from (the core's rule). */
+  emojiNameFromFile(fileName: string): Promise<string> {
+    return this.call("emojiNameFromFile", fileName);
+  }
+  /** Whether a name is one a custom emoji may have (2 to 32 of a–z, 0–9 and _). */
+  isEmojiName(name: string): Promise<boolean> {
+    return this.call("isEmojiName", name);
   }
   /** Every conversation's read state as this client counts it. */
   readStates(): Promise<ReadStateSummary[]> {

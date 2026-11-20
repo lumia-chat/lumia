@@ -23,19 +23,21 @@ export function toneOf(color: string): RoleTone | null {
   return (TONES as readonly string[]).includes(color) ? (color as RoleTone) : null;
 }
 
-export type SettingsSection = "overview" | "roles" | "members";
+export type SettingsSection = "overview" | "roles" | "members" | "emoji";
 
 /**
  * The sections of a server's settings this account may use, in order:
- * Overview with Manage server, Roles with Manage roles, and Members with
+ * Overview with Manage server, Roles with Manage roles, Members with
  * Manage members or Manage roles, since a member's roles are changed there
- * too. None, and the settings do not open.
+ * too, and Emoji with Manage emoji (specs/emoji.md 10). None, and the
+ * settings do not open.
  */
-export function settingsSections(server: Pick<ServerSummary, "canManage" | "canManageRoles" | "canManageMembers">): SettingsSection[] {
+export function settingsSections(server: Pick<ServerSummary, "canManage" | "canManageRoles" | "canManageMembers" | "canManageEmoji">): SettingsSection[] {
   const sections: SettingsSection[] = [];
   if (server.canManage) sections.push("overview");
   if (server.canManageRoles) sections.push("roles");
   if (server.canManageMembers || server.canManageRoles) sections.push("members");
+  if (server.canManageEmoji) sections.push("emoji");
   return sections;
 }
 
@@ -46,7 +48,7 @@ export function grouped(n: number): string {
 
 /** What a section of a server's settings is called, in its list and as its page's title. */
 export function sectionLabel(section: SettingsSection): string {
-  return section === "overview" ? "Overview" : section === "roles" ? "Roles" : "Members";
+  return section === "overview" ? "Overview" : section === "roles" ? "Roles" : section === "members" ? "Members" : "Emoji";
 }
 
 /** "5 roles": a server's roles counted without Everyone. */

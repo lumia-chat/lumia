@@ -52,7 +52,8 @@ import { ConversationAside, HomeMain, HomeSidebar, type HomeView } from "./home"
 import { Overlay, myStatusDot, type Over } from "./menus";
 import { ServerSettings } from "./server-settings";
 import { BrowsePage, ChannelMembersAside, YourSettingsPage, channelRefusal, joinChannel } from "./channels";
-import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, keptItems, notNotifiedWords, quoteOf, refusalWords, type EditMedia, type Refusal, type Replying, type TimelineItem } from "./timeline";
+import { Compose, ComposerNote, Timeline, createMarkRead, invitedWords, keptItems, notNotifiedWords, quoteOf, refusalWords, type EditMedia, type Refusal, type Replying, type ServerEmoji, type TimelineItem } from "./timeline";
+import { forgetStills, heldEmoji } from "./emoji";
 import { attachFiles, createCardPreviews, filesForSend, filesSent, hasFiles, stripOf } from "./media";
 import { MentionsPage } from "./mentions";
 import { dismissRailNote, dropOnRail, railCache, railNote, railSaid, railTiles } from "./rail";
@@ -252,6 +253,14 @@ function Frame() {
 
   const servers = createMemo<ServerSummary[]>(() => snapshot.data?.servers ?? []);
   const server = createMemo(() => servers().find((s) => s.serverId === serverId()));
+  // The server's own emoji, for its channels and server DMs (specs/emoji.md): drawn, offered and listed.
+  const held = heldEmoji(() => server()?.emoji);
+  const serverEmoji = createMemo<ServerEmoji | undefined>(() => {
+    const s = server();
+    return s ? { serverId: s.serverId, name: s.name, held: held() } : undefined;
+  });
+  // A first frame made for a picture no server lists any longer (an emoji removed) is let go.
+  createEffect(() => forgetStills(new Set(servers().flatMap((s) => s.emoji.map((e) => avatarSrc(e.imageUrl) ?? "")))));
   // The channels this account is in, and its server DMs there.
   const listed = createMemo<ChannelSummary[]>(() => (snapshot.data?.channels ?? []).filter((c) => c.serverId === serverId() && !PERSONAL.has(c.kind)));
   const channels = createMemo(() => listed().filter((c) => c.kind === "TEXT"));
@@ -561,6 +570,13 @@ function Frame() {
       .react(id, item.id, emoji, remove)
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
+  const reactEmoji = (item: TimelineItem, emojiId: string, remove: boolean) => {
+    const id = channelId();
+    if (!id) return;
+    client()
+      .reactEmoji(id, item.id, emojiId, remove)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  };
   // Kept by id: the core hands over new objects every time the channel is read again, and a row is drawn from its message itself.
   const timelineItems = keptItems(() =>
     (messages.data ?? []).map((m) => ({
@@ -581,6 +597,7 @@ function Frame() {
       mentionsMe: m.mentionsMe,
       attachments: m.attachments ?? [],
       cards: m.cards ?? [],
+      emoji: m.emoji ?? [],
     })),
   );
   // Read while it is on screen: the window in front and the list at its newest message.
@@ -864,6 +881,8 @@ function Frame() {
                               replyingTo={replying()?.messageId}
                               onCancelReply={() => setReplying(null)}
                               onReact={react}
+                              emoji={serverEmoji()}
+                              onReactEmoji={reactEmoji}
                               canDelete={(m) => !m.notice && (m.mine || (!isDm() && !!server()?.canManageMessages))}
                               editing={editing()}
                               onEditing={(mid) => {
@@ -904,6 +923,7 @@ function Frame() {
                           onReplyNotify={(on) => setReplying((r) => (r ? { ...r, notify: on } : r))}
                           onEditLast={editLast}
                           mentions={mentionSource()}
+                          emoji={serverEmoji()}
                           note={noteShown()}
                           inputRef={(el) => (composerInput = el)}
                           media={{

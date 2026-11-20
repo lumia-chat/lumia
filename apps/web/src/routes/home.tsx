@@ -400,6 +400,8 @@ function Conversation(props: HomeProps) {
       mentionsMe: false,
       attachments: m.attachments ?? [],
       cards: m.cards ?? [],
+      // A personal conversation has no server's emoji: `:name:` is text there (specs/emoji.md 1).
+      emoji: [],
     })),
   );
   const knownName = (id: string): string | undefined => {

@@ -487,6 +487,10 @@ export interface ComposerProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaEl
   onSend?: () => void;
   /** The attach button, which is drawn with this even where the other tools are not. */
   onAttach?: () => void;
+  /** The emoji button at the field's end, drawn with this even where the other tools are not: it opens the picker against itself. */
+  onEmoji?: (anchor: HTMLElement) => void;
+  /** Whether the picker the emoji button opens is open. */
+  emojiOpen?: boolean;
   /** What stands over the field: a note after sending, the @ list (which floats over the conversation). */
   above?: JSX.Element;
   /** The strip atop the field's own frame (the reply bar), which then has the active border. */
@@ -502,7 +506,7 @@ export interface ComposerProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaEl
  * inside itself.
  */
 export function Composer(props: ComposerProps) {
-  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "class", "above", "bar", "room", "inputRef", "value"]);
+  const [local, input] = splitProps(props, ["placeholder", "label", "typing", "hint", "tools", "id", "onSend", "onAttach", "onEmoji", "emojiOpen", "class", "above", "bar", "room", "inputRef", "value"]);
   const fid = fieldId(local.id);
   const count = fieldId();
   const placeholder = () => local.placeholder ?? "Message";
@@ -549,7 +553,11 @@ export function Composer(props: ComposerProps) {
           />
           <Show when={tools()}>
             <IconButton glyph="Aa" label="Text formatting" />
-            <IconButton icon="emoji" label="Emoji" />
+          </Show>
+          <Show when={tools() || local.onEmoji}>
+            <IconButton icon="emoji" label="Emoji" class="lu-composer__emoji" aria-haspopup="dialog" aria-expanded={local.onEmoji ? !!local.emojiOpen : undefined} onClick={(e) => local.onEmoji?.(e.currentTarget)} />
+          </Show>
+          <Show when={tools()}>
             <IconButton icon="mention" label="Mention someone" strokeWidth={1.9} />
           </Show>
           <IconButton icon="send" variant="send" size={40} label="Send message" class="lu-composer__send" disabled={over()} onClick={() => local.onSend?.()} />
@@ -2808,6 +2816,8 @@ export interface MessageBodyProps {
   blocks: BodyBlock[];
   /** A mention as drawn, by its place in the message's mentions and its text as typed; a pill of that text when not given. */
   mention?: (index: number, typed: string) => JSX.Element;
+  /** A server's custom emoji as drawn, by its place in the message's emoji and its `:name:` as typed: its picture where it is held, that text where it is not, and the text when not given (specs/emoji.md 6). */
+  emoji?: (index: number, typed: string) => JSX.Element;
   /** "(edited)" after the last paragraph's words, or on a line of its own after a body that ends in something else. */
   edited?: boolean;
   /** A long body drawn whole, "Show less" under it; collapsed, "Show more". Kept by the body itself when not given. */
@@ -2845,7 +2855,7 @@ export function MessageBody(props: MessageBodyProps) {
     </span>
   );
   const piece = (p: Piece): JSX.Element => {
-    let drawn: JSX.Element = p.mention === undefined ? p.text : <>{props.mention ? props.mention(p.mention, p.text) : <Mention>{p.text}</Mention>}</>;
+    let drawn: JSX.Element = p.mention !== undefined ? <>{props.mention ? props.mention(p.mention, p.text) : <Mention>{p.text}</Mention>}</> : p.emoji !== undefined && props.emoji ? <>{props.emoji(p.emoji, p.text)}</> : p.text;
     if (p.code) drawn = <code class="lu-body__inline">{drawn}</code>;
     if (p.strike) drawn = <s>{drawn}</s>;
     if (p.emphasis) drawn = <em>{drawn}</em>;
@@ -3882,9 +3892,13 @@ export interface PopoverProps {
    * it when there is no room under, beside it at the window's end);
    * `beside` stands it to the anchor's right with their feet in line, as
    * the account menu stands by the rail; `right` stands it to the anchor's
-   * right with their tops in line, as a rail tile's menu.
+   * right with their tops in line, as a rail tile's menu; `above` stands it
+   * over the anchor with their right edges in line, as the composer's emoji
+   * picker stands over its button, clear of the field.
    */
-  placement?: "below" | "beside" | "right";
+  placement?: "below" | "beside" | "right" | "above";
+  /** Where the keyboard goes as it closes, when not back to the anchor (the composer's field, for its emoji picker). */
+  restore?: () => HTMLElement | null | undefined;
   /**
    * Where the pointer asked for it, for a menu at a point: its corner goes
    * there (`placedAt`) whatever the anchor is, which then only takes the
@@ -3920,6 +3934,10 @@ export function Popover(props: PopoverProps) {
     } else if (r && props.placement === "right") {
       left = r.right + 12;
       top = r.top;
+    } else if (r && props.placement === "above") {
+      left = r.right - w;
+      // Clear of the frame the anchor sits in (the composer field's padding and border), not only of the anchor.
+      top = r.top - h - 16;
     } else if (r && r.right + w + 16 > vw && r.left - w - 12 >= 8) {
       left = r.left - w - 12;
       top = r.top - 8;
@@ -3971,7 +3989,8 @@ export function Popover(props: PopoverProps) {
       watch.disconnect();
       window.removeEventListener("resize", place);
       document.removeEventListener("keydown", onKeyDown, true);
-      if (props.anchor?.isConnected) props.anchor.focus({ preventScroll: true });
+      const back = props.restore?.() ?? props.anchor;
+      if (back?.isConnected) back.focus({ preventScroll: true });
     });
   });
   return (
