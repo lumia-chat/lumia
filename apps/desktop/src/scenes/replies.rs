@@ -62,12 +62,14 @@ pub fn replies(state: &mut State) {
             count: 2,
             me: true,
             account_ids: vec!["me".into(), "grace".into()],
+            emoji_id: String::new(),
         },
         ReactionSummary {
             reaction: "🎉".into(),
             count: 1,
             me: false,
             account_ids: vec!["grace".into()],
+            emoji_id: String::new(),
         },
     ];
     let named = "@ada can you check the relocation table?";
@@ -175,6 +177,7 @@ pub fn mentions(state: &mut State) {
         edited: false,
         attachments: Vec::new(),
         cards: Vec::new(),
+        emoji: Vec::new(),
     };
     state.session.reads.mentions.insert(
         "acme".into(),

@@ -189,6 +189,16 @@ pub struct ServerSummary {
     /// Whether it is a guest there: it has a title and is given no roles.
     #[serde(default)]
     pub guest: bool,
+    /// The server's live custom emoji, oldest first (specs/emoji.md 8).
+    #[serde(default)]
+    pub emoji: Vec<EmojiSummary>,
+    /// How many it may have, as the instance says (specs/emoji.md 5).
+    #[serde(default)]
+    pub emoji_limit: u32,
+    /// Whether this account may upload, rename and remove them
+    /// (`MANAGE_EMOJI`, or the owner).
+    #[serde(default)]
+    pub can_manage_emoji: bool,
 }
 
 impl ServerSummary {
@@ -199,6 +209,7 @@ impl ServerSummary {
         server: &lumia_core::proto::Server,
         memberships: &[lumia_core::proto::Member],
         roles: &[lumia_core::proto::Role],
+        emoji: &[lumia_core::proto::CustomEmoji],
     ) -> Self {
         use lumia_core::proto::Permission;
         let own = memberships.iter().find(|m| m.server_id == server.server_id);
@@ -237,6 +248,13 @@ impl ServerSummary {
                 .unwrap_or_default(),
             title: own.map(|m| m.title.clone()).unwrap_or_default(),
             guest: own.is_some_and(|m| m.kind == lumia_core::proto::MembershipKind::Guest as i32),
+            emoji: emoji
+                .iter()
+                .filter(|e| e.server_id == server.server_id)
+                .map(EmojiSummary::of)
+                .collect(),
+            emoji_limit: server.emoji_limit,
+            can_manage_emoji: holds(Permission::ManageEmoji),
         }
     }
 
@@ -508,7 +526,7 @@ pub fn invite_code_of(text: &str) -> String {
 }
 
 /// A channel the account can view.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSummary {
     pub channel_id: String,
@@ -715,6 +733,10 @@ pub struct MessageSummary {
     /// Its link cards, in the order their links appear.
     #[serde(default)]
     pub cards: Vec<CardSummary>,
+    /// The server's custom emoji its body uses, by byte range
+    /// (specs/emoji.md 6): what [`lumia_core::body::display_marked`] is given.
+    #[serde(default)]
+    pub emoji: Vec<EmojiRefSummary>,
 }
 
 /// Bytes as a JSON string: base64, padded. Ids are strings everywhere a shell
@@ -1122,6 +1144,53 @@ pub struct ReactionSummary {
     /// Who reacted, as many as are known (the first fifty a snapshot gives,
     /// and those since).
     pub account_ids: Vec<String>,
+    /// The server's custom emoji it is, whose `:name:` `reaction` then is
+    /// (specs/emoji.md 9); empty for a Unicode emoji. A shell holding the
+    /// emoji draws its picture, and `reaction` where it holds none.
+    #[serde(default)]
+    pub emoji_id: String,
+}
+
+/// One of a server's custom emoji (specs/emoji.md 2).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmojiSummary {
+    pub emoji_id: String,
+    /// Written in messages as `:name:`.
+    pub name: String,
+    /// The picture, a path of this instance as [`MemberSummary::avatar_url`] is.
+    pub image_url: String,
+    /// Whether the picture is an animated GIF; otherwise it is a PNG.
+    pub animated: bool,
+    /// Its pixels, at most 128 each way: a shell draws it at the text's
+    /// emoji height, its width by this shape.
+    pub width: u32,
+    pub height: u32,
+    pub created_by_account_id: String,
+}
+
+impl EmojiSummary {
+    fn of(e: &lumia_core::proto::CustomEmoji) -> Self {
+        Self {
+            emoji_id: wire::display(&e.emoji_id),
+            name: e.name.clone(),
+            image_url: e.image_url.clone(),
+            animated: e.animated,
+            width: e.width,
+            height: e.height,
+            created_by_account_id: wire::display(&e.created_by_account_id),
+        }
+    }
+}
+
+/// Where a message's body uses one of its server's custom emoji: byte
+/// offsets into the body, half-open, over its `:name:`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmojiRefSummary {
+    pub emoji_id: String,
+    pub start: u32,
+    pub end: u32,
 }
 
 /// A conversation's read state for this account (architecture 6.6): the
@@ -1315,6 +1384,13 @@ pub enum AppEvent {
     /// would have said of them was skipped (an `AccountApplied` of no
     /// events comes first).
     TagsChanged {
+        server_id: String,
+    },
+    /// A server's custom emoji changed (`EmojiUpdated` on this account's
+    /// log, specs/emoji.md 8), after the `AccountApplied` it came in: the
+    /// kept snapshot has them already ([`ServerSummary::emoji`]); what draws
+    /// them reads them again, and drops a picture no longer listed.
+    EmojiChanged {
         server_id: String,
     },
     /// A link session moved (`LinkSessionUpdated` on this account's log,
@@ -1572,11 +1648,21 @@ fn stored_summary(m: &lumia_core::store::StoredMessage, me: &[u8]) -> MessageSum
                 count: u32::try_from(r.account_ids.len()).unwrap_or(u32::MAX),
                 me: r.account_ids.iter().any(|a| a == me),
                 account_ids: r.account_ids.iter().map(|a| wire::display(a)).collect(),
+                emoji_id: hex_id(&r.emoji_id),
             })
             .collect(),
         mentions_me: !me.is_empty() && mentions_me,
         attachments: m.attachments.iter().map(attachment_summary).collect(),
         cards: m.cards.iter().map(card_summary).collect(),
+        emoji: m
+            .emoji
+            .iter()
+            .map(|e| EmojiRefSummary {
+                emoji_id: wire::display(&e.emoji_id),
+                start: e.start,
+                end: e.end,
+            })
+            .collect(),
     }
 }
 
@@ -2834,7 +2920,7 @@ impl App {
             can_manage_roles: true,
             can_manage_members: true,
             is_owner: true,
-            ..ServerSummary::of(&s, &[], &[])
+            ..ServerSummary::of(&s, &[], &[], &[])
         })
     }
 
@@ -3430,6 +3516,30 @@ impl App {
         });
     }
 
+    /// What an account batch says of servers' custom emoji (`EmojiUpdated`),
+    /// written into the kept snapshot. Answers an [`AppEvent::EmojiChanged`]
+    /// for each server it touched.
+    fn keep_emoji(&self, events: &[lumia_core::proto::AccountEvent]) -> Vec<AppEvent> {
+        let mut touched: Vec<String> = Vec::new();
+        for event in events {
+            if let Some(account_event::Payload::EmojiUpdated(u)) = &event.payload {
+                let server_id = wire::display(&u.server_id);
+                let emoji: Vec<EmojiSummary> = u.emoji.iter().map(EmojiSummary::of).collect();
+                self.change_kept_server(&server_id, |server| {
+                    server.emoji = emoji;
+                    true
+                });
+                if !touched.contains(&server_id) {
+                    touched.push(server_id);
+                }
+            }
+        }
+        touched
+            .into_iter()
+            .map(|server_id| AppEvent::EmojiChanged { server_id })
+            .collect()
+    }
+
     /// Which of the two a server's tags show, in the kept snapshot; whether
     /// that changed.
     fn keep_tag_titles(&self, server_id: &str, titles: bool) -> bool {
@@ -3742,7 +3852,7 @@ impl App {
             servers: snap
                 .servers
                 .iter()
-                .map(|s| ServerSummary::of(s, &snap.memberships, &snap.roles))
+                .map(|s| ServerSummary::of(s, &snap.memberships, &snap.roles, &snap.emoji))
                 .collect(),
             channels: snap.channels.iter().map(ChannelSummary::of).collect(),
             pending_requests: snap.pending_requests.iter().map(request_summary).collect(),
@@ -4143,6 +4253,124 @@ impl App {
             }
         }
         grown
+    }
+
+    /// The custom emoji `body` uses, as a send or an edit to `channel` names
+    /// them (specs/emoji.md 6): each `:name:` of the channel's server's live
+    /// emoji outside code and links, found from the kept snapshot. None in a
+    /// personal conversation, or a channel the snapshot does not place.
+    fn emoji_refs(&self, channel: &[u8], body: &str) -> Vec<lumia_core::proto::EmojiRef> {
+        let Some(snapshot) = self.kept::<SnapshotSummary>(KEPT_SNAPSHOT).ok().flatten() else {
+            return Vec::new();
+        };
+        let channel_id = wire::display(channel);
+        let Some(server_id) = snapshot
+            .channels
+            .iter()
+            .find(|c| c.channel_id == channel_id && !c.server_id.is_empty())
+            .map(|c| c.server_id.clone())
+        else {
+            return Vec::new();
+        };
+        let Some(server) = snapshot.servers.iter().find(|s| s.server_id == server_id) else {
+            return Vec::new();
+        };
+        let names: Vec<(String, String)> = server
+            .emoji
+            .iter()
+            .map(|e| (e.name.clone(), e.emoji_id.clone()))
+            .collect();
+        lumia_core::emoji::find_refs(body, &names)
+            .into_iter()
+            .filter_map(|(range, id)| {
+                Some(lumia_core::proto::EmojiRef {
+                    emoji_id: parse_uuid(&id).ok()?,
+                    start: u32::try_from(range.start).ok()?,
+                    end: u32::try_from(range.end).ok()?,
+                })
+            })
+            .collect()
+    }
+
+    /// A server's live custom emoji as kept, oldest first (specs/emoji.md 8);
+    /// none for a server not held.
+    pub fn server_emoji(&self, server_id: &str) -> Vec<EmojiSummary> {
+        self.kept_server(server_id)
+            .map(|s| s.emoji)
+            .unwrap_or_default()
+    }
+
+    /// The server's emoji a typed `prefix` (what follows `:` in the
+    /// composer) matches, those whose name begins with it first, as
+    /// [`lumia_core::emoji::matches`] orders them: what the composer lists
+    /// (specs/emoji.md 10). Nothing under two characters.
+    pub fn emoji_matches(&self, server_id: &str, prefix: &str) -> Vec<EmojiSummary> {
+        let emoji = self.server_emoji(server_id);
+        lumia_core::emoji::matches(prefix, emoji.iter().map(|e| e.name.as_str()))
+            .into_iter()
+            .filter_map(|name| emoji.iter().find(|e| e.name == name).cloned())
+            .collect()
+    }
+
+    /// Uploads a custom emoji to a server: `picture` is a file's bytes as
+    /// chosen, which the instance makes into its own (specs/emoji.md 3),
+    /// and `name` its name, which the instance lowercases. Answers the
+    /// snapshot as it then is, the emoji among the server's.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `INVALID_ARGUMENT` for a
+    /// name or a picture refused; `ALREADY_EXISTS` for a name taken;
+    /// `RESOURCE_EXHAUSTED` at the server's limit; transport failure.
+    pub async fn upload_emoji(
+        &self,
+        server_id: &str,
+        name: &str,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let server_id = parse_uuid(server_id)?;
+        self.api
+            .upload_emoji(&wire::display(&server_id), name, picture, media_type)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// Renames one of a server's custom emoji; answers the snapshot as it
+    /// then is. Messages keep the name they were written with and are drawn
+    /// by the emoji's id (specs/emoji.md 7).
+    ///
+    /// # Errors
+    /// As [`App::upload_emoji`] for a name; `NOT_FOUND` for one removed.
+    pub async fn rename_emoji(
+        &self,
+        server_id: &str,
+        emoji_id: &str,
+        name: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let (server_id, emoji_id) = (parse_uuid(server_id)?, parse_uuid(emoji_id)?);
+        self.api
+            .rename_emoji(&wire::display(&server_id), &wire::display(&emoji_id), name)
+            .await?;
+        self.snapshot().await
+    }
+
+    /// Removes one of a server's custom emoji: its picture is deleted, and
+    /// messages and reactions that used it keep its name (specs/emoji.md
+    /// 7). Answers the snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `NOT_FOUND`; transport
+    /// failure.
+    pub async fn remove_emoji(
+        &self,
+        server_id: &str,
+        emoji_id: &str,
+    ) -> Result<SnapshotSummary, ClientError> {
+        let (server_id, emoji_id) = (parse_uuid(server_id)?, parse_uuid(emoji_id)?);
+        self.api
+            .remove_emoji(&wire::display(&server_id), &wire::display(&emoji_id))
+            .await?;
+        self.snapshot().await
     }
 
     fn kept_server(&self, server_id: &str) -> Option<ServerSummary> {
@@ -4563,6 +4791,7 @@ impl App {
                     GatewayEvent::AccountApplied(events) => {
                         let mut after = profiles_updated(events);
                         after.extend(app.keep_tags(events));
+                        after.extend(app.keep_emoji(events));
                         after.extend(link_sessions_updated(events));
                         after
                     }
@@ -5195,6 +5424,7 @@ impl App {
         let attachments = distinct(attachments);
         let carried = self.drafts(&channel, &attachments)?;
         let card_urls = cards_kept(body, card_urls);
+        let emoji = self.emoji_refs(&channel, body);
         let id = wire::new_id();
         let mentions = mentions
             .iter()
@@ -5229,6 +5459,7 @@ impl App {
                 reply_to,
                 attachments: carried,
                 card_urls,
+                emoji,
                 ..Default::default()
             })),
         })?;
@@ -5278,6 +5509,7 @@ impl App {
             urls: cards_kept(body, urls),
         });
         let channel = parse_uuid(channel_id)?;
+        let emoji = self.emoji_refs(&channel, body);
         let mentions = mentions
             .iter()
             .map(|m| {
@@ -5302,7 +5534,7 @@ impl App {
                 mentions,
                 remove_attachment_ids: removed,
                 cards,
-                emoji: Vec::new(),
+                emoji,
             })),
         })?;
         Ok(wire::display(&id))
@@ -5360,6 +5592,43 @@ impl App {
                 message_id,
                 reaction,
                 emoji_id: Vec::new(),
+            })
+        };
+        self.queue(&Command {
+            command_id: wire::new_id(),
+            channel_id: channel,
+            op: Some(op),
+        })
+    }
+
+    /// Adds this account's reaction to a message of a server channel with
+    /// one of the server's custom emoji, or takes it away (`remove`)
+    /// (specs/emoji.md 9). The instance refuses an emoji of another server,
+    /// and adding one that was removed.
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    pub fn react_emoji(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji_id: &str,
+        remove: bool,
+    ) -> Result<(), ClientError> {
+        let channel = parse_uuid(channel_id)?;
+        let message_id = parse_uuid(message_id)?;
+        let emoji_id = parse_uuid(emoji_id)?;
+        let op = if remove {
+            command::Op::RemoveReaction(lumia_core::proto::RemoveReaction {
+                message_id,
+                reaction: String::new(),
+                emoji_id,
+            })
+        } else {
+            command::Op::AddReaction(lumia_core::proto::AddReaction {
+                message_id,
+                reaction: String::new(),
+                emoji_id,
             })
         };
         self.queue(&Command {
@@ -7222,6 +7491,8 @@ impl App {
                             .filter_map(|identity| e.account_of(identity))
                             .map(|a| wire::display(a))
                             .collect(),
+                        // A personal conversation has no server emoji.
+                        emoji_id: String::new(),
                     })
                     .collect(),
                 attachments: m.attachments.iter().map(attachment_summary).collect(),
@@ -8517,6 +8788,7 @@ mod kept_tests {
                 &server,
                 std::slice::from_ref(&own),
                 &roles,
+                &[],
             )],
             ..snapshot()
         };
@@ -8556,6 +8828,64 @@ mod kept_tests {
 
     fn tagged(label: &str, color: &str) -> Option<(String, String)> {
         Some((label.to_string(), color.to_string()))
+    }
+
+    #[test]
+    fn a_servers_emoji_are_kept_from_its_log_and_a_send_finds_them() {
+        let app = app_with_roles();
+        let emoji = |id: u8, name: &str| lumia_core::proto::CustomEmoji {
+            emoji_id: vec![id; 16],
+            server_id: vec![1; 16],
+            name: name.into(),
+            image_url: format!("/api/v1/avatars/{id}"),
+            width: 128,
+            height: 128,
+            ..Default::default()
+        };
+        let said = app.keep_emoji(&account_events(vec![account_event::Payload::EmojiUpdated(
+            lumia_core::proto::EmojiUpdated {
+                server_id: vec![1; 16],
+                emoji: vec![
+                    emoji(20, "party_parrot"),
+                    emoji(21, "parrot"),
+                    emoji(22, "cat"),
+                ],
+            },
+        )]));
+        assert!(
+            matches!(&said[..], [AppEvent::EmojiChanged { server_id }] if *server_id == uid(1))
+        );
+        let names: Vec<String> = app
+            .server_emoji(&uid(1))
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, ["party_parrot", "parrot", "cat"]);
+        let matched: Vec<String> = app
+            .emoji_matches(&uid(1), "par")
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(matched, ["parrot", "party_parrot"]);
+
+        // A channel of the server: a send names its emoji outside code.
+        let mut snapshot = app.kept::<SnapshotSummary>(KEPT_SNAPSHOT).unwrap().unwrap();
+        snapshot.channels.push(ChannelSummary {
+            channel_id: uid(5),
+            server_id: uid(1),
+            name: "general".into(),
+            kind: "TEXT".into(),
+            ..Default::default()
+        });
+        app.keep(KEPT_SNAPSHOT, &snapshot);
+        let refs = app.emoji_refs(&[5; 16], "hi :parrot: `:cat:` :nope:");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            (refs[0].emoji_id.clone(), refs[0].start, refs[0].end),
+            (vec![21; 16], 3, 11)
+        );
+        // Somewhere the snapshot does not place, such as a personal conversation: none.
+        assert!(app.emoji_refs(&[6; 16], ":parrot:").is_empty());
     }
 
     #[test]

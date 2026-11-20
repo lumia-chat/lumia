@@ -23,6 +23,7 @@
 pub mod body;
 pub mod cards;
 pub mod embeds;
+pub mod emoji;
 pub mod identity;
 pub mod keystore;
 pub mod media;

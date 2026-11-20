@@ -608,6 +608,71 @@ impl Client {
         )
     }
 
+    /// `POST /servers/{id}/emoji`: a new custom emoji from a file's bytes as
+    /// chosen (specs/emoji.md 4). The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `INVALID_ARGUMENT` for a
+    /// name or picture refused; `ALREADY_EXISTS`; `RESOURCE_EXHAUSTED` at the
+    /// limit; transport failure.
+    #[wasm_bindgen(js_name = uploadEmoji)]
+    pub async fn upload_emoji(
+        &self,
+        server_id: String,
+        name: String,
+        picture: Vec<u8>,
+        media_type: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .upload_emoji(&server_id, &name, picture, &media_type)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `PATCH /servers/{id}/emoji/{emoji_id}`: a new name. The snapshot as
+    /// it then is.
+    ///
+    /// # Errors
+    /// As [`Client::upload_emoji`] for a name; `NOT_FOUND`.
+    #[wasm_bindgen(js_name = renameEmoji)]
+    pub async fn rename_emoji(
+        &self,
+        server_id: String,
+        emoji_id: String,
+        name: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .rename_emoji(&server_id, &emoji_id, &name)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
+    /// `DELETE /servers/{id}/emoji/{emoji_id}`: removed, its name left behind
+    /// (specs/emoji.md 7). The snapshot as it then is.
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `NOT_FOUND`.
+    #[wasm_bindgen(js_name = removeEmoji)]
+    pub async fn remove_emoji(
+        &self,
+        server_id: String,
+        emoji_id: String,
+    ) -> Result<JsValue, JsError> {
+        to_js(
+            &self
+                .app
+                .remove_emoji(&server_id, &emoji_id)
+                .await
+                .map_err(js_api)?,
+        )
+    }
+
     /// `DELETE /servers/{id}/icon`.
     ///
     /// # Errors
@@ -1283,6 +1348,64 @@ impl Client {
         to_js(&lumia_client::body::display(&body, &ranges))
     }
 
+    /// [`Client::parse_body`] with the message's custom emoji (`[{emojiId,
+    /// start, end}]`, byte ranges) marked as well, each a run of style
+    /// `{kind: "emoji", index}`, its place in `emoji` (specs/emoji.md 6).
+    ///
+    /// # Errors
+    /// When `mentions` or `emoji` is not a list of ranges.
+    #[wasm_bindgen(js_name = parseBodyMarked)]
+    pub fn parse_body_marked(
+        &self,
+        body: String,
+        mentions: JsValue,
+        emoji: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let mentions: Vec<MentionSummary> = from_js(mentions)?.unwrap_or_default();
+        let emoji: Vec<lumia_client::app::EmojiRefSummary> = from_js(emoji)?.unwrap_or_default();
+        let ranges: Vec<std::ops::Range<usize>> = mentions
+            .iter()
+            .map(|m| m.start as usize..m.end as usize)
+            .collect();
+        let emoji: Vec<std::ops::Range<usize>> = emoji
+            .iter()
+            .map(|e| e.start as usize..e.end as usize)
+            .collect();
+        to_js(&lumia_client::body::display_marked(&body, &ranges, &emoji))
+    }
+
+    /// A custom emoji's name made from a picture's file name, for the upload
+    /// form to start from (specs/emoji.md 10).
+    #[wasm_bindgen(js_name = emojiNameFromFile)]
+    pub fn emoji_name_from_file(&self, file_name: String) -> String {
+        lumia_core::emoji::name_from_file(&file_name)
+    }
+
+    /// Whether `name` is a custom emoji's name as kept.
+    #[wasm_bindgen(js_name = isEmojiName)]
+    pub fn is_emoji_name(&self, name: String) -> bool {
+        lumia_core::emoji::is_name(&name)
+    }
+
+    /// A server's live custom emoji as kept, oldest first: `[EmojiSummary]`.
+    ///
+    /// # Errors
+    /// When they cannot be converted.
+    #[wasm_bindgen(js_name = serverEmoji)]
+    pub fn server_emoji(&self, server_id: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.server_emoji(&server_id))
+    }
+
+    /// The server's emoji a prefix typed after `:` matches, in the order the
+    /// composer lists them (specs/emoji.md 10).
+    ///
+    /// # Errors
+    /// When they cannot be converted.
+    #[wasm_bindgen(js_name = emojiMatches)]
+    pub fn emoji_matches(&self, server_id: String, prefix: String) -> Result<JsValue, JsError> {
+        to_js(&self.app.emoji_matches(&server_id, &prefix))
+    }
+
     /// The mentions `body` makes of `members` (`MemberSummary` objects),
     /// and of everyone when `everyone`: `[{accountId, everyone, start,
     /// end}]`, UTF-8 byte ranges.
@@ -1349,6 +1472,24 @@ impl Client {
     ) -> Result<(), JsError> {
         self.app
             .react(&channel_id, &message_id, &emoji, remove)
+            .map_err(js)
+    }
+
+    /// Reacts to a message with one of the server's custom emoji, or takes
+    /// the reaction away (specs/emoji.md 9).
+    ///
+    /// # Errors
+    /// When not started or an id is malformed.
+    #[wasm_bindgen(js_name = reactEmoji)]
+    pub fn react_emoji(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji_id: String,
+        remove: bool,
+    ) -> Result<(), JsError> {
+        self.app
+            .react_emoji(&channel_id, &message_id, &emoji_id, remove)
             .map_err(js)
     }
 

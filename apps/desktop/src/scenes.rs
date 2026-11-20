@@ -1178,12 +1178,14 @@ pub fn blocks(state: &mut State) {
             count: 2,
             me: true,
             account_ids: vec!["me".into(), "cy".into()],
+            emoji_id: String::new(),
         },
         lumia_client::app::ReactionSummary {
             reaction: "❤️".into(),
             count: 1,
             me: false,
             account_ids: vec!["cy".into()],
+            emoji_id: String::new(),
         },
     ];
     // A message changed after it was sent, and someone joining between two blocks.

@@ -59,6 +59,8 @@ pub struct StoredMessage {
     pub attachments: Vec<crate::proto::Attachment>,
     /// Its link cards, in the order their links appear (specs/media.md 6).
     pub cards: Vec<crate::proto::Card>,
+    /// The server's custom emoji its body uses, by byte range (specs/emoji.md 6).
+    pub emoji: Vec<crate::proto::EmojiRef>,
 }
 
 /// A quote of another message of the conversation.
@@ -92,10 +94,26 @@ pub struct StoredMention {
 /// One emoji's reactions to a message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredReaction {
-    /// The emoji.
+    /// The emoji, or for one of the server's custom emoji its name as `:name:`.
     pub reaction: String,
     /// Who reacted with it.
     pub account_ids: Vec<Vec<u8>>,
+    /// The custom emoji it is (specs/emoji.md 9); empty for a Unicode one. Reactions are
+    /// told apart by it where it is set, so a rename keeps them together.
+    pub emoji_id: Vec<u8>,
+}
+
+impl StoredReaction {
+    /// What tells this reaction apart from the others to a message: the custom emoji's id,
+    /// or the Unicode emoji. The store's key.
+    #[must_use]
+    pub fn key(reaction: &str, emoji_id: &[u8]) -> String {
+        if emoji_id.is_empty() {
+            reaction.to_owned()
+        } else {
+            format!("emoji:{}", crate::wire::display(emoji_id))
+        }
+    }
 }
 
 impl StoredMessage {
@@ -128,10 +146,12 @@ impl StoredMessage {
                 .map(|r| StoredReaction {
                     reaction: r.reaction.clone(),
                     account_ids: r.account_ids.clone(),
+                    emoji_id: r.emoji_id.clone(),
                 })
                 .collect(),
             attachments: m.attachments.clone(),
             cards: m.cards.clone(),
+            emoji: m.emoji.clone(),
         }
     }
 }

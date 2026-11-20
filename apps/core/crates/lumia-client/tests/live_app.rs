@@ -558,7 +558,7 @@ async fn roles_and_titles_reach_every_member() {
     let mine = server_of(owner.app.snapshot().await.unwrap());
     assert_eq!(role_names(&mine), ["Everyone"]);
     assert!(mine.is_owner && mine.can_manage_roles && mine.can_manage_members);
-    assert_eq!(mine.grantable.len(), 14);
+    assert_eq!(mine.grantable.len(), 15);
     owner
         .app
         .create_role(
@@ -1510,6 +1510,230 @@ async fn a_quote_a_mention_a_reaction_and_a_read() {
         .find(|r| r.channel_id == general)
         .unwrap();
     assert!(state.read_seq >= reply.seq && state.unread == 0);
+}
+
+/// A server's custom emoji (specs/emoji.md) from two devices: the owner uploads one, a
+/// still and an animated, and the member's device hears of them; a member without
+/// `MANAGE_EMOJI` is refused; a message names one by its `:name:` outside code; a reaction
+/// with one; a rename keeps the reaction; a removal leaves names and refuses new reactions.
+#[tokio::test(flavor = "multi_thread")]
+async fn custom_emoji_reach_every_member() {
+    const STILL: &[u8] =
+        include_bytes!("../../../../instance/test/support/fixtures/media/logo.png");
+    const ANIMATED: &[u8] =
+        include_bytes!("../../../../instance/test/support/fixtures/media/animated.gif");
+
+    let Some(base) = instance() else { return };
+    let (owner, member, server_id, _member_id) = owner_and_member(&base).await;
+    let general = member
+        .app
+        .snapshot()
+        .await
+        .unwrap()
+        .channels
+        .iter()
+        .find(|c| c.server_id == server_id && c.name == "general")
+        .unwrap()
+        .channel_id
+        .clone();
+
+    let told = member.seen();
+    let after = owner
+        .app
+        .upload_emoji(&server_id, "Party_Parrot", STILL.to_vec(), "image/png")
+        .await
+        .unwrap();
+    let mine = after
+        .servers
+        .iter()
+        .find(|s| s.server_id == server_id)
+        .unwrap();
+    assert!(mine.can_manage_emoji);
+    assert_eq!(mine.emoji_limit, 50);
+    let parrot = mine
+        .emoji
+        .iter()
+        .find(|e| e.name == "party_parrot")
+        .unwrap()
+        .clone();
+    assert!(!parrot.animated && parrot.width == 128);
+    owner
+        .app
+        .upload_emoji(&server_id, "wave", ANIMATED.to_vec(), "image/gif")
+        .await
+        .unwrap();
+    member
+        .wait_for(told, Duration::from_secs(10), |e| match e {
+            AppEvent::EmojiChanged { server_id: s } if *s == server_id => Some(()),
+            _ => None,
+        })
+        .await
+        .expect("the member's device hears of the emoji");
+    assert!(
+        settles(Duration::from_secs(10), || member
+            .app
+            .server_emoji(&server_id)
+            .len()
+            == 2)
+        .await,
+        "the member's kept snapshot has both"
+    );
+    let wave = member
+        .app
+        .server_emoji(&server_id)
+        .into_iter()
+        .find(|e| e.name == "wave")
+        .unwrap();
+    assert!(wave.animated);
+    let refused = member
+        .app
+        .upload_emoji(&server_id, "mine", STILL.to_vec(), "image/png")
+        .await;
+    assert!(denied(&refused, "PERMISSION_DENIED"), "{refused:?}");
+    let matched: Vec<String> = member
+        .app
+        .emoji_matches(&server_id, "par")
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(matched, ["party_parrot"]);
+
+    // A message: the core finds the name outside code, and the owner's device keeps it.
+    let from = member.seen();
+    member.app.subscribe(&general).unwrap();
+    member
+        .wait_for(from, Duration::from_secs(10), first_read(&general))
+        .await
+        .expect("the channel is read");
+    let started = owner.seen();
+    owner.start(std::slice::from_ref(&general)).unwrap();
+    owner
+        .wait_for(started, Duration::from_secs(10), welcomed)
+        .await
+        .expect("the owner is welcomed");
+    let arrived = owner.seen();
+    let body = ":party_parrot: hi `:wave:` :wave:";
+    let sent = member.app.send_message(&general, body).unwrap();
+    let message = owner
+        .wait_for(arrived, Duration::from_secs(10), |_| {
+            owner
+                .app
+                .messages(&general, 50)
+                .unwrap()
+                .into_iter()
+                .find(|m| m.message_id == sent)
+        })
+        .await
+        .expect("the message reaches the owner");
+    let refs: Vec<(String, u32, u32)> = message
+        .emoji
+        .iter()
+        .map(|e| (e.emoji_id.clone(), e.start, e.end))
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            (parrot.emoji_id.clone(), 0, 14),
+            (wave.emoji_id.clone(), 27, 33)
+        ]
+    );
+
+    // A reaction with it, which a rename keeps whole.
+    let reacted = member.seen();
+    owner
+        .app
+        .react_emoji(&general, &sent, &parrot.emoji_id, false)
+        .unwrap();
+    let reaction = |device: &Device| {
+        device
+            .app
+            .messages(&general, 50)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.message_id == sent)
+            .and_then(|m| m.reactions.into_iter().find(|r| !r.emoji_id.is_empty()))
+    };
+    let r = member
+        .wait_for(reacted, Duration::from_secs(10), |_| reaction(&member))
+        .await
+        .expect("the reaction reaches the member");
+    assert_eq!((r.reaction.as_str(), r.count), (":party_parrot:", 1));
+    assert_eq!(r.emoji_id, parrot.emoji_id);
+    owner
+        .app
+        .rename_emoji(&server_id, &parrot.emoji_id, "parrot")
+        .await
+        .unwrap();
+    let reacted = owner.seen();
+    member
+        .app
+        .react_emoji(&general, &sent, &parrot.emoji_id, false)
+        .unwrap();
+    let r = owner
+        .wait_for(reacted, Duration::from_secs(10), |_| {
+            reaction(&owner).filter(|r| r.count == 2)
+        })
+        .await
+        .expect("a second reaction after the rename is the same reaction");
+    assert_eq!(r.reaction, ":parrot:");
+    assert!(
+        settles(Duration::from_secs(10), || {
+            member
+                .app
+                .server_emoji(&server_id)
+                .iter()
+                .any(|e| e.name == "parrot")
+        })
+        .await,
+        "the rename reaches the member"
+    );
+
+    // Removed: the name stays on the message and the reaction; none is added again.
+    owner
+        .app
+        .remove_emoji(&server_id, &parrot.emoji_id)
+        .await
+        .unwrap();
+    assert!(
+        settles(Duration::from_secs(10), || member
+            .app
+            .server_emoji(&server_id)
+            .len()
+            == 1)
+        .await,
+        "the removal reaches the member"
+    );
+    let refused = member.seen();
+    member
+        .app
+        .react_emoji(&general, &sent, &parrot.emoji_id, true)
+        .unwrap();
+    let error = owner.seen();
+    owner
+        .app
+        .react_emoji(&general, &sent, &parrot.emoji_id, false)
+        .unwrap();
+    owner
+        .wait_for(error, Duration::from_secs(10), |e| {
+            matches!(e, AppEvent::Error { .. }).then_some(())
+        })
+        .await
+        .expect("a removed emoji cannot be added as a reaction");
+    let r = member
+        .wait_for(refused, Duration::from_secs(10), |_| {
+            reaction(&member).filter(|r| r.count == 1)
+        })
+        .await
+        .expect("taking one's own away still works");
+    assert_eq!(r.reaction, ":parrot:");
+    let kept = member
+        .app
+        .messages(&general, 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.message_id == sent)
+        .unwrap();
+    assert_eq!(kept.emoji.len(), 2, "the message keeps its refs");
 }
 
 /// Editing and deleting (architecture 6.6): a member edits their own

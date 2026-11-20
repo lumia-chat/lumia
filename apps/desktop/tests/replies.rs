@@ -135,6 +135,7 @@ fn a_quote_and_reactions_are_drawn_with_who_reacted() {
         count: 2,
         me: true,
         account_ids: vec!["me".into(), "grace".into()],
+        emoji_id: String::new(),
     }];
     state.session.entries[0].reply = Some(QuoteSummary {
         message_id: "m0".into(),
@@ -300,6 +301,7 @@ fn a_mention_opens_its_channel_at_it() {
         edited: false,
         attachments: Vec::new(),
         cards: Vec::new(),
+        emoji: Vec::new(),
     };
     state.session.reads.mentions.insert(
         "acme".into(),

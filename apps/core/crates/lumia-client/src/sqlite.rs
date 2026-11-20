@@ -9,7 +9,7 @@ use std::path::Path;
 
 use lumia_core::keystore::{Keystore, KeystoreError};
 use lumia_core::mls::storage::MlsKv;
-use lumia_core::proto::{event, AccountEvent, Attachment, Card, Event};
+use lumia_core::proto::{event, AccountEvent, Attachment, Card, EmojiRef, Event};
 use lumia_core::store::{
     LogKind, OutboxEntry, Store, StoreError, StoredEvent, StoredMention, StoredMessage,
     StoredQuote, StoredReaction,
@@ -53,13 +53,16 @@ CREATE TABLE IF NOT EXISTS messages (
   edited INTEGER NOT NULL DEFAULT 0,
   reply_silent INTEGER NOT NULL DEFAULT 0,
   attachments BLOB NOT NULL DEFAULT x'',
-  cards BLOB NOT NULL DEFAULT x''
+  cards BLOB NOT NULL DEFAULT x'',
+  emoji BLOB NOT NULL DEFAULT x''
 );
 CREATE TABLE IF NOT EXISTS reactions (
   message_id BLOB NOT NULL,
   reaction TEXT NOT NULL,
   account_id BLOB NOT NULL,
   position INTEGER NOT NULL,
+  emoji_id BLOB NOT NULL DEFAULT x'',
+  label TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (message_id, reaction, account_id)
 );
 CREATE INDEX IF NOT EXISTS messages_channel_seq ON messages (channel_id, seq);
@@ -179,33 +182,51 @@ pub struct SqliteStore {
 
 impl SqliteStore {
     /// Fills in each message's reactions, each emoji with who reacted, in the
-    /// order it was first used.
+    /// order it was first used. A custom emoji's reactions are kept by its id and
+    /// named by the `:name:` they last came with (specs/emoji.md 9).
     fn with_reactions(&self, messages: &mut [StoredMessage]) -> Result<(), StoreError> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT reaction, account_id, MIN(position) OVER (PARTITION BY reaction) AS first
+                "SELECT reaction, account_id, emoji_id, label,
+                        MIN(position) OVER (PARTITION BY reaction) AS first
                  FROM reactions WHERE message_id = ?1 ORDER BY first, position",
             )
             .map_err(backend)?;
         for m in messages.iter_mut() {
             let rows = stmt
                 .query_map(params![m.message_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
                 })
                 .map_err(backend)?;
-            let mut reactions: Vec<StoredReaction> = Vec::new();
+            let mut reactions: Vec<(String, StoredReaction)> = Vec::new();
             for row in rows {
-                let (reaction, account) = row.map_err(backend)?;
-                match reactions.iter_mut().find(|r| r.reaction == reaction) {
-                    Some(r) => r.account_ids.push(account),
-                    None => reactions.push(StoredReaction {
-                        reaction,
-                        account_ids: vec![account],
-                    }),
+                let (key, account, emoji_id, label) = row.map_err(backend)?;
+                match reactions.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, r)) => r.account_ids.push(account),
+                    None => {
+                        let reaction = if emoji_id.is_empty() {
+                            key.clone()
+                        } else {
+                            label
+                        };
+                        reactions.push((
+                            key,
+                            StoredReaction {
+                                reaction,
+                                account_ids: vec![account],
+                                emoji_id,
+                            },
+                        ));
+                    }
                 }
             }
-            m.reactions = reactions;
+            m.reactions = reactions.into_iter().map(|(_, r)| r).collect();
         }
         Ok(())
     }
@@ -1033,7 +1054,7 @@ impl Store for SqliteStore {
             .prepare(
                 "SELECT message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted,
                         notice, notice_account_id, reply_to_id, reply_author_id, reply_text, reply_deleted, mentions,
-                        edited, reply_silent, attachments, cards
+                        edited, reply_silent, attachments, cards, emoji
                  FROM messages WHERE channel_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
             )
             .map_err(backend)?;
@@ -1071,6 +1092,7 @@ impl Store for SqliteStore {
                     reactions: Vec::new(),
                     attachments: list_from(&row.get::<_, Vec<u8>>(16)?),
                     cards: list_from(&row.get::<_, Vec<u8>>(17)?),
+                    emoji: list_from(&row.get::<_, Vec<u8>>(18)?),
                 })
             })
             .map_err(backend)?;
@@ -1287,6 +1309,8 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
         // Attachments and link cards (specs/media.md).
         ("attachments", "BLOB NOT NULL DEFAULT x''"),
         ("cards", "BLOB NOT NULL DEFAULT x''"),
+        // Custom emoji (specs/emoji.md 6).
+        ("emoji", "BLOB NOT NULL DEFAULT x''"),
     ];
     for (name, kind) in columns {
         let has = conn
@@ -1298,14 +1322,29 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
                 .map_err(backend)?;
         }
     }
+    // Custom emoji as reactions (specs/emoji.md 9).
+    for (name, kind) in [
+        ("emoji_id", "BLOB NOT NULL DEFAULT x''"),
+        ("label", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        let has = conn
+            .prepare("SELECT 1 FROM pragma_table_info('reactions') WHERE name = ?1")
+            .and_then(|mut stmt| stmt.exists([name]))
+            .map_err(backend)?;
+        if !has {
+            conn.execute_batch(&format!("ALTER TABLE reactions ADD COLUMN {name} {kind};"))
+                .map_err(backend)?;
+        }
+    }
     Ok(())
 }
 
 /// What a server channel's rows keep of its events, as a number raised whenever
 /// `materialize` learns to keep something an older store let go: 1 is quotes, mentions,
 /// reactions and edits (architecture 6.6), 2 attachments and link cards (specs/media.md), 3
-/// attachments a server let go (specs/media.md 4.5).
-const MATERIALIZED: u32 = 3;
+/// attachments a server let go (specs/media.md 4.5), 4 custom emoji in bodies and reactions
+/// (specs/emoji.md).
+const MATERIALIZED: u32 = 4;
 
 // A store kept by an older core has server channels' messages without what it did not yet
 // keep, and cannot make it up: the events it kept were encoded again after decoding, which
@@ -1434,14 +1473,16 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 .collect();
             // The attachments and cards after the edit come in full.
             tx.execute(
-                "UPDATE messages SET body = ?2, mentions = ?3, edited = 1, attachments = ?4, cards = ?5
+                "UPDATE messages SET body = ?2, mentions = ?3, edited = 1, attachments = ?4, cards = ?5,
+                                     emoji = ?6
                  WHERE message_id = ?1 AND deleted = 0",
                 params![
                     edited.message_id,
                     edited.body,
                     mentions_json(&mentions),
                     list_bytes::<Attachment>(&edited.attachments),
-                    list_bytes::<Card>(&edited.cards)
+                    list_bytes::<Card>(&edited.cards),
+                    list_bytes::<EmojiRef>(&edited.emoji)
                 ],
             )
             .map_err(backend)?;
@@ -1455,7 +1496,7 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
         }
         Some(event::Payload::MessageDeleted(deleted)) => {
             tx.execute(
-                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x''
+                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x'', emoji = x''
                  WHERE message_id = ?1",
                 params![deleted.message_id],
             )
@@ -1469,23 +1510,36 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
         }
         Some(event::Payload::ReactionAdded(added)) => {
             tx.execute(
-                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position, emoji_id, label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     added.message_id,
-                    added.reaction,
+                    StoredReaction::key(&added.reaction, &added.emoji_id),
                     added.account_id,
-                    to_i64(event.seq)
+                    to_i64(event.seq),
+                    added.emoji_id,
+                    added.reaction
                 ],
             )
             .map_err(backend)?;
+            relabel(tx, &added.message_id, &added.reaction, &added.emoji_id)?;
         }
         Some(event::Payload::ReactionRemoved(removed)) => {
             tx.execute(
                 "DELETE FROM reactions WHERE message_id = ?1 AND reaction = ?2 AND account_id = ?3",
-                params![removed.message_id, removed.reaction, removed.account_id],
+                params![
+                    removed.message_id,
+                    StoredReaction::key(&removed.reaction, &removed.emoji_id),
+                    removed.account_id
+                ],
             )
             .map_err(backend)?;
+            relabel(
+                tx,
+                &removed.message_id,
+                &removed.reaction,
+                &removed.emoji_id,
+            )?;
         }
         Some(event::Payload::PayloadsPurged(purged)) => {
             drop_quotes(
@@ -1494,7 +1548,7 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                 params![event.channel_id, to_i64(purged.before_seq)],
             )?;
             tx.execute(
-                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x''
+                "UPDATE messages SET body = '', deleted = 1, attachments = x'', cards = x'', emoji = x''
                  WHERE channel_id = ?1 AND seq < ?2",
                 params![event.channel_id, to_i64(purged.before_seq)],
             )
@@ -1538,13 +1592,33 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
     Ok(())
 }
 
+/// A custom emoji's reactions to a message named by the newest `:name:` an event brought,
+/// so the reactions left after a rename and a removal are named as it was last called
+/// (specs/emoji.md 7), whoever's reaction is left.
+fn relabel(
+    tx: &rusqlite::Transaction<'_>,
+    message_id: &[u8],
+    label: &str,
+    emoji_id: &[u8],
+) -> Result<(), StoreError> {
+    if emoji_id.is_empty() || label.is_empty() {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE reactions SET label = ?3 WHERE message_id = ?1 AND reaction = ?2",
+        params![message_id, StoredReaction::key(label, emoji_id), label],
+    )
+    .map(|_| ())
+    .map_err(backend)
+}
+
 fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(), StoreError> {
     let reply = m.reply.as_ref();
     tx.execute(
         "INSERT OR REPLACE INTO messages (message_id, channel_id, seq, author_account_id, body, created_at_micros, deleted, notice, notice_account_id,
                                           reply_to_id, reply_author_id, reply_text, reply_deleted, mentions, edited, reply_silent,
-                                          attachments, cards)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                                          attachments, cards, emoji)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             m.message_id, m.channel_id, to_i64(m.seq), m.author_account_id, m.body, m.created_at_micros, i64::from(m.deleted),
             m.notice, m.notice_account_id,
@@ -1557,6 +1631,7 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
             i64::from(reply.is_some_and(|q| q.silent)),
             list_bytes::<Attachment>(&m.attachments),
             list_bytes::<Card>(&m.cards),
+            list_bytes::<EmojiRef>(&m.emoji),
         ],
     )
     .map_err(backend)?;
@@ -1564,13 +1639,15 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
     for (position, reaction) in m.reactions.iter().enumerate() {
         for account in &reaction.account_ids {
             tx.execute(
-                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR IGNORE INTO reactions (message_id, reaction, account_id, position, emoji_id, label)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     m.message_id,
-                    reaction.reaction,
+                    StoredReaction::key(&reaction.reaction, &reaction.emoji_id),
                     account,
-                    i64::try_from(position).unwrap_or(0) - 1_000_000
+                    i64::try_from(position).unwrap_or(0) - 1_000_000,
+                    reaction.emoji_id,
+                    reaction.reaction
                 ],
             )
             .map_err(backend)?;
@@ -1662,6 +1739,95 @@ mod tests {
             seq,
             bytes: event.encode_to_vec(),
         }
+    }
+
+    #[test]
+    fn custom_emoji_reactions_stay_together_across_a_rename_and_refs_are_kept() {
+        use lumia_core::proto::{
+            EmojiRef, MessageDeleted, MessageEdited, ReactionAdded, ReactionRemoved,
+        };
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let parrot = vec![9u8; 16];
+        let custom = |seq, account: u8, name: &str, add| {
+            let (message_id, reaction, account_id) =
+                (vec![1; 16], name.to_string(), vec![account; 16]);
+            stored(
+                &ch,
+                seq,
+                if add {
+                    event::Payload::ReactionAdded(ReactionAdded {
+                        message_id,
+                        reaction,
+                        account_id,
+                        emoji_id: parrot.clone(),
+                    })
+                } else {
+                    event::Payload::ReactionRemoved(ReactionRemoved {
+                        message_id,
+                        reaction,
+                        account_id,
+                        emoji_id: parrot.clone(),
+                    })
+                },
+            )
+        };
+        let edited = stored(
+            &ch,
+            2,
+            event::Payload::MessageEdited(MessageEdited {
+                message_id: vec![1; 16],
+                body: "hi :parrot:".into(),
+                emoji: vec![EmojiRef {
+                    emoji_id: parrot.clone(),
+                    start: 3,
+                    end: 11,
+                }],
+                ..Default::default()
+            }),
+        );
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[
+                    created(&ch, 1, "hi"),
+                    edited,
+                    custom(3, 5, ":parrot:", true),
+                    // Renamed to bird since: the same reaction, by its id.
+                    custom(4, 6, ":bird:", true),
+                    custom(5, 7, ":bird:", true),
+                    custom(6, 7, ":bird:", false),
+                    // The first reaction's own row is named anew too.
+                    custom(7, 6, ":bird:", false),
+                ],
+            )
+            .unwrap();
+        let kept = store.messages(&ch, 10).unwrap();
+        let m = &kept[0];
+        assert_eq!(m.emoji.len(), 1);
+        assert_eq!((m.emoji[0].start, m.emoji[0].end), (3, 11));
+        assert_eq!(m.reactions.len(), 1);
+        let r = &m.reactions[0];
+        assert_eq!((r.reaction.as_str(), r.account_ids.len()), (":bird:", 1));
+        assert_eq!(r.emoji_id, parrot);
+
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[stored(
+                    &ch,
+                    8,
+                    event::Payload::MessageDeleted(MessageDeleted {
+                        message_id: vec![1; 16],
+                        purge_cache: false,
+                    }),
+                )],
+            )
+            .unwrap();
+        let kept = store.messages(&ch, 10).unwrap();
+        assert!(kept[0].emoji.is_empty() && kept[0].reactions.is_empty());
     }
 
     #[test]
@@ -2100,6 +2266,7 @@ mod tests {
             reactions: Vec::new(),
             attachments: Vec::new(),
             cards: Vec::new(),
+            emoji: Vec::new(),
         };
         store.apply_snapshot(&ch, 2000, &[m]).unwrap();
         assert_eq!(

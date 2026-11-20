@@ -1592,6 +1592,8 @@ impl Session {
             // are read again for their tags, and the snapshot the `AccountApplied` before
             // this asked for says afresh what this account may do there.
             AppEvent::TagsChanged { server_id } => self.read_members(server_id),
+            // The snapshot taken again after its `AccountApplied` has them.
+            AppEvent::EmojiChanged { .. } => {}
             AppEvent::Error {
                 command_id,
                 message,

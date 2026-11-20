@@ -564,6 +564,7 @@ fn reacted(set: impl FnOnce(&mut Settings)) -> Runtime<State> {
             count: 2,
             me: true,
             account_ids: vec!["me".into(), "grace".into()],
+            emoji_id: String::new(),
         }];
         s.session.revision += 1;
     });

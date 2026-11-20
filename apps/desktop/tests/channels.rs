@@ -416,6 +416,7 @@ fn joined(channel: &str, seq: u64) -> Update {
                 edited: false,
                 attachments: Vec::new(),
                 cards: Vec::new(),
+                emoji: Vec::new(),
             }),
         }],
     })

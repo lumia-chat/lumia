@@ -7,6 +7,8 @@
 //! the same, with ranges in UTF-16 code units (what Swift's `NSRange`, Kotlin's
 //! `AnnotatedString` and JavaScript's strings count), inline code without the padding the
 //! desktop draws around it, and the message's mentions marked as runs of their own.
+//! [`parse_marked`] and [`display_marked`] read a server message's custom emoji too
+//! (specs/emoji.md 6), each `:name:` it names a span of its own.
 
 mod parse;
 
@@ -147,6 +149,12 @@ pub enum DisplayStyle {
     Mention {
         index: u32,
     },
+    /// One of the server's custom emoji: `index` is its place in the `emoji`
+    /// [`display_marked`] was given. Its text is the `:name:` as typed, which a client
+    /// draws as the emoji's picture when it holds it, and as the text when it does not.
+    Emoji {
+        index: u32,
+    },
 }
 
 /// The first of the characters that stand in for mentions while the source is parsed:
@@ -169,6 +177,60 @@ pub fn parse_with(src: &str, mentions: &[Range<usize>]) -> Vec<Block> {
         .into_iter()
         .map(|block| put_back_block(block, &typed))
         .collect()
+}
+
+/// [`parse_with`] with the message's custom emoji as well (specs/emoji.md 6): `emoji` are
+/// their ranges in bytes of `src`, as the protocol gives them, and each comes out in its
+/// paragraph's [`Inline::emoji`] with its index among them, under the same rules as a
+/// mention: read as one unit (so the `_` of `:party_parrot:` is not emphasis), and inside
+/// code or a link the text it was typed as.
+pub fn parse_marked(src: &str, mentions: &[Range<usize>], emoji: &[Range<usize>]) -> Vec<Block> {
+    if emoji.is_empty() {
+        return parse_with(src, mentions);
+    }
+    let first = u32::try_from(mentions.len()).unwrap_or(u32::MAX);
+    let all: Vec<Range<usize>> = mentions.iter().chain(emoji).cloned().collect();
+    parse_with(src, &all)
+        .into_iter()
+        .map(|block| split_emoji(block, first))
+        .collect()
+}
+
+/// [`parse_marked`] for a client other than the desktop, as [`display`] is [`parse_with`]'s:
+/// each emoji a run of [`DisplayStyle::Emoji`].
+pub fn display_marked(
+    src: &str,
+    mentions: &[Range<usize>],
+    emoji: &[Range<usize>],
+) -> Vec<DisplayBlock> {
+    parse_marked(src, mentions, emoji)
+        .into_iter()
+        .map(display_block)
+        .collect()
+}
+
+/// Moves what stood for emoji (an index from `first` on) out of a block's mentions.
+fn split_emoji(block: Block, first: u32) -> Block {
+    match block {
+        Block::Para(mut inline) => {
+            let (emoji, mentions): (Vec<_>, Vec<_>) =
+                inline.mentions.into_iter().partition(|(_, i)| *i >= first);
+            inline.mentions = mentions;
+            inline.emoji = emoji.into_iter().map(|(r, i)| (r, i - first)).collect();
+            Block::Para(inline)
+        }
+        Block::Code { lang, text } => Block::Code { lang, text },
+        Block::Quote(blocks) => {
+            Block::Quote(blocks.into_iter().map(|b| split_emoji(b, first)).collect())
+        }
+        Block::List { start, items } => Block::List {
+            start,
+            items: items
+                .into_iter()
+                .map(|item| item.into_iter().map(|b| split_emoji(b, first)).collect())
+                .collect(),
+        },
+    }
 }
 
 /// Parses `src` for a client other than the desktop: [`parse_with`]'s blocks with their
@@ -326,6 +388,11 @@ fn put_back_inline(inline: &Inline, typed: &[(u32, String)]) -> Inline {
             .collect(),
         bracketed: inline.bracketed.iter().map(moved).collect(),
         mentions,
+        emoji: inline
+            .emoji
+            .iter()
+            .map(|(r, index)| (moved(r), *index))
+            .collect(),
         text,
     }
 }
@@ -397,6 +464,14 @@ fn display_inline(inline: &Inline) -> DisplayInline {
             start,
             end,
             style: DisplayStyle::Mention { index: *index },
+        })
+    }));
+    runs.extend(inline.emoji.iter().filter_map(|(r, index)| {
+        let (start, end) = span(r)?;
+        Some(DisplayRun {
+            start,
+            end,
+            style: DisplayStyle::Emoji { index: *index },
         })
     }));
     let links = inline

@@ -26,6 +26,8 @@ pub fn settings_sections(server: &ServerSummary) -> Vec<Section> {
         server.can_manage,
         server.can_manage_roles,
         server.can_manage_members,
+        // The Emoji section comes with the desktop's emoji screens (plan step 12).
+        false,
     )
 }
 

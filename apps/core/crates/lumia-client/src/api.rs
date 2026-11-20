@@ -541,6 +541,87 @@ impl Api {
         decoded(status, &bytes)
     }
 
+    /// `GET /servers/{server_id}/emoji`: the server's live custom emoji,
+    /// oldest first, and its limit (specs/emoji.md 4).
+    ///
+    /// # Errors
+    /// `NOT_FOUND` for a server the caller is not in; transport failure.
+    pub async fn list_emoji(
+        &self,
+        server_id: &str,
+    ) -> Result<lumia_core::proto::ListEmojiResponse, ClientError> {
+        self.get(&format!("/api/v1/servers/{server_id}/emoji"))
+            .await
+    }
+
+    /// `POST /servers/{server_id}/emoji?name=`: a new custom emoji named
+    /// `name`, its picture made by the instance from `picture`, a file's
+    /// bytes as chosen (specs/emoji.md 3 and 4).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `INVALID_ARGUMENT` with
+    /// `details.field` `name` or `picture`; `ALREADY_EXISTS` for a name
+    /// another emoji of the server has; `RESOURCE_EXHAUSTED` with
+    /// `details.state` `emoji` at the server's limit; transport failure.
+    pub async fn upload_emoji(
+        &self,
+        server_id: &str,
+        name: &str,
+        picture: Vec<u8>,
+        media_type: &str,
+    ) -> Result<lumia_core::proto::CustomEmoji, ClientError> {
+        let name: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/api/v1/servers/{server_id}/emoji?name={name}"),
+                Some(picture),
+                Some((CONTENT_TYPE.as_str(), media_type)),
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `PATCH /servers/{server_id}/emoji/{emoji_id}`: a new name.
+    ///
+    /// # Errors
+    /// As [`Api::upload_emoji`] for a name, and `NOT_FOUND` for an emoji
+    /// that is not one of the server's live ones.
+    pub async fn rename_emoji(
+        &self,
+        server_id: &str,
+        emoji_id: &str,
+        name: &str,
+    ) -> Result<lumia_core::proto::CustomEmoji, ClientError> {
+        let req = lumia_core::proto::UpdateEmojiRequest {
+            name: name.to_owned(),
+        };
+        let (status, bytes) = self
+            .send(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/servers/{server_id}/emoji/{emoji_id}"),
+                Some(req.encode_to_vec()),
+                None,
+            )
+            .await?;
+        decoded(status, &bytes)
+    }
+
+    /// `DELETE /servers/{server_id}/emoji/{emoji_id}`: the emoji is removed
+    /// and its picture deleted; what used it keeps its name (specs/emoji.md 7).
+    ///
+    /// # Errors
+    /// `PERMISSION_DENIED` without `MANAGE_EMOJI`; `NOT_FOUND`; transport
+    /// failure.
+    pub async fn remove_emoji(&self, server_id: &str, emoji_id: &str) -> Result<(), ClientError> {
+        self.empty(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/servers/{server_id}/emoji/{emoji_id}"),
+            None,
+        )
+        .await
+    }
+
     /// `DELETE /servers/{server_id}/icon`.
     ///
     /// # Errors

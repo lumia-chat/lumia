@@ -452,6 +452,7 @@ fn the_menu_key_and_shift_f10_open_the_same_menus() {
         count: 1,
         me: false,
         account_ids: vec!["grace".into()],
+        emoji_id: String::new(),
     }];
     state.session.revision += 1;
     let mut rt = runtime(state);

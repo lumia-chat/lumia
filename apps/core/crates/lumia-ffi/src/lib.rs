@@ -184,6 +184,66 @@ pub struct ServerSummary {
     pub role_ids: Vec<String>,
     pub title: String,
     pub guest: bool,
+    /// The server's live custom emoji, oldest first (specs/emoji.md 8).
+    #[uniffi(default)]
+    pub emoji: Vec<EmojiSummary>,
+    /// How many it may have, as the instance says.
+    #[uniffi(default)]
+    pub emoji_limit: u32,
+    /// Whether this account may upload, rename and remove them
+    /// (`MANAGE_EMOJI`, or the owner).
+    #[uniffi(default)]
+    pub can_manage_emoji: bool,
+}
+
+/// One of a server's custom emoji (specs/emoji.md 2).
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmojiSummary {
+    pub emoji_id: String,
+    /// Written in messages as `:name:`.
+    pub name: String,
+    /// The picture, a path of this instance; fetched as an avatar is.
+    pub image_url: String,
+    /// An animated GIF; otherwise a PNG.
+    pub animated: bool,
+    /// At most 128 each way: drawn at the text's emoji height, its width by
+    /// this shape.
+    pub width: u32,
+    pub height: u32,
+    pub created_by_account_id: String,
+}
+
+impl From<app::EmojiSummary> for EmojiSummary {
+    fn from(e: app::EmojiSummary) -> Self {
+        Self {
+            emoji_id: e.emoji_id,
+            name: e.name,
+            image_url: e.image_url,
+            animated: e.animated,
+            width: e.width,
+            height: e.height,
+            created_by_account_id: e.created_by_account_id,
+        }
+    }
+}
+
+/// Where a message's body uses one of its server's custom emoji: UTF-8
+/// byte offsets into the body, half-open, over its `:name:`.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmojiRefSummary {
+    pub emoji_id: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+impl From<app::EmojiRefSummary> for EmojiRefSummary {
+    fn from(e: app::EmojiRefSummary) -> Self {
+        Self {
+            emoji_id: e.emoji_id,
+            start: e.start,
+            end: e.end,
+        }
+    }
 }
 
 /// A role of a server (architecture 7.5).
@@ -340,6 +400,9 @@ impl From<app::ServerSummary> for ServerSummary {
             role_ids: s.role_ids,
             title: s.title,
             guest: s.guest,
+            emoji: s.emoji.into_iter().map(Into::into).collect(),
+            emoji_limit: s.emoji_limit,
+            can_manage_emoji: s.can_manage_emoji,
         }
     }
 }
@@ -690,6 +753,10 @@ pub struct MessageSummary {
     /// Its link cards, in the order their links appear.
     #[uniffi(default)]
     pub cards: Vec<CardSummary>,
+    /// The server's custom emoji its body uses (specs/emoji.md 6), to give
+    /// [`parse_body_marked`] beside its mentions.
+    #[uniffi(default)]
+    pub emoji: Vec<EmojiRefSummary>,
 }
 
 /// One blob of an attachment or a card, with what opens it: handed back to
@@ -1101,6 +1168,12 @@ pub enum BodyStyle {
     Mention {
         index: u32,
     },
+    /// The custom emoji at `index` of those the body was read with
+    /// (specs/emoji.md 6): its text is the `:name:` as typed, drawn as the
+    /// emoji's picture when the client holds it.
+    Emoji {
+        index: u32,
+    },
 }
 
 /// How much room a draft has under the instance's limit, as the composer's
@@ -1135,6 +1208,7 @@ impl From<body::DisplayBlock> for BodyBlock {
                                 body::DisplayStyle::Mention { index } => {
                                     BodyStyle::Mention { index }
                                 }
+                                body::DisplayStyle::Emoji { index } => BodyStyle::Emoji { index },
                             },
                         })
                         .collect(),
@@ -1207,6 +1281,10 @@ pub struct ReactionSummary {
     pub me: bool,
     /// Who reacted, as many as are known.
     pub account_ids: Vec<String>,
+    /// The server's custom emoji it is, whose `:name:` `reaction` then is
+    /// (specs/emoji.md 9); empty for a Unicode emoji.
+    #[uniffi(default)]
+    pub emoji_id: String,
 }
 
 impl From<app::ReactionSummary> for ReactionSummary {
@@ -1216,6 +1294,7 @@ impl From<app::ReactionSummary> for ReactionSummary {
             count: r.count,
             me: r.me,
             account_ids: r.account_ids,
+            emoji_id: r.emoji_id,
         }
     }
 }
@@ -1274,6 +1353,7 @@ impl From<app::MessageSummary> for MessageSummary {
             mentions_me: m.mentions_me,
             attachments: m.attachments.into_iter().map(Into::into).collect(),
             cards: m.cards.into_iter().map(Into::into).collect(),
+            emoji: m.emoji.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1568,6 +1648,12 @@ pub enum ClientEvent {
     TagsChanged {
         server_id: String,
     },
+    /// A server's custom emoji changed, after the `AccountApplied` it came
+    /// in (specs/emoji.md 8): the snapshot has them already; read them again
+    /// (`server_emoji`) and drop a picture no longer listed.
+    EmojiChanged {
+        server_id: String,
+    },
     /// A link session moved, after the `AccountApplied` it came in: this
     /// device's own as the new device, or one that prompts here.
     LinkSessionUpdated {
@@ -1757,6 +1843,7 @@ impl From<app::AppEvent> for ClientEvent {
                 bio,
             },
             E::TagsChanged { server_id } => Self::TagsChanged { server_id },
+            E::EmojiChanged { server_id } => Self::EmojiChanged { server_id },
             E::LinkSessionUpdated { session_id } => Self::LinkSessionUpdated { session_id },
             E::Acked { command_id, seq } => Self::Acked { command_id, seq },
             E::Error {
@@ -1870,6 +1957,43 @@ pub fn parse_body(body: String, mentions: Vec<MentionSummary>) -> Vec<BodyBlock>
         .into_iter()
         .map(Into::into)
         .collect()
+}
+
+/// `body` read into blocks with `mentions` and the server's custom emoji
+/// `emoji` marked, each emoji a run of [`BodyStyle::Emoji`] whose index is
+/// its place in `emoji` (specs/emoji.md 6).
+#[uniffi::export]
+pub fn parse_body_marked(
+    body: String,
+    mentions: Vec<MentionSummary>,
+    emoji: Vec<EmojiRefSummary>,
+) -> Vec<BodyBlock> {
+    let ranges: Vec<std::ops::Range<usize>> = mentions
+        .iter()
+        .map(|m| m.start as usize..m.end as usize)
+        .collect();
+    let emoji: Vec<std::ops::Range<usize>> = emoji
+        .iter()
+        .map(|e| e.start as usize..e.end as usize)
+        .collect();
+    body::display_marked(&body, &ranges, &emoji)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// A custom emoji's name made from a picture's file name, for the upload
+/// form to start from (specs/emoji.md 10).
+#[uniffi::export]
+pub fn emoji_name_from_file(file_name: String) -> String {
+    lumia_core::emoji::name_from_file(&file_name)
+}
+
+/// Whether `name` is a custom emoji's name as kept: 2 to 32 of a-z, 0-9
+/// and `_` (specs/emoji.md 2).
+#[uniffi::export]
+pub fn is_emoji_name(name: String) -> bool {
+    lumia_core::emoji::is_name(&name)
 }
 
 /// What a link request, as the new device shows it, asks to add (identity
@@ -3055,6 +3179,78 @@ impl Client {
         Ok(self.app.react(&channel_id, &message_id, &emoji, remove)?)
     }
 
+    /// Reacts to a message with one of the server's custom emoji, or takes
+    /// the reaction away (specs/emoji.md 9).
+    pub fn react_emoji(
+        &self,
+        channel_id: String,
+        message_id: String,
+        emoji_id: String,
+        remove: bool,
+    ) -> Res<()> {
+        Ok(self
+            .app
+            .react_emoji(&channel_id, &message_id, &emoji_id, remove)?)
+    }
+
+    /// A server's live custom emoji as kept, oldest first.
+    pub fn server_emoji(&self, server_id: String) -> Vec<EmojiSummary> {
+        self.app
+            .server_emoji(&server_id)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// The server's emoji a prefix typed after `:` matches, in the order
+    /// the composer lists them (specs/emoji.md 10).
+    pub fn emoji_matches(&self, server_id: String, prefix: String) -> Vec<EmojiSummary> {
+        self.app
+            .emoji_matches(&server_id, &prefix)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// `POST /servers/{id}/emoji`: a new custom emoji from a file's bytes as
+    /// chosen; the snapshot as it then is.
+    pub fn upload_emoji(
+        &self,
+        server_id: String,
+        name: String,
+        picture: Vec<u8>,
+        media_type: String,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(
+                self.app
+                    .upload_emoji(&server_id, &name, picture, &media_type),
+            )?
+            .into())
+    }
+
+    /// `PATCH /servers/{id}/emoji/{emoji_id}`: a new name.
+    pub fn rename_emoji(
+        &self,
+        server_id: String,
+        emoji_id: String,
+        name: String,
+    ) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.rename_emoji(&server_id, &emoji_id, &name))?
+            .into())
+    }
+
+    /// `DELETE /servers/{id}/emoji/{emoji_id}`: removed, its name left behind.
+    pub fn remove_emoji(&self, server_id: String, emoji_id: String) -> Res<SnapshotSummary> {
+        Ok(self
+            .runtime
+            .block_on(self.app.remove_emoji(&server_id, &emoji_id))?
+            .into())
+    }
+
     /// Every conversation's read state as this client counts it.
     pub fn read_states(&self) -> Vec<ReadStateSummary> {
         self.app.read_states().into_iter().map(Into::into).collect()
@@ -3739,6 +3935,7 @@ pub enum SettingsSection {
     Overview,
     Roles,
     Members,
+    Emoji,
 }
 
 impl From<roles::SettingsSection> for SettingsSection {
@@ -3747,6 +3944,7 @@ impl From<roles::SettingsSection> for SettingsSection {
             roles::SettingsSection::Overview => Self::Overview,
             roles::SettingsSection::Roles => Self::Roles,
             roles::SettingsSection::Members => Self::Members,
+            roles::SettingsSection::Emoji => Self::Emoji,
         }
     }
 }
@@ -3903,6 +4101,7 @@ pub fn roles_settings_sections(server: ServerSummary) -> Vec<SettingsSection> {
         server.can_manage,
         server.can_manage_roles,
         server.can_manage_members,
+        server.can_manage_emoji,
     )
     .into_iter()
     .map(Into::into)
@@ -3916,6 +4115,7 @@ pub fn roles_section_label(section: SettingsSection) -> String {
         SettingsSection::Overview => roles::SettingsSection::Overview,
         SettingsSection::Roles => roles::SettingsSection::Roles,
         SettingsSection::Members => roles::SettingsSection::Members,
+        SettingsSection::Emoji => roles::SettingsSection::Emoji,
     })
     .into()
 }

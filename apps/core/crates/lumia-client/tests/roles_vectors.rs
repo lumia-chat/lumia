@@ -79,6 +79,9 @@ fn answer(file: &File, case: &Case) -> Value {
             a["canManage"].as_bool().unwrap(),
             a["canManageRoles"].as_bool().unwrap(),
             a["canManageMembers"].as_bool().unwrap(),
+            // Not yet in the shared cases: the web's copy of the rule learns
+            // the Emoji section with the web's emoji screens (plan step 12).
+            a["canManageEmoji"].as_bool().unwrap_or(false),
         )),
         "sectionLabel" => json!(roles::section_label(of(&a["section"]))),
         "untouched" => json!(roles::untouched(&of(&a["opened"]), &of(&a["draft"]))),

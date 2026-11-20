@@ -48,6 +48,10 @@ pub struct Inline {
     /// The message's mentions ([`super::parse_with`]): each one's range of the text and its
     /// place among the mentions the body was read with. Never inside code or a link.
     pub mentions: Vec<(Range<usize>, u32)>,
+    /// The server's custom emoji the body uses ([`super::parse_marked`]): each one's range
+    /// of the text (its `:name:`) and its place among the emoji the body was read with.
+    /// Never inside code or a link, where it is the text it was typed as.
+    pub emoji: Vec<(Range<usize>, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +103,11 @@ impl Inline {
                 .collect(),
             mentions: self
                 .mentions
+                .iter()
+                .filter_map(|(r, index)| Some((clip(r)?, *index)))
+                .collect(),
+            emoji: self
+                .emoji
                 .iter()
                 .filter_map(|(r, index)| Some((clip(r)?, *index)))
                 .collect(),
@@ -1176,6 +1185,7 @@ mod tests {
                     runs: Vec::new(),
                     links: vec![(5..29, "https://example.com/plan".into())],
                     mentions: Vec::new(),
+                    emoji: Vec::new(),
                     bracketed: Vec::new(),
                 }),
             ]

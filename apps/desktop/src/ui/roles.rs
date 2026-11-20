@@ -138,6 +138,7 @@ pub fn sections(s: &State, server: &ServerSummary, look: Look) -> El {
             Section::Overview => &icons::SETTINGS,
             Section::Roles => &icons::SHIELD,
             Section::Members => &icons::MEMBERS,
+            Section::Emoji => &icons::EMOJI,
         };
         let mut item = row()
             .key(format!(

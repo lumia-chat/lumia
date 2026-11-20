@@ -107,6 +107,11 @@ const OFFERED: [(&str, &[Offered]); 3] = [
                 "Create invites",
                 "Make invite links and send invitations to join the server.",
             ),
+            (
+                Permission::ManageEmoji,
+                "Manage emoji",
+                "Upload, rename and remove the server’s emoji.",
+            ),
         ],
     ),
     (
@@ -491,16 +496,20 @@ pub enum SettingsSection {
     Overview,
     Roles,
     Members,
+    /// The server's custom emoji (specs/emoji.md 10).
+    Emoji,
 }
 
 /// The sections of a server's settings an account may use, in order: Overview with Manage
-/// server, Roles with Manage roles, and Members with Manage members or Manage roles, since a
-/// member's roles are changed there too. None, and the settings do not open.
+/// server, Roles with Manage roles, Members with Manage members or Manage roles, since a
+/// member's roles are changed there too, and Emoji with Manage emoji. None, and the
+/// settings do not open.
 #[must_use]
 pub fn settings_sections(
     can_manage: bool,
     can_manage_roles: bool,
     can_manage_members: bool,
+    can_manage_emoji: bool,
 ) -> Vec<SettingsSection> {
     let mut sections = Vec::new();
     if can_manage {
@@ -512,6 +521,9 @@ pub fn settings_sections(
     if can_manage_members || can_manage_roles {
         sections.push(SettingsSection::Members);
     }
+    if can_manage_emoji {
+        sections.push(SettingsSection::Emoji);
+    }
     sections
 }
 
@@ -522,6 +534,7 @@ pub fn section_label(section: SettingsSection) -> &'static str {
         SettingsSection::Overview => "Overview",
         SettingsSection::Roles => "Roles",
         SettingsSection::Members => "Members",
+        SettingsSection::Emoji => "Emoji",
     }
 }
 
@@ -1287,21 +1300,22 @@ mod tests {
 
         let admin = member(7, &[2], &[Permission::Administrator]);
         let standing = Standing::of(&server(1), Some(&admin), &roles());
-        assert_eq!(standing.grantable().len(), 14);
+        assert_eq!(standing.grantable().len(), 15);
     }
 
     #[test]
-    fn fourteen_permissions_are_offered_each_once() {
+    fn fifteen_permissions_are_offered_each_once() {
         let names: Vec<String> = offered()
             .into_iter()
             .flat_map(|g| g.permissions)
             .map(|p| p.name)
             .collect();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 15);
+        assert!(names.iter().any(|n| n == "MANAGE_EMOJI"));
         let mut unique = names.clone();
         unique.sort();
         unique.dedup();
-        assert_eq!(unique.len(), 14);
+        assert_eq!(unique.len(), 15);
         for hidden in [
             "SEND_IN_THREADS",
             "START_CALLS",
