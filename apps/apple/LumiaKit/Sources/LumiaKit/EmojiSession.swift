@@ -2,9 +2,12 @@
 // snapshot holds of each server's, an emoji drawn by its id with its
 // picture fetched through the URL cache, reacting with one, the composer's
 // matches, and uploading, renaming and removing them, each holding the
-// snapshot the instance answers with. `EmojiChanged` comes after the
-// `accountApplied` that took the snapshot again, so it only lets go of the
-// pictures no server lists any more.
+// snapshot the instance answers with. On `EmojiChanged` the session takes
+// the server's emoji as the core keeps them (`holdEmoji`, whether or not the
+// snapshot asked for on the account event came) and lets go of the pictures
+// no server lists any more. A choice from a list of them goes in as the
+// server's emoji are when it is made (`current`), and a list is shown only
+// for what is asked now (`emojiAsked`, `emojiFound`).
 import Foundation
 import LumiaFFI
 
@@ -43,6 +46,26 @@ public extension LumiaSession {
         return await client.emojiMatches(serverID: serverID, prefix: prefix)
     }
 
+    /// A choice as `serverID`'s emoji are now held: what the `:` list or the
+    /// picker drew may have been renamed or removed since (its name even
+    /// taken by another), so one of the server's goes in by its id under its
+    /// present name, the one the core finds at the send, or not at all.
+    func current(_ picked: PickedEmoji, in serverID: String) -> PickedEmoji? {
+        picked.current(in: emoji(of: serverID))
+    }
+
+    /// What a list of `serverID`'s emoji for `words` asks now: with the
+    /// server's emoji as held, so a change to them asks again.
+    func emojiAsked(serverID: String, words: String) -> EmojiAsked {
+        EmojiAsked(serverID: serverID, words: words, held: emoji(of: serverID))
+    }
+
+    /// The core's matches for what is asked, each as the session holds it.
+    func emojiFound(_ asked: EmojiAsked) async -> EmojiFound {
+        let rows = await emojiMatches(serverID: asked.serverID, prefix: asked.words)
+        return EmojiFound(asked: asked, rows: rows.compactMap { row in asked.held.first { $0.emojiId == row.emojiId } })
+    }
+
     /// Reacts to a server's message with one of its emoji, or takes this
     /// account's reaction with it away when it is there (specs/emoji.md 9).
     func reactEmoji(channelID: String, messageID: String, emojiID: String) async throws {
@@ -70,8 +93,8 @@ public extension LumiaSession {
         emojiChanged()
     }
 
-    /// A server's emoji changed (`EmojiChanged`, after the snapshot that has
-    /// them): the pictures no server lists any more go (specs/emoji.md 7).
+    /// A server's emoji changed (`EmojiChanged`, once they are held): the
+    /// pictures no server lists any more go (specs/emoji.md 7).
     func emojiChanged() {
         let listed = (snapshot?.servers ?? []).flatMap(\.emoji).compactMap { pictureURL($0.imageUrl) }
         emojiPictures.keep(only: Set(listed))

@@ -605,8 +605,9 @@ struct ChannelScreen: View {
     @State private var caret = ComposerCaret()
     /// The composer's picker chose: the keyboard comes back as it goes.
     @State private var refocus = false
-    /// The `:` list: the server's emoji the `:word` the draft ends in matches, as the core orders them.
-    @State private var emojiRows: [EmojiSummary] = []
+    /// The `:` list: the server's emoji the `:word` the draft ends in
+    /// matched, as the core orders them, and what was asked.
+    @State private var emojiFound = EmojiFound()
     #if DEBUG
     @State private var devOpened = false
     #endif
@@ -617,6 +618,16 @@ struct ChannelScreen: View {
 
     /// The server whose emoji this conversation uses, its channels' and its server DMs'.
     private var serverID: String { channel?.serverId ?? "" }
+
+    /// What the `:` list asks now: the `:word` the draft ends in, in this
+    /// server, with its emoji as held, so a rename or a removal asks again.
+    private var emojiAsked: EmojiAsked? {
+        guard member, !serverID.isEmpty, let query = EmojiQuery.at(draft) else { return nil }
+        return session.emojiAsked(serverID: serverID, words: query.query)
+    }
+
+    /// The `:` list's rows: what the core answered, while it is still what is asked.
+    private var emojiRows: [EmojiSummary] { emojiAsked.map(emojiFound.rows(for:)) ?? [] }
 
     /// How the messages are drawn: Preferences' message settings. The list,
     /// and of the rest only the composer's words, which take the font size:
@@ -724,9 +735,10 @@ struct ChannelScreen: View {
             if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draft != placed { session.typed(channelID: channelID) }
         }
         // The `:` list: what the `:word` the draft ends in matches, the core's to say.
-        .task(id: "\(draft)|\(member)") {
-            guard member, let query = EmojiQuery.at(draft) else { emojiRows = []; return }
-            emojiRows = await session.emojiMatches(serverID: serverID, prefix: query.query)
+        .task(id: emojiAsked) {
+            guard let asked = emojiAsked else { emojiFound = EmojiFound(); return }
+            let found = await session.emojiFound(asked)
+            if !Task.isCancelled { emojiFound = found }
         }
         .onChange(of: session.commandError) { _, _ in
             if let refused = session.takeCommandError() { error = refused }
@@ -819,10 +831,12 @@ struct ChannelScreen: View {
             } end: { EmptyView() }
         }
         if !emojiRows.isEmpty {
-            LumiaEmojiList(rows: emojiRows.map { LumiaEmojiList.Row(id: $0.emojiId, name: $0.name, drawing: session.drawing(of: $0)) }) { n in
-                guard let query = EmojiQuery.at(draft), emojiRows.indices.contains(n) else { return }
-                draft = query.picking(emojiRows[n].name)
-                emojiRows = []
+            let shown = emojiRows
+            LumiaEmojiList(rows: shown.map { LumiaEmojiList.Row(id: $0.emojiId, name: $0.name, drawing: session.drawing(of: $0)) }) { n in
+                // By its id as the server has it now, under its present name; nothing for one gone.
+                guard let query = EmojiQuery.at(draft), shown.indices.contains(n), case let .custom(now)? = session.current(.custom(shown[n]), in: serverID) else { return }
+                draft = query.picking(now.name)
+                emojiFound = EmojiFound()
             }
         }
         let rows = choices
@@ -948,10 +962,13 @@ struct ChannelScreen: View {
         }
     }
 
-    /// The composer's picker chose: in the field at the caret, and the keyboard back.
+    /// The composer's picker chose: in the field at the caret, as the
+    /// server's emoji are now (nothing for one removed since it was drawn),
+    /// and the keyboard back.
     private func insert(_ emoji: PickedEmoji) {
-        draft = caret.insert(emoji.typed, into: draft)
         refocus = true
+        guard let now = session.current(emoji, in: serverID) else { return }
+        draft = caret.insert(now.typed, into: draft)
     }
 
     private func afterSheet() {

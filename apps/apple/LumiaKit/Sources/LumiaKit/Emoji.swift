@@ -50,6 +50,16 @@ public enum PickedEmoji: Equatable, Sendable {
         }
     }
 
+    /// The choice as the server's emoji now are (`held`): Unicode's as it
+    /// is; one of the server's by its id, under its present name, or nil
+    /// when the server no longer has it.
+    public func current(in held: [EmojiSummary]) -> PickedEmoji? {
+        switch self {
+        case .unicode: self
+        case let .custom(e): held.first { $0.emojiId == e.emojiId }.map(PickedEmoji.custom)
+        }
+    }
+
     /// How "Frequently used" keeps it (`FrequentEmoji`).
     public func kept(serverID: String) -> String {
         switch self {
@@ -115,6 +125,32 @@ public struct EmojiQuery: Equatable, Sendable {
 
     /// The draft once `name` is chosen: `:name:` and a space.
     public func picking(_ name: String) -> String { "\(before):\(name): " }
+}
+
+/// What a list of a server's emoji (the `:` list, the picker's search)
+/// was asked for: the server, the words typed, and the server's emoji as
+/// held when it was asked. A rename, a removal or an upload since is another
+/// question, as are other words and another server's conversation.
+public struct EmojiAsked: Hashable, Sendable {
+    public let serverID: String
+    public let words: String
+    public let held: [EmojiSummary]
+
+    public init(serverID: String, words: String, held: [EmojiSummary]) {
+        self.serverID = serverID; self.words = words; self.held = held
+    }
+}
+
+/// What the core answered for a list of a server's emoji, and what it was
+/// asked: shown only while that is what is asked now, so a list asked
+/// before an emoji was renamed or removed offers nothing it no longer has.
+public struct EmojiFound: Equatable, Sendable {
+    public var asked: EmojiAsked?
+    public var rows: [EmojiSummary]
+
+    public init(asked: EmojiAsked? = nil, rows: [EmojiSummary] = []) { self.asked = asked; self.rows = rows }
+
+    public func rows(for now: EmojiAsked) -> [EmojiSummary] { asked == now ? rows : [] }
 }
 
 /// What the picker's search asks the core for of a server's emoji: the
@@ -257,7 +293,9 @@ public final class EmojiPicture: @unchecked Sendable {
 /// system's URL cache, which avatars and server pictures load through too
 /// (`URLSession.shared`), decoded off the main thread and held by address
 /// while a server lists them. A view asks for one while it draws and is
-/// drawn again when it comes.
+/// drawn again when it comes. One that could not be fetched or decoded is
+/// its `:name:` until it comes, fetched again by itself after a wait, and at
+/// once on a reconnect (`retryFailed`).
 @MainActor
 @Observable
 public final class EmojiPictures {
@@ -266,6 +304,12 @@ public final class EmojiPictures {
     /// The fetches on their way: not something a view watches, since a view
     /// asks while drawing itself (the session's `profilesInFlight` has why).
     @ObservationIgnored private var asking: Set<URL> = []
+    /// How many times in a row each picture in `failed` could not be had.
+    @ObservationIgnored private var failures: [URL: Int] = [:]
+    /// How long a picture that could not be had for the nth time in a row
+    /// waits before it is fetched again: 15 s, doubling, at most 5 minutes.
+    /// A test's own.
+    @ObservationIgnored var retryAfter: @Sendable (Int) -> Duration = { n in .seconds(min(300, 15 << min(max(n - 1, 0), 5))) }
     /// How a picture is fetched; a test's own.
     @ObservationIgnored var fetch: @Sendable (URL) async throws -> Data = { url in
         let (data, response) = try await URLSession.shared.data(from: url)
@@ -285,38 +329,65 @@ public final class EmojiPictures {
         return nil
     }
 
-    /// Whether the picture at `url` could not be had: drawn as its name.
+    /// Whether the picture at `url` could not be had: drawn as its name,
+    /// also while it is fetched again.
     public func failed(_ url: URL) -> Bool { failed.contains(url) }
 
     func load(_ url: URL) async {
         defer { asking.remove(url) }
-        do {
-            let data = try await fetch(url)
-            if let picture = await Task.detached(operation: { EmojiPicture.decode(data) }).value {
-                held[url] = picture
-            } else {
-                failed.insert(url)
-            }
-        } catch {
-            failed.insert(url)
+        var picture: EmojiPicture?
+        if let data = try? await fetch(url) {
+            picture = await Task.detached(operation: { EmojiPicture.decode(data) }).value
         }
+        if let picture {
+            held[url] = picture
+            failed.remove(url)
+            failures[url] = nil
+            return
+        }
+        // Its name meanwhile, and fetched again by itself later, the wait
+        // doubling while it still cannot be had.
+        failed.insert(url)
+        let n = (failures[url] ?? 0) + 1
+        failures[url] = n
+        let wait = retryAfter(n)
+        Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard let self, self.failures[url] == n else { return }
+            self.again(url)
+        }
+    }
+
+    /// A picture that could not be had, fetched again; drawn as its name until it comes.
+    private func again(_ url: URL) {
+        guard failed.contains(url), asking.insert(url).inserted else { return }
+        Task { await load(url) }
+    }
+
+    /// Every picture that could not be had, fetched again now: the phone is
+    /// back on the instance.
+    public func retryFailed() {
+        for url in failed { again(url) }
     }
 
     /// Keeps only the pictures at `listed`, the addresses the servers list
     /// now: one an emoji no longer has (removed, specs/emoji.md 7) goes
-    /// from here and from the URL cache. One that failed may be tried again.
+    /// from here and from the URL cache. One that failed is asked for again
+    /// when it is next drawn.
     public func keep(only listed: Set<URL>) {
         for url in held.keys where !listed.contains(url) {
             held[url] = nil
             URLCache.shared.removeCachedResponse(for: URLRequest(url: url))
         }
         failed = []
+        failures = [:]
     }
 
     /// Everything held: the account left the phone.
     public func forget() {
         held = [:]
         failed = []
+        failures = [:]
     }
 }
 

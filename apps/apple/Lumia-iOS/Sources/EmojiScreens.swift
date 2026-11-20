@@ -14,29 +14,6 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A picture chosen to upload: its bytes as chosen, its file's name and
-/// type, and its frames to show in the form.
-struct EmojiUploadFile: Identifiable, Hashable {
-    let id = UUID()
-    let data: Data
-    let fileName: String
-    let mediaType: String
-    let preview: EmojiPicture?
-
-    static func == (a: EmojiUploadFile, b: EmojiUploadFile) -> Bool { a.id == b.id }
-    func hash(into hasher: inout Hasher) { hasher.combine(id) }
-
-    /// "38 KB", by the system's byte formatter.
-    var size: String { ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file) }
-
-    static func make(data: Data, fileName: String) async -> EmojiUploadFile {
-        let ext = (fileName as NSString).pathExtension
-        let mediaType = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
-        let preview = await Task.detached { EmojiPicture.preview(data) }.value
-        return EmojiUploadFile(data: data, fileName: fileName, mediaType: mediaType, preview: preview)
-    }
-}
-
 /// A picture from the photo picker as a file, so its name comes with it.
 private struct PickedPicture: Transferable {
     let url: URL
@@ -64,16 +41,19 @@ final class EmojiChooser {
     var chosen: EmojiUploadFile?
     var error = ""
 
+    /// A picture from the photo picker: the file it hands over, read off
+    /// the main actor and refused over 8 MB before it is read whole or
+    /// drawn (`EmojiUploadFile.read`); or, where it hands over no file, its
+    /// data, refused over 8 MB before it is drawn.
     func take(photo item: PhotosPickerItem) async {
         error = ""
         do {
             if let picked = try await item.loadTransferable(type: PickedPicture.self) {
                 defer { try? FileManager.default.removeItem(at: picked.url.deletingLastPathComponent()) }
-                let data = try Data(contentsOf: picked.url)
-                chosen = await EmojiUploadFile.make(data: data, fileName: picked.url.lastPathComponent)
+                took(await EmojiUploadFile.read(picked.url))
             } else if let data = try await item.loadTransferable(type: Data.self) {
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "png"
-                chosen = await EmojiUploadFile.make(data: data, fileName: "emoji.\(ext)")
+                took(await EmojiUploadFile.make(data: data, fileName: "emoji.\(ext)"))
             } else {
                 error = EmojiWords.unreadable
             }
@@ -82,17 +62,17 @@ final class EmojiChooser {
         }
     }
 
+    /// A picture from Files, read the same way.
     func take(file url: URL) async {
         error = ""
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        // Nothing over the instance's 8 MB is read at all.
-        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > ServerSettingsRefusal.largestPicture {
-            error = EmojiWords.tooLarge
-            return
+        took(await EmojiUploadFile.read(url))
+    }
+
+    private func took(_ read: EmojiUploadRead) {
+        switch read {
+        case let .chosen(file): chosen = file
+        case let .refused(words): error = words
         }
-        guard let data = try? Data(contentsOf: url) else { error = EmojiWords.unreadable; return }
-        chosen = await EmojiUploadFile.make(data: data, fileName: url.lastPathComponent)
     }
 }
 
@@ -330,8 +310,8 @@ struct ServerEmojiScreen: View {
     /// `rename` its field in place, holding `LUMIA_DEV_EMOJI_NAME` when given.
     private func devOpen() {
         let env = ProcessInfo.processInfo.environment
-        if let path = env["LUMIA_DEV_EMOJI_FILE"], let data = FileManager.default.contents(atPath: path) {
-            Task { chooser.chosen = await EmojiUploadFile.make(data: data, fileName: (path as NSString).lastPathComponent) }
+        if let path = env["LUMIA_DEV_EMOJI_FILE"] {
+            Task { if case let .chosen(file) = await EmojiUploadFile.read(URL(fileURLWithPath: path)) { chooser.chosen = file } }
             return
         }
         guard let name = env["LUMIA_DEV_EMOJI"], let e = server?.emoji.first(where: { $0.name == name }) else { return }
@@ -478,6 +458,8 @@ struct EmojiUploadScreen: View {
                         Spacer(minLength: 0)
                     }
                     if !pictureError.isEmpty { LumiaErrorText(pictureError).accessibilityIdentifier("emoji-picture-error") }
+                    // "Choose another…" refused what it was given; the picture before stays.
+                    if !chooser.error.isEmpty { LumiaErrorText(chooser.error) }
                     VStack(alignment: .leading, spacing: LumiaTokens.space6) {
                         Text("Name").font(LumiaTokens.textLabel.font).foregroundStyle(LumiaTokens.inkSecondary.color)
                         EmojiNameField(name: $name, label: "Name", refused: !nameError.isEmpty)

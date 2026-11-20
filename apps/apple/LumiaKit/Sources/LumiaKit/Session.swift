@@ -448,6 +448,17 @@ public final class LumiaSession {
         subscribeGained()
     }
 
+    /// A server's emoji as the core keeps them, held in the snapshot in
+    /// place of what it had. The session holds a server only from a snapshot
+    /// the core kept as well (`App::snapshot` keeps what it answers), so the
+    /// core's list is never one of a server it does not hold; a server the
+    /// session does not hold is left alone.
+    func holdEmoji(_ emoji: [EmojiSummary], of serverID: String) {
+        guard var snap = snapshot, let i = snap.servers.firstIndex(where: { $0.serverId == serverID }), snap.servers[i].emoji != emoji else { return }
+        snap.servers[i].emoji = emoji
+        snapshot = snap
+    }
+
     /// A snapshot held in place of the last; the conversations of a server
     /// whose Show deleted messages it changes are read again under it.
     private func hold(_ snap: SnapshotSummary) {
@@ -1283,6 +1294,8 @@ public final class LumiaSession {
             serverCustomStatus = [:]
             watchPresence(serverIDs: watchingServerIDs)
             connection = .connected
+            // Back on the instance: a server's emoji picture that could not be had is tried again.
+            emojiPictures.retryFailed()
             await refreshSnapshot(everyone: true)
         case let .applied(channelId, events):
             // Whoever's message arrived has finished typing it.
@@ -1312,17 +1325,23 @@ public final class LumiaSession {
             // again: what the core keeps has the change, so the server's
             // members are read from it, with their tags, and nothing is asked.
             await rereadMembers(serverID: serverId)
-        case .emojiChanged:
-            // After the `accountApplied` it came in, which took the snapshot
-            // again with the server's emoji as they now are: a picture no
-            // server lists any more goes (specs/emoji.md 7). The core has
-            // named the kept reactions with each anew, so the messages held
-            // are read again from it: one left after a removal reads as the
-            // emoji was last called.
+        case let .emojiChanged(serverId):
+            // The core wrote the server's emoji from `EmojiUpdated` into what
+            // it keeps before saying this (specs/emoji.md 8): they are taken
+            // from there, not from the snapshot the `accountApplied` before
+            // it asked the instance for, which may not have come. A picture
+            // no server lists any more goes (7). The core has named the kept
+            // reactions with each anew, so the messages held are read again
+            // from it: one left after a removal reads as the emoji was last
+            // called. Every list here is read from the store (an older page
+            // too, by a larger limit), but the Mentions pages, which come
+            // over HTTP and are read again from the instance.
+            holdEmoji(await client.serverEmoji(serverID: serverId), of: serverId)
             emojiChanged()
             for channelID in messages.keys {
                 await refreshMessages(channelID: channelID)
             }
+            await rereadMentions(serverID: serverId)
         case let .profileUpdated(accountId, handle, displayName, avatarUrl, pronouns, bio):
             apply(ProfileUpdate(accountID: accountId, handle: handle, displayName: displayName, avatarURL: avatarUrl, pronouns: pronouns, bio: bio))
         case let .error(_, message, commandId):

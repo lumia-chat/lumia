@@ -282,6 +282,16 @@ reached sent 120
 [ "$(message_field "Ship it" "m['body']")" = "Ship it :acme_heart: :partyparrot:" ] || fail "the phone's message is \"$(message_field "Ship it" "m['body']")\""
 seen sent
 echo "a message with :acme_heart: from the composer's emoji button and :partyparrot: from the : list, sent with both refs"
+reached listed 120
+curl -s -f -X DELETE -H "authorization: Bearer $to" "$instance/api/v1/servers/$server/emoji/$(emoji_id parrotwave)" >/dev/null || fail "could not remove :parrotwave:"
+[ "$(emoji_id parrotwave)" = "" ] || fail ":parrotwave: is still listed after its removal"
+seen listed
+echo "the : list asked again when :parrotwave: was removed while it was open"
+reached searched 120
+api "$to" PATCH "/servers/$server/emoji/$(emoji_id sadparrot)" '{"name":"gloomy"}' >/dev/null || fail "could not rename :sadparrot:"
+[ "$(emoji_id gloomy)" != "" ] || fail "no :gloomy: after the rename: $(emoji_names)"
+seen searched
+echo "the picker's search asked again when :sadparrot: was renamed :gloomy: while it was open"
 reached renamed 120
 [ "$(emoji_id acme_love)" != "" ] || fail "no :acme_love: after Rename: $(emoji_names)"
 seen renamed

@@ -2565,6 +2565,28 @@ final class SmokeUITests: XCTestCase {
         shown(sent, "the message sent is not drawn", within: 20)
         reached("sent", under: steps)
 
+        // Acme's emoji change while a list of them is open: the `:` list and
+        // the picker's search are asked again, so neither offers one removed
+        // or renamed since (the smoke removes :parrotwave: at `listed` and
+        // renames :sadparrot: to :gloomy: at `searched`).
+        field.tap()
+        field.typeText(":parr")
+        shown(app.buttons["emoji-option-parrotwave"], "the : list does not offer :parrotwave:")
+        reached("listed", under: steps)
+        gone(app.buttons["emoji-option-parrotwave"], "the : list still offers :parrotwave: after it was removed", within: 20)
+        XCTAssertTrue(app.buttons["emoji-option-partyparrot"].exists, "the : list no longer offers :partyparrot:")
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5))
+        app.buttons["composer-emoji"].tap()
+        let lookFor = app.textFields["Search emoji"]
+        shown(lookFor, "the composer's emoji button did not open the picker")
+        lookFor.tap()
+        lookFor.typeText("sadp")
+        shown(app.buttons["picker-emoji-sadparrot"], "the picker's search does not find :sadparrot:")
+        reached("searched", under: steps)
+        gone(app.buttons["picker-emoji-sadparrot"], "the picker's search still offers :sadparrot: after it was renamed :gloomy:", within: 20)
+        lookFor.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 4) + "gloo")
+        shown(app.buttons["picker-emoji-gloomy"], "the picker's search does not find :gloomy:")
+
         // Rename: refused for a name Acme has, said in place; then made.
         app.terminate()
         app = open("emoji")

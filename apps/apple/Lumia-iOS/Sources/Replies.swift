@@ -38,13 +38,14 @@ struct PickerServer {
     let name: String
     let emoji: [EmojiSummary]
     let drawing: (EmojiSummary) -> EmojiDrawing?
-    let search: (String) async -> [EmojiSummary]
+    /// The core's matches for what is asked, each as the session holds it.
+    let search: (EmojiAsked) async -> EmojiFound
 
     @MainActor
     static func of(channelID: String, session: LumiaSession) -> PickerServer? {
         let serverID = session.emojiServer(of: channelID)
         guard !serverID.isEmpty, let server = session.snapshot?.servers.first(where: { $0.serverId == serverID }) else { return nil }
-        return PickerServer(id: serverID, name: server.name, emoji: server.emoji, drawing: { session.drawing(of: $0) }, search: { await session.emojiMatches(serverID: serverID, prefix: emojiSearchPrefix($0)) })
+        return PickerServer(id: serverID, name: server.name, emoji: server.emoji, drawing: { session.drawing(of: $0) }, search: { await session.emojiFound($0) })
     }
 }
 
@@ -238,8 +239,16 @@ struct EmojiPicker: View {
     var label = "Add reaction"
     let pick: (PickedEmoji) -> Void
     @State private var search = ""
-    /// The server's emoji the search finds, as the core matches them.
-    @State private var found: [EmojiSummary] = []
+    /// The server's emoji the search found, as the core matches them, and what was asked.
+    @State private var found = EmojiFound()
+
+    /// What the search asks of the server's emoji now: the words typed,
+    /// with the server's emoji as held, so a rename or a removal while the
+    /// picker is open asks again.
+    private var asked: EmojiAsked? {
+        guard let server, !search.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return EmojiAsked(serverID: server.id, words: emojiSearchPrefix(search), held: server.emoji)
+    }
 
     private let columns = [GridItem(.adaptive(minimum: EmojiMetrics.pickerCell), spacing: LumiaTokens.space2)]
 
@@ -284,10 +293,11 @@ struct EmojiPicker: View {
                     } else {
                         let words = emojiSearchPrefix(wanted)
                         let unicode = EmojiCatalog.search(words.isEmpty ? wanted : words)
-                        if found.isEmpty, unicode.isEmpty {
+                        let matched = asked.map(found.rows(for:)) ?? []
+                        if matched.isEmpty, unicode.isEmpty {
                             Text("No emoji match that.").font(LumiaTokens.textMeta.font).foregroundStyle(LumiaTokens.inkQuiet.color).padding(LumiaTokens.space10)
                         } else {
-                            mixed(found.map(PickedEmoji.custom) + unicode.map { .unicode($0.emoji) }, key: "s")
+                            mixed(matched.map(PickedEmoji.custom) + unicode.map { .unicode($0.emoji) }, key: "s")
                         }
                     }
                 }
@@ -304,9 +314,10 @@ struct EmojiPicker: View {
         .onAppear { if let typed = ProcessInfo.processInfo.environment["LUMIA_DEV_SEARCH"] { search = typed } }
         #endif
         // The server's emoji a search finds are the core's to say.
-        .task(id: search) {
-            guard let server, !search.trimmingCharacters(in: .whitespaces).isEmpty else { found = []; return }
-            found = await server.search(search)
+        .task(id: asked) {
+            guard let server, let asked else { found = EmojiFound(); return }
+            let now = await server.search(asked)
+            if !Task.isCancelled { found = now }
         }
     }
 

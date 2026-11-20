@@ -183,6 +183,9 @@ public actor LumiaClient {
         try inner.reactEmoji(channelId: channelID, messageId: messageID, emojiId: emojiID, remove: remove)
     }
     public func emojiMatches(serverID: String, prefix: String) -> [EmojiSummary] { inner.emojiMatches(serverId: serverID, prefix: prefix) }
+    /// A server's live emoji as the core keeps them, which an account
+    /// batch's `EmojiUpdated` has written by the time `emojiChanged` is said.
+    public func serverEmoji(serverID: String) -> [EmojiSummary] { inner.serverEmoji(serverId: serverID) }
     public func uploadEmoji(serverID: String, name: String, picture: Data, mediaType: String) throws -> SnapshotSummary {
         try inner.uploadEmoji(serverId: serverID, name: name, picture: picture, mediaType: mediaType)
     }

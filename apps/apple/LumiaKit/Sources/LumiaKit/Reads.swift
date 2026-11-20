@@ -117,6 +117,32 @@ public extension LumiaSession {
         for m in page.messages { _ = name(of: m.authorAccountId) }
     }
 
+    /// The Mentions lists held that can show `serverID`'s messages (its own
+    /// and Home's), read again as far as they had been read: they come over
+    /// HTTP and no store keeps them, so the core cannot name their reactions
+    /// anew when the server's emoji change, and the instance names them as
+    /// the emoji now are. A list that cannot be read again stays as it was,
+    /// with nothing said.
+    func rereadMentions(serverID: String) async {
+        lists: for key in [serverID, ""] {
+            guard let held = mentionsPages[key], !held.messages.isEmpty, !held.loading else { continue }
+            var got: [MessageSummary] = []
+            var more = false
+            var before: String?
+            repeat {
+                guard let page = try? await client.mentions(serverID: key.isEmpty ? nil : key, before: before) else { continue lists }
+                got += page.messages
+                more = page.hasMore
+                before = page.messages.last?.messageId
+            } while more && before != nil && got.count < held.messages.count
+            // Not if a read of its own began meanwhile.
+            guard var page = mentionsPages[key], !page.loading else { continue }
+            page.messages = got
+            page.more = more
+            mentionsPages[key] = page
+        }
+    }
+
     // MARK: Reactions
 
     /// Adds this account's reaction to a message, or takes it away when it
