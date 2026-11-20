@@ -1315,8 +1315,14 @@ public final class LumiaSession {
         case .emojiChanged:
             // After the `accountApplied` it came in, which took the snapshot
             // again with the server's emoji as they now are: a picture no
-            // server lists any more goes (specs/emoji.md 7).
+            // server lists any more goes (specs/emoji.md 7). The core has
+            // named the kept reactions with each anew, so the messages held
+            // are read again from it: one left after a removal reads as the
+            // emoji was last called.
             emojiChanged()
+            for channelID in messages.keys {
+                await refreshMessages(channelID: channelID)
+            }
         case let .profileUpdated(accountId, handle, displayName, avatarUrl, pronouns, bio):
             apply(ProfileUpdate(accountID: accountId, handle: handle, displayName: displayName, avatarURL: avatarUrl, pronouns: pronouns, bio: bio))
         case let .error(_, message, commandId):
