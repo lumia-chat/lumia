@@ -750,7 +750,7 @@ What was decided, in short (the spec has it whole):
   - sizes: an emoji in text 1.3 em tall at its shape, 18 px in a chip, 28 px in the picker, 24 px in the `:` list, 32 px in a settings row;
   - the tooltip is drawn as a bubble on the board, and is the system's tooltip in the apps.
   - Raised by the boards for the core: whether a prefix of digits (`:10`) lists anything (it does today, a name may hold digits); reduced motion needs a still first frame, which a shell makes from the GIF itself.
-- [x] Ryan's look (2026-11-20): "okay, looks good". Every choice listed above stands.
+- [x] Ryan's look (2026-11-20): "okay, looks good". Every choice listed above stands but one, changed by him the same day: the composer has an emoji button of its own ("we can add an emoji button to the composer"), at the end of the field, opening the picker there; choosing puts the emoji at the cursor (a server's as `:name:` and a space), and the picker stays open for more. A message's Add reaction stays for reacting.
 - [ ] The web, the desktop, iOS, Android, an agent each in a worktree, from the boards and the core.
 - Known before starting: **the desktop cannot yet draw a picture inside a line of text.** Rune at the pinned rev keeps Parley's inline boxes to its own pill chips and offers no inline image; drawing emoji in message text there needs a patch Lumia carries or an upstream issue (architecture 13). Until then the desktop draws a ref as its `:name:` text, and reactions, the picker and settings, which are not inline text, are unaffected.
 
