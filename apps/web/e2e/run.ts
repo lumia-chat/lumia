@@ -1282,12 +1282,27 @@ async function rolesStep(which: string, stamp: number) {
     }
     const sections = page.getByRole("navigation", { name: "Server settings" });
     const section = (name: string) => sections.getByRole("button", { name });
+    // A section is gone to once its button says it is the one shown. In
+    // WebKit on CI a press on Roles once left the page on Overview (the list
+    // read empty); a press that does not take is said, with what is shown.
+    const go = async (name: string) => {
+      const shown = sections.locator('[aria-current="page"]');
+      for (let tries = 0; tries < 2; tries++) {
+        await section(name).click();
+        for (let i = 0; i < 50; i++) {
+          if ((await shown.textContent().catch(() => ""))?.trim() === name) return;
+          await Bun.sleep(100);
+        }
+        console.log(`  [${which}] roles: a press on ${name} left ${(await shown.textContent().catch(() => "nothing"))?.trim() || "nothing"} shown; pressed again`);
+      }
+      throw new Error(`${name} is not the section shown after two presses`);
+    };
     const toSettings = async (name: string) => {
       if ((await sections.count()) === 0) {
         await page.getByRole("button", { name: /server menu/ }).click();
         await page.getByRole("menuitem", { name: "Server settings" }).click();
       }
-      await section(name).click();
+      await go(name);
     };
     const toGeneral = async () => {
       await page.getByRole("link", { name: "general" }).click();
@@ -1325,7 +1340,7 @@ async function rolesStep(which: string, stamp: number) {
     if ((await page.locator(".lu-shell__aside .lu-member").count()) > 0) throw new Error("the member list is drawn beside the settings");
 
     phase("a role");
-    await section("Roles").click();
+    await go("Roles");
     await ordered(["Everyone"]);
     await page.getByRole("button", { name: "New role" }).click();
     const save = page.getByRole("button", { name: "Save", exact: true });
@@ -1399,8 +1414,8 @@ async function rolesStep(which: string, stamp: number) {
     await page.mouse.up();
     await ordered(["Crew", "Helpers", "Everyone"]);
     // As the instance has it, read again.
-    await section("Members").click();
-    await section("Roles").click();
+    await go("Members");
+    await go("Roles");
     await ordered(["Crew", "Helpers", "Everyone"]);
 
     phase("asked first");
@@ -1428,7 +1443,7 @@ async function rolesStep(which: string, stamp: number) {
     await page.getByRole("button", { name: "Back to roles" }).click();
 
     phase("a title");
-    await section("Members").click();
+    await go("Members");
     const row = page.locator(".lu-roster__item", { hasText: member });
     await row.locator(".lu-roster__row").click();
     if ((await row.getByRole("checkbox", { name: "Crew" }).getAttribute("aria-checked")) !== "true") throw new Error("the member's role is not ticked");
@@ -1460,7 +1475,7 @@ async function rolesStep(which: string, stamp: number) {
     }
 
     phase("titles as tags");
-    await section("Overview").click();
+    await go("Overview");
     await page.getByRole("radio", { name: /^Titles/ }).click();
     // In the member's browser with no reload: the title, on the plain chip.
     if (theirs) await tagIn(theirs.page).filter({ hasText: "Navigator" }).waitFor({ timeout: 20_000 });
@@ -1540,7 +1555,7 @@ async function rolesStep(which: string, stamp: number) {
     // A member's form saves what it changed, against the member as it opened on them. The member's row is open and
     // Crew unticked in it when Hands is given to them elsewhere; the owner saves, which takes Crew and nothing else.
     phase("a role kept");
-    await section("Members").click();
+    await go("Members");
     await row.locator(".lu-roster__row").click();
     await row.getByRole("checkbox", { name: "Crew" }).click();
     type Listed = { members: { accountId: string; roleIds?: string[] }[]; accounts: { accountId: string; handle: string }[] };
@@ -1554,7 +1569,7 @@ async function rolesStep(which: string, stamp: number) {
     if ((await row.locator(".lu-roster__roles .lu-tag", { hasText: "Crew" }).count()) !== 0) throw new Error("the member's row still lists Crew");
 
     phase("deleted");
-    await section("Roles").click();
+    await go("Roles");
     await roleRow("Hands").locator(".lu-role__open").click();
     await page.getByRole("button", { name: "Delete role" }).click();
     const asked = page.getByRole("dialog", { name: "Delete Hands?" });
@@ -1565,7 +1580,7 @@ async function rolesStep(which: string, stamp: number) {
     await page.screenshot({ path: `${out}/${which}-roles.png` });
 
     phase("kicked");
-    await section("Members").click();
+    await go("Members");
     await row.locator(".lu-roster__row").click();
     await row.getByRole("button", { name: `Kick ${member}` }).click();
     await row.waitFor({ state: "detached" });

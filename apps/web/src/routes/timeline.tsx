@@ -868,6 +868,8 @@ export interface ComposeProps {
   onInput: (text: string) => void;
   onSend: () => void;
   replying: Replying | null;
+  /** Who someone is, as the page now knows them: the reply bar names the author so, and not as they were known when Reply was pressed, which may have been before the people were read. */
+  knownName?: (accountId: string) => string | undefined;
   onCancelReply: () => void;
   /** The reply bar's "@ On" switch turned. */
   onReplyNotify?: (on: boolean) => void;
@@ -1070,7 +1072,7 @@ export function Compose(props: ComposeProps) {
       bar={
         props.replying ? (
           <ReplyBar
-            name={props.replying.name || undefined}
+            name={(props.replying.authorAccountId && props.knownName?.(props.replying.authorAccountId)) || props.replying.name || undefined}
             mention={props.replying.notify}
             onMention={(on) => props.onReplyNotify?.(on)}
             onCancel={() => {

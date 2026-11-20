@@ -613,6 +613,7 @@ function Conversation(props: HomeProps) {
             onInput={setDraft}
             onSend={() => void send()}
             replying={replying()}
+            knownName={knownName}
             onCancelReply={() => setReplying(null)}
             onEditLast={state()?.member ? editLast : undefined}
             inputRef={(el) => (composerInput = el)}

@@ -899,6 +899,7 @@ function Frame() {
                           onInput={typed}
                           onSend={() => void send()}
                           replying={replying()}
+                          knownName={knownName}
                           onCancelReply={() => setReplying(null)}
                           onReplyNotify={(on) => setReplying((r) => (r ? { ...r, notify: on } : r))}
                           onEditLast={editLast}
