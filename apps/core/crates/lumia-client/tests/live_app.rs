@@ -1741,6 +1741,72 @@ async fn custom_emoji_reach_every_member() {
         .find(|m| m.message_id == sent)
         .unwrap();
     assert_eq!(kept.emoji.len(), 2, "the message keeps its refs");
+
+    // Renamed and removed in one burst: the one event the log tells lists it only among
+    // `removed`, under the name it had at the removal, and the kept reaction takes that.
+    let uploaded = owner
+        .app
+        .upload_emoji(&server_id, "kitty", STILL.to_vec(), "image/png")
+        .await
+        .unwrap();
+    let kitty = uploaded
+        .servers
+        .iter()
+        .find(|s| s.server_id == server_id)
+        .and_then(|s| s.emoji.iter().find(|e| e.name == "kitty"))
+        .unwrap()
+        .clone();
+    assert!(
+        settles(Duration::from_secs(10), || member
+            .app
+            .server_emoji(&server_id)
+            .iter()
+            .any(|e| e.emoji_id == kitty.emoji_id))
+        .await,
+        "the member hears of it"
+    );
+    let with_kitty = |device: &Device| {
+        device
+            .app
+            .messages(&general, 50)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.message_id == sent)
+            .and_then(|m| {
+                m.reactions
+                    .into_iter()
+                    .find(|r| r.emoji_id == kitty.emoji_id)
+            })
+            .map(|r| r.reaction)
+    };
+    let reacted = member.seen();
+    owner
+        .app
+        .react_emoji(&general, &sent, &kitty.emoji_id, false)
+        .unwrap();
+    let label = member
+        .wait_for(reacted, Duration::from_secs(10), |_| with_kitty(&member))
+        .await
+        .expect("the reaction reaches the member");
+    assert_eq!(label, ":kitty:");
+    owner
+        .app
+        .rename_emoji(&server_id, &kitty.emoji_id, "cat")
+        .await
+        .unwrap();
+    owner
+        .app
+        .remove_emoji(&server_id, &kitty.emoji_id)
+        .await
+        .unwrap();
+    assert!(
+        settles(Duration::from_secs(10), || {
+            with_kitty(&member).as_deref() == Some(":cat:")
+        })
+        .await,
+        "the member's kept reaction is named as the emoji was removed: {:?}",
+        with_kitty(&member)
+    );
 }
 
 /// Editing and deleting (architecture 6.6): a member edits their own
