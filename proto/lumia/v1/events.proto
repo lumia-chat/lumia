@@ -230,6 +230,10 @@ message MembersUpdated {
 message EmojiUpdated {
   bytes server_id = 1;
   repeated CustomEmoji emoji = 2;
+  // Emoji removed in the last day, each with the name it had when it was
+  // removed (image_url empty): what a client names the reactions left with
+  // them, even when a rename and the removal were told in one event.
+  repeated CustomEmoji removed = 3;
 }
 message RailArranged { Rail rail = 1; }
 // An add waiting for its member's yes, because they take adds to channels

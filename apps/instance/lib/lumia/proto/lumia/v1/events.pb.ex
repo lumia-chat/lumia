@@ -544,6 +544,7 @@ defmodule Lumia.V1.EmojiUpdated do
 
   field :server_id, 1, type: :bytes, json_name: "serverId"
   field :emoji, 2, repeated: true, type: Lumia.V1.CustomEmoji
+  field :removed, 3, repeated: true, type: Lumia.V1.CustomEmoji
 end
 
 defmodule Lumia.V1.RailArranged do

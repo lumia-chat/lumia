@@ -8858,6 +8858,7 @@ mod kept_tests {
                     emoji(21, "parrot"),
                     emoji(22, "cat"),
                 ],
+                removed: Vec::new(),
             },
         )]));
         assert!(

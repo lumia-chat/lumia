@@ -79,6 +79,7 @@ The limit is on live emoji. A removed emoji counts for nothing.
 - Messages keep their refs; every client draws them as their text, since no client holds the emoji.
 - Reactions with it stay, counted as before. `ReactionCount.reaction` names it as `:name:`, by the name it had when it was removed; a client that does not hold the emoji draws that. Adding one is refused (`INVALID_ARGUMENT`, `details.field` `emoji_id`); taking one's own away works.
 - A client drops a picture it cached for an emoji the server no longer lists.
+- The picture stops being served at the removal, whether or not the store has let the blob go yet: a blob the store refuses to delete is retried later, never served again (`GET /avatars/{address}` serves an emoji's picture only while a live emoji names it).
 
 No event is written into any channel for a removal: what a client holds of a message does not change, only what it can draw.
 
@@ -89,7 +90,7 @@ No event is written into any channel for a removal: what a client holds of a mes
 As a server's roles (authorization 6.4):
 
 - `AccountSnapshot.emoji` carries the live emoji of every server the account is in, and `MembershipAdded.emoji` those of a server joined later.
-- After an emoji is uploaded, renamed or removed, `Lumia.Workers.EmojiUpdated` appends `EmojiUpdated`, the server's live emoji as they are when it runs, all of them, to every member's account log, 500 members to a transaction. It is scheduled one second after the change, is one job for a burst of changes, runs one at a time with the server's other telling jobs, and reads under the server's row as they do. A job run twice tells twice, which costs nothing: the event says how things are.
+- After an emoji is uploaded, renamed or removed, `Lumia.Workers.EmojiUpdated` appends `EmojiUpdated`, the server's live emoji as they are when it runs, all of them, to every member's account log, 500 members to a transaction. It is scheduled one second after the change, is one job for a burst of changes, runs one at a time with the server's other telling jobs, and reads under the server's row as they do. A job run twice tells twice, which costs nothing: the event says how things are. It also carries, in `removed`, the emoji removed in the last day, each with the name it had when it was removed: a rename and a removal made in one burst are one event, which would otherwise never tell the name the reactions left behind are to show (section 7). A client names the kept reactions of every emoji in either list by that name.
 - A change of the server's limit is `ServerUpdated`, since the limit is on `Server`.
 
 Each change is a log row for every member, as a role's is. Emoji change rarely; a server that uploads a batch is told once.
