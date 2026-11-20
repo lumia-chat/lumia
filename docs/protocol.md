@@ -255,8 +255,12 @@ Base path `/api/v1`. All endpoints require `Authorization: Bearer <access_token>
 | `PATCH /servers/{server_id}/roles/{role_id}` | `UpdateRoleRequest` → `Role`: what is named of the role and nothing else of it: `name`, `color`, `hide_tag`, and the permissions switched on (`grant`) and off (`revoke`), one in both refused (`INVALID_ARGUMENT` with `details.field` `permissions`). What a client's editor sends, so that it saves what was changed in it and not what it was showing (specs/authorization.md 3.5). Held to what `PUT` is |
 | `PUT /servers/{server_id}/role-order` | `ReorderRolesRequest` → `ListRolesResponse`: every role of the server but `@everyone`, once each, in the order wanted (`INVALID_ARGUMENT` with `details.field` `role_ids` otherwise). `MANAGE_ROLES`; for anyone but the owner, every role at or above the caller's highest keeps its place (`PERMISSION_DENIED`) |
 | `DELETE /servers/{server_id}/roles/{role_id}` | → 204: a role the caller can manage, never `@everyone`; whoever held it no longer does |
+| `GET /servers/{server_id}/emoji` | → `ListEmojiResponse`: the server's live custom emoji, oldest first, and its limit (specs/emoji.md 4). Any member |
+| `POST /servers/{server_id}/emoji?name={name}` | a picture's bytes → `CustomEmoji` (201): a new emoji, its picture made by the instance (specs/emoji.md 3) and named in `image_url`, a path under `/api/v1/avatars/`. `MANAGE_EMOJI`. `INVALID_ARGUMENT` with `details.field` `name` (2 to 32 of a-z, 0-9 and `_`, lowercased) or `picture` (with `details.reason`, as for an avatar); `ALREADY_EXISTS` for a name another live emoji of the server has; `RESOURCE_EXHAUSTED{state: "emoji", limit}` at the server's limit |
+| `PATCH /servers/{server_id}/emoji/{emoji_id}` | `UpdateEmojiRequest` → `CustomEmoji`: a new name, held to the same rules. `MANAGE_EMOJI` |
+| `DELETE /servers/{server_id}/emoji/{emoji_id}` | → 204: the emoji is removed and its picture deleted; messages and reactions that used it keep its name (specs/emoji.md 7). `MANAGE_EMOJI` |
 
-Role and overwrite changes bump the affected channels' `acl_version` inside the same transaction and emit `AclChanged` events; membership changes travel the member's account log instead (architecture 7.4). Every role change is also told to every member of the server as `RolesUpdated`, by a job after the commit. A member's own title is changed at most 10 times an hour in a server (`RATE_LIMITED`).
+Role and overwrite changes bump the affected channels' `acl_version` inside the same transaction and emit `AclChanged` events; membership changes travel the member's account log instead (architecture 7.4). Every role change is also told to every member of the server as `RolesUpdated`, by a job after the commit. A member's own title is changed at most 10 times an hour in a server (`RATE_LIMITED`). Every emoji change is told to every member as `EmojiUpdated`, the server's live emoji as they then are, by a job after the commit; a change of the server's emoji limit, which only the operator makes (`bin/lumia-admin emoji-limit`), is `ServerUpdated`.
 
 ### Events, messages, commands
 
@@ -368,7 +372,7 @@ Every non-2xx response body is an `Error`. HTTP status is derived from `code`:
 | `UNAVAILABLE` | 503 |
 | `RESOURCE_EXHAUSTED` | 507 |
 
-`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`; `RESOURCE_EXHAUSTED.quota` (bytes), `.state` (`storage` for a server's files; absent for a history quota). `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
+`details` keys by code: `INVALID_ARGUMENT.field`; `FAILED_PRECONDITION.mfa`, `.state`; `ALREADY_EXISTS.existing_id` (only when the caller may see it); `PAYLOAD_TOO_LARGE.max`; `RATE_LIMITED.scope`; `RESOURCE_EXHAUSTED.quota` (bytes), `.state` (`storage` for a server's files, `emoji` for its custom emoji; absent for a history quota), `.limit` (with `emoji`, the server's limit). `NOT_FOUND` is returned both for things that do not exist and for things the caller may not know exist. Clients never distinguish the two.
 
 ## 11. Pagination
 
@@ -405,7 +409,7 @@ A proof is accepted exactly once. The full roster rules, the add and revoke flow
 
 ## 14. Message body
 
-`Message.body` is UTF-8 text in a Markdown subset: paragraphs, `*emphasis*`, `**strong**`, `~~strike~~`, inline `` `code` ``, fenced code blocks with an optional language, `> quotes`, ordered and unordered lists, and links. No raw HTML, no images (attachments carry images), no headings, no tables. Mentions are not in the text; they are `Mention` entries with byte offsets into the body, so a display name change never rewrites history. Servers validate that offsets fall on UTF-8 boundaries.
+`Message.body` is UTF-8 text in a Markdown subset: paragraphs, `*emphasis*`, `**strong**`, `~~strike~~`, inline `` `code` ``, fenced code blocks with an optional language, `> quotes`, ordered and unordered lists, and links. No raw HTML, no images (attachments carry images), no headings, no tables. Mentions are not in the text; they are `Mention` entries with byte offsets into the body, so a display name change never rewrites history. Servers validate that offsets fall on UTF-8 boundaries. A server's custom emoji are kept the same way: the body keeps `:name:` as typed, and `EmojiRef` entries name each one by id with byte offsets over that text, which the core finds at send; a client that holds no such emoji draws the text (specs/emoji.md 6).
 
 A body is at most `Welcome.limits.max_message_bytes` bytes of UTF-8 (16,384). The instance refuses a longer `SendMessage` or `EditMessage` with `PAYLOAD_TOO_LARGE` and `details.max`; the core refuses it before sending, a personal DM's included, whose ciphertext the instance cannot measure. A quote keeps at most 2,000 characters of its original.
 

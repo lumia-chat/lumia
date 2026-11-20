@@ -76,6 +76,7 @@ The spec's reference is a straightforward Elixir function over `MapSet`s, kept i
 | Can grant permission P on a role or overwrite | Actor holds P, or is owner or Administrator |
 | Can kick or ban member M | `MANAGE_MEMBERS` and M is not the owner and M's highest role is below actor's |
 | Can set member M's title | M is the actor; or the actor could kick M |
+| Can upload, rename or remove a custom emoji | `MANAGE_EMOJI ∈ resolve(server-level)`, or actor is owner ([emoji](emoji.md) 4) |
 | Can change ownership | Actor is owner, with reauth (identity spec section 10) |
 
 The owner cannot be kicked, banned, or stripped of roles by anyone.
@@ -154,6 +155,7 @@ The bump is `UPDATE channels SET acl_version = acl_version + 1 WHERE ...` in the
 | Roles assigned or removed | `MembershipUpdated` to that member, in the same transaction; `MembersUpdated` to every member of the server afterwards (section 6.4) |
 | A member's title changed | The same two |
 | Server name, picture or retention changed (`MANAGE_SERVER`) | `ServerUpdated` to every member, by a job after the commit (architecture 6.7); no `acl_version` moves |
+| A custom emoji uploaded, renamed or removed (`MANAGE_EMOJI`) | `EmojiUpdated` to every member, by a job after the commit, as `RolesUpdated` is (section 6.4, [emoji](emoji.md) 8); the server's emoji limit changed by the operator is `ServerUpdated` |
 | Kick, ban, leave, guest expiry, account deletion | `MembershipRemoved` to that member, plus `ChannelRemoved` for each channel they were shown; they leave the server's text channels and lose their invitations there |
 | Join, guest added, guest promoted | `MembershipAdded` to that member, plus `ChannelAdded` for each default channel they arrive in (architecture 6.8) |
 | Member's own switches changed | `MembershipUpdated` to that member |
@@ -171,7 +173,7 @@ When a definition-level change can alter who may view a channel, an Oban job (de
 Sections 6.1 and 6.2 decide who may do what and are part of the change's transaction. What follows decides only what clients draw (architecture 7.5), and runs after the commit, as `ServerUpdated` does (architecture 6.7).
 
 - **A server's roles.** `AccountSnapshot.roles` carries the roles of every server the account is in, and `MembershipAdded.roles` those of a server joined later. After a role is created, changed, reordered or deleted, `Lumia.Workers.RolesUpdated` appends `RolesUpdated`, the server's roles as they are when it runs, to every member's account log, 500 members to a transaction. It is scheduled one second after the change and is one job for a burst of edits; an edit made while one runs schedules another.
-- **No change is left untold, and none is told out of order.** A change is made one with a job only while that job has not begun, and the change holds the server's row from before it schedules until it commits (section 3.5). A job takes that row, shared, before it reads, so one that begins while such a change is still open waits for the commit and reads the change; without that it would read what was there before, and nothing would tell the members until the server's next change. A server's jobs of all three kinds (`ServerUpdated`, `RolesUpdated`, `MembersUpdated`) run one at a time, across nodes (a session-level advisory lock keyed by the server), because a large server's telling can outlast the second between two jobs, and two that overlapped could leave a member told the newer state and then the older.
+- **No change is left untold, and none is told out of order.** A change is made one with a job only while that job has not begun, and the change holds the server's row from before it schedules until it commits (section 3.5). A job takes that row, shared, before it reads, so one that begins while such a change is still open waits for the commit and reads the change; without that it would read what was there before, and nothing would tell the members until the server's next change. A server's jobs of all four kinds (`ServerUpdated`, `RolesUpdated`, `MembersUpdated`, `EmojiUpdated`) run one at a time, across nodes (a session-level advisory lock keyed by the server), because a large server's telling can outlast the second between two jobs, and two that overlapped could leave a member told the newer state and then the older.
 - **What a guest is shown of the members.** Architecture 6.2: a guest never sees the full member list. It sees itself and the members it shares a channel of the server with (both in `channel_members`; a server DM is such a channel), and no one else: `GET /servers/{id}/members` answers a guest with those alone, search and pages working as they do for anyone; `MembersUpdated` on a guest's log names only those, and none is appended to it when the event names none of them; a server's presence watched by a guest lists only those, at first and in each diff (the set read again for each diff a guest's session is sent). The server's roles (`AccountSnapshot.roles`, `MembershipAdded.roles`, `RolesUpdated`) and its settings (`ServerUpdated`) reach a guest as they reach anyone, since a tag is drawn from the roles and the roles are not the member list. Someone who comes to share a channel with a guest later is not told of on the guest's log; the guest's client reads the list again.
 - **Members' roles and titles.** A change of either writes a `member_announcements` row in its transaction. `Lumia.Workers.MembersUpdated`, scheduled and made one as the job above is, reads the server's rows, appends `MembersUpdated` to every member's log with the members named there as they are when it runs (their `role_ids`, `title` and `kind`, as the member list gives them; at most 200 members to an event; one who has left the server is left out), then deletes the rows it read. A change made while it runs has a row of its own and a job of its own. A job that fails is run again and may tell members twice, which costs nothing: each event says how things are, not what changed.
 - **A role deleted** takes itself from whoever held it. No `MembersUpdated` follows: a client drops from its members a role that `RolesUpdated` no longer lists.
@@ -217,6 +219,7 @@ Operator hard limits (architecture 16), instance-configurable:
 | Roles per server | 50 |
 | Overwrites per channel | 50 |
 | Roles per member | 20 |
+| Custom emoji per server | 50 (`LUMIA_SERVER_EMOJI_MAX`), or the server's own number set by `bin/lumia-admin emoji-limit` ([emoji](emoji.md) 5) |
 
 System constants:
 
