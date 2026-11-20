@@ -49,9 +49,8 @@ import {
   type Tone,
 } from "../design/components";
 import { customKey, frequentEmoji, usedEmoji } from "../design/emoji";
-import { ClientError, type AttachmentSummary, type BodyBlock, type CardSummary, type EmojiRefSummary, type EmojiSummary, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
-import { colonAt, spliced, typedEmoji } from "../client/emoji";
-import { pictureOf } from "./emoji";
+import { ClientError, type AttachmentSummary, type BodyBlock, type CardSummary, type EmojiRefSummary, type MemberSummary, type MentionSummary, type MessageRoom, type QuoteSummary, type ReactionSummary, type ReadStateSummary } from "../client/bridge";
+import { colonAt, emojiListed, spliced, typedEmoji, type EmojiAnswer } from "../client/emoji";
 import { avatarSrc, client, markRead } from "../client/state";
 import { composing } from "../design/body";
 import { ComposerMedia, type DraftTileProps, type LinkCardProps } from "../design/components";
@@ -639,7 +638,7 @@ export function Timeline(props: TimelineProps) {
               }}
               emoji={(index, typed) => (
                 <Show when={held(m.emoji[index]?.emojiId)} fallback={typed}>
-                  {(e) => <CustomEmoji {...e()} />}
+                  {(e) => <CustomEmoji {...e()} typed={typed} />}
                 </Show>
               )}
               edited={m.edited}
@@ -1008,24 +1007,31 @@ export function Compose(props: ComposeProps) {
     return [...everyone, ...people];
   });
   // The `:` list (specs/emoji.md 10): the server's emoji the core matches to what follows the
-  // colon, asked again as it changes, the latest answer drawn; nothing in a personal conversation.
+  // colon, asked again as that changes and as the server's emoji do; nothing in a personal
+  // conversation. An answer is offered only for the server, prefix and emoji it was asked for
+  // (`emojiListed`), so a key pressed before the next answer picks nothing from the last.
   const emojiListId = `lu-emoji-${listIds}`;
   const [colon, setColon] = createSignal<{ start: number; query: string } | null>(null);
-  const [matched, setMatched] = createSignal<EmojiSummary[]>([]);
+  const [answer, setAnswer] = createSignal<EmojiAnswer<CustomEmojiEntry> | null>(null);
   let matching = 0;
-  createEffect(
-    on(colon, (c) => {
-      const n = ++matching;
-      const server = props.emoji?.serverId;
-      if (!c || !server || c.query.length < 2) return setMatched([]);
-      client()
-        .emojiMatches(server, c.query)
-        .then((list) => n === matching && setMatched(list))
-        .catch((e) => console.warn("emoji matches:", e));
-    }),
-  );
-  // Each as the conversation draws it where it holds it (its picture following reduced motion).
-  const emojiOptions = createMemo<CustomEmojiEntry[]>(() => (colon() ? matched().map((e) => props.emoji?.held.get(e.emojiId) ?? pictureOf(e)) : []));
+  createEffect(() => {
+    const c = colon();
+    const server = props.emoji?.serverId;
+    const held = props.emoji?.held;
+    const n = ++matching;
+    if (!c || !server || !held || c.query.length < 2) return setAnswer(null);
+    const query = c.query;
+    client()
+      .emojiMatches(server, query)
+      .then((list) => n === matching && setAnswer({ server, query, held, list }))
+      .catch((e) => console.warn("emoji matches:", e));
+  });
+  // Each as the conversation draws it (its picture following reduced motion).
+  const emojiOptions = createMemo<CustomEmojiEntry[]>(() => {
+    const c = colon();
+    const e = props.emoji;
+    return c && e ? emojiListed(answer(), { server: e.serverId, query: c.query, held: e.held }) : [];
+  });
   const emojiOpen = () => emojiOptions().length > 0;
   const open = () => options().length > 0;
   /** Puts `what` in place of the field's text from `from` to the caret (or to `to`), the caret after it and the keyboard in the field. */
@@ -1046,9 +1052,11 @@ export function Compose(props: ComposeProps) {
   };
   const pickEmoji = (e: CustomEmojiEntry) => {
     const c = colon();
-    if (!c || !input) return;
-    usedEmoji(customKey(e.id));
-    put(c.start, typedEmoji(e.name));
+    // As the server has it at the press, by its present name; one it no longer has, nothing.
+    const now = props.emoji?.held.get(e.id);
+    if (!c || !input || !now) return;
+    usedEmoji(customKey(now.id));
+    put(c.start, typedEmoji(now.name));
     setColon(null);
   };
   // The list open over the field, whichever it is, for the keys.

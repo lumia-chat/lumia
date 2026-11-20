@@ -10,7 +10,7 @@
 import { For, Match, Show, Switch, children, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, splitProps, untrack, type JSX } from "solid-js";
 import { Dynamic, Portal } from "solid-js/web";
 import { ICONS } from "./icons";
-import { emojiMatches, loadEmoji, type EmojiGroup } from "./emoji";
+import { emojiMatches, loadEmoji, pictureRetryIn, type EmojiGroup } from "./emoji";
 import { COLLAPSED_LINES, collapsedLines, composing, linesOf, roomWords, stretches, type Piece } from "./body";
 import type { BodyBlock, MessageRoom } from "../client/bridge";
 import { fitSize, mediaGrid } from "../client/media";
@@ -245,28 +245,71 @@ export interface CustomEmojiEntry extends CustomEmojiPicture {
 export interface CustomEmojiProps extends CustomEmojiPicture {
   /** In text, at the height of an emoji in that text and as wide as its shape; or a box of so many pixels it fits within (a picker's cell, a list's row, a chip). */
   size?: "text" | number;
+  /** In a message's text, what was typed there (`:name:` as written, which a rename does not change): what a selection of the text quotes and copies, and what is shown where the picture cannot be drawn. */
+  typed?: string;
   class?: string;
 }
 
+// The pictures that could not be had, by address: each drawn as its name until it is asked for
+// again, later each time (`pictureRetryIn`), or at once when the browser is back online.
+const [unfetched, setUnfetched] = createSignal<ReadonlySet<string>>(new Set());
+const pictureTries = new Map<string, number>();
+function pictureFailed(src: string): void {
+  if (untrack(unfetched).has(src)) return;
+  const tries = (pictureTries.get(src) ?? 0) + 1;
+  pictureTries.set(src, tries);
+  setUnfetched((was) => new Set(was).add(src));
+  setTimeout(() => setUnfetched((was) => (was.has(src) ? new Set([...was].filter((s) => s !== src)) : was)), pictureRetryIn(tries));
+}
+if (typeof window !== "undefined") window.addEventListener("online", () => setUnfetched(new Set<string>()));
+
 /**
  * One of a server's emoji drawn as its picture: `:name:` (its present
- * name) is its tooltip and what assistive technology reads. One the client
- * does not hold is not drawn by this; it is its `:name:` as text.
+ * name) is its tooltip and what assistive technology reads. Where the
+ * picture cannot be drawn (not to be had, or not made yet) it is its name
+ * as text, and the picture is asked for again. One the client does not
+ * hold is not drawn by this; it is its `:name:` as text.
  */
 export function CustomEmoji(props: CustomEmojiProps) {
   const w = () => props.width || 1;
   const h = () => props.height || 1;
   const box = () => (typeof props.size === "number" ? props.size : undefined);
+  const drawable = () => !!props.drawing || (!!props.src && !unfetched().has(props.src));
   const pic = () => (
     <span class="lu-cemoji__pic" style={{ "aspect-ratio": `${w()} / ${h()}`, ...(box() ? (w() >= h() ? { width: "100%" } : { height: "100%" }) : {}) }}>
-      <Show when={props.drawing} fallback={<img src={props.src} alt="" draggable={false} />}>
+      <Show
+        when={props.drawing}
+        fallback={
+          <img
+            src={props.src}
+            alt=""
+            draggable={false}
+            onLoad={() => {
+              if (props.src) pictureTries.delete(props.src);
+            }}
+            onError={() => {
+              if (props.src) pictureFailed(props.src);
+            }}
+          />
+        }
+      >
         {props.drawing}
       </Show>
     </span>
   );
   return (
-    <span role="img" aria-label={`:${props.name}:`} title={`:${props.name}:`} class={cx("lu-cemoji", box() ? "lu-cemoji--box" : "lu-cemoji--text", props.class)} style={box() ? { width: box() + "px", height: box() + "px" } : undefined}>
-      {pic()}
+    <span
+      role="img"
+      aria-label={`:${props.name}:`}
+      title={`:${props.name}:`}
+      class={cx("lu-cemoji", box() ? "lu-cemoji--box" : "lu-cemoji--text", !drawable() && "lu-cemoji--said", props.class)}
+      style={box() ? { width: box() + "px", height: box() + "px" } : undefined}
+    >
+      <Show when={drawable()} fallback={<span class="lu-cemoji__said">{props.typed ?? `:${props.name}:`}</span>}>
+        {pic()}
+        {/* Not seen, but in the text: a selection holds the emoji as it was typed. */}
+        <Show when={props.typed}>{(typed) => <span class="lu-cemoji__typed">{typed()}</span>}</Show>
+      </Show>
     </span>
   );
 }

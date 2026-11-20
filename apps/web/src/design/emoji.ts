@@ -5,6 +5,11 @@
 // What this device chose most is kept here too, for "Frequently used": a
 // server's own emoji by their id (`customKey`), offered only in that server.
 
+/** How long before a server emoji's picture that could not be had is asked for again, the `tries`th time: twice as long each time, from 2 s to a minute. */
+export function pictureRetryIn(tries: number): number {
+  return Math.min(2_000 * 2 ** Math.max(0, tries - 1), 60_000);
+}
+
 /** The quick row over a message, and where "Frequently used" starts. */
 export const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 

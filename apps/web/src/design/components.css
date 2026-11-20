@@ -1216,11 +1216,18 @@ button.lu-role__open { cursor: pointer; }
 .lu-cemoji--text { height: 1.3em; vertical-align: -0.28em; }
 .lu-cemoji--text > .lu-cemoji__pic { height: 100%; }
 .lu-cemoji--box { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
-.lu-cemoji__pic { display: block; max-width: 100%; max-height: 100%; }
-.lu-cemoji__pic > img, .lu-cemoji__pic > svg { display: block; width: 100%; height: 100%; }
+/* Inline blocks, not blocks: a block inside the text would stand for a line break in what a selection copies. */
+.lu-cemoji__pic { display: inline-block; vertical-align: top; max-width: 100%; max-height: 100%; }
+.lu-cemoji__pic > img, .lu-cemoji__pic > svg { display: inline-block; vertical-align: top; width: 100%; height: 100%; }
+/* What was typed, in the text and never seen: a selection, a quote and a copy hold it. */
+.lu-cemoji--text { position: relative; }
+.lu-cemoji__typed { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* A picture that cannot be drawn: its name in words, as one not held is; in a box, as much as fits. */
+.lu-cemoji--text.lu-cemoji--said { display: inline; height: auto; vertical-align: baseline; }
+.lu-cemoji--box > .lu-cemoji__said { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--ink-muted); }
 /* In a chip: the chip's emoji height, as wide as its shape. */
 .lu-cemoji--text.lu-reaction__custom { height: 18px; vertical-align: middle; }
-.lu-reaction__name { font-size: 12.5px; font-weight: 600; }
+.lu-reaction__name, .lu-reaction__custom > .lu-cemoji__said { font-size: 12.5px; font-weight: 600; }
 /* The picker as a phone's sheet: the sheet is its surface. */
 .lu-emojipicker--sheet { width: auto; height: 600px; border: 0; border-radius: 0; box-shadow: none; background: none; }
 .lu-emojilist__pic { flex: none; display: flex; }

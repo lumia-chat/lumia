@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ClientError } from "./bridge";
-import { NAME_RULE, TOO_LARGE, colonAt, emojiCount, emojiFull, emojiRefusal, emojiSubtitle, removeTitle, sizeWords, spliced, typedEmoji } from "./emoji";
-import { customKey, frequentEmoji } from "../design/emoji";
+import { NAME_RULE, TOO_LARGE, colonAt, emojiCount, emojiFull, emojiListed, emojiRefusal, emojiSubtitle, removeTitle, sizeWords, spliced, typedEmoji } from "./emoji";
+import { customKey, frequentEmoji, pictureRetryIn } from "../design/emoji";
 
 describe("the composer's : list", () => {
   test("opens on a colon at the start or after a space, with what follows it", () => {
@@ -50,14 +50,25 @@ describe("the Emoji section", () => {
   test("counts against the limit", () => {
     expect(emojiCount(12, 50)).toBe("12 of 50");
     expect(emojiCount(1200, 5000)).toBe("1,200 of 5,000");
-    expect(emojiCount(3, 0)).toBe("3");
   });
 
-  test("is full at the limit and over it, never without one", () => {
+  test("is full at the limit and over it", () => {
     expect(emojiFull(49, 50)).toBe(false);
     expect(emojiFull(50, 50)).toBe(true);
     expect(emojiFull(52, 50)).toBe(true);
-    expect(emojiFull(9, 0)).toBe(false);
+  });
+
+  test("a limit of none is a server with no room, not one with no limit", () => {
+    // The instance takes `emoji-limit <server> 0` and then refuses every upload (specs/emoji.md 5).
+    expect(emojiCount(0, 0)).toBe("0 of 0");
+    expect(emojiCount(3, 0)).toBe("3 of 0");
+    expect(emojiFull(0, 0)).toBe(true);
+    expect(emojiFull(9, 0)).toBe(true);
+    // Removing one lets none in at a limit of 0, so nothing says to; it does where removing one would.
+    expect(emojiSubtitle("Acme", 0, 0)).toBe("Acme has as many emoji as it may (0).");
+    expect(emojiSubtitle("Acme", 2, 0)).toBe("Acme has as many emoji as it may (0).");
+    expect(emojiRefusal(new ClientError("api error RESOURCE_EXHAUSTED: full details=state=emoji,limit=0"), "Acme", "x").text).toBe("Acme has as many emoji as it may (0).");
+    expect(emojiSubtitle("Acme", 3, 2)).toBe("Acme has as many emoji as it may (2). Remove one to upload another.");
   });
 
   test("says what an emoji is, or at the limit that the server has as many as it may", () => {
@@ -102,6 +113,52 @@ describe("a refusal in the boards' words", () => {
     expect(emojiRefusal(refused("api error PERMISSION_DENIED: no"), "Acme", "x").on).toBe("section");
     expect(emojiRefusal(refused("api error NOT_FOUND: gone"), "Acme", "x").text).toBe("That emoji has been removed.");
     expect(emojiRefusal(new Error("offline"), "Acme", "x")).toEqual({ on: "section", text: "offline" });
+  });
+});
+
+describe("the : list's answer", () => {
+  const parrot = { id: "e1", name: "parrot" };
+  const dance = { id: "e2", name: "dance" };
+  const held = new Map([
+    ["e1", parrot],
+    ["e2", dance],
+  ]);
+  const answer = { server: "s1", query: "pa", held, list: [{ emojiId: "e1" }, { emojiId: "e2" }] };
+
+  test("is listed for the server, prefix and emoji it was asked for, each as held now", () => {
+    expect(emojiListed(answer, { server: "s1", query: "pa", held })).toEqual([parrot, dance]);
+  });
+
+  test("lists nothing while a lookup for what is now typed is on its way", () => {
+    expect(emojiListed(answer, { server: "s1", query: "pax", held })).toEqual([]);
+    expect(emojiListed(answer, { server: "s1", query: "p", held })).toEqual([]);
+  });
+
+  test("lists nothing in another server's conversation", () => {
+    expect(emojiListed(answer, { server: "s2", query: "pa", held })).toEqual([]);
+  });
+
+  test("lists nothing once the server's emoji have changed, until it is asked again", () => {
+    const renamed = new Map([...held, ["e1", { id: "e1", name: "bird" }]]);
+    expect(emojiListed(answer, { server: "s1", query: "pa", held: renamed })).toEqual([]);
+  });
+
+  test("never offers one the server no longer has", () => {
+    const removed = new Map([["e2", dance]]);
+    expect(emojiListed({ ...answer, held: removed }, { server: "s1", query: "pa", held: removed })).toEqual([dance]);
+  });
+
+  test("nothing before any answer", () => {
+    expect(emojiListed(null, { server: "s1", query: "pa", held })).toEqual([]);
+  });
+});
+
+describe("a picture that could not be had", () => {
+  test("is asked for again, later each time, and at least once a minute", () => {
+    expect(pictureRetryIn(1)).toBe(2_000);
+    expect(pictureRetryIn(2)).toBe(4_000);
+    expect(pictureRetryIn(3)).toBe(8_000);
+    expect(pictureRetryIn(20)).toBe(60_000);
   });
 });
 

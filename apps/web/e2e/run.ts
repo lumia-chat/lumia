@@ -6,7 +6,7 @@
 //
 //   bun run e2e              # both browsers
 //   bun run e2e -- webkit    # one
-import { chromium, webkit, type BrowserContext, type Page } from "playwright";
+import { chromium, webkit, type BrowserContext, type Locator, type Page } from "playwright";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
@@ -1600,10 +1600,19 @@ async function rolesStep(which: string, stamp: number) {
 // with no reload: in the picker's section and its search, reacting with
 // one; in the composer's `:` list, sending a message that draws both as
 // pictures; through the composer's emoji button, which puts them in at the
-// caret and stays open; the animated one still under reduced motion. Then
-// a rename, which the member's message and chip follow by the new name,
-// and a removal, after which the message reads as it was typed and the
-// chip as `:name:`, still taken back.
+// caret and stays open; the animated one still under reduced motion. The
+// `:` list picks nothing for what was typed before while the lookup for
+// what is typed now is on its way, and a selection of the message holds
+// each emoji as it was typed, whole and in part (the clipboard too, in
+// Chromium). Then a rename, which the member's message and chip follow by
+// the new name, and a removal, after which the message reads as it was
+// typed, the chip as `:name:`, still taken back, and the `:` list open on it
+// no longer offers it. Pictures that cannot be fetched are their names and
+// are drawn once they can be, an animated one's first frame under reduced
+// motion too. Last, a fresh browser reads the channel back past its store
+// into the instance's history, where a reaction with an emoji renamed and
+// then removed reads as it was last called, and the composer's picker,
+// open through both, follows them.
 async function emojiStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-emoji-owner-${which}`);
   const memberDir = resolve(work, `cli-emoji-member-${which}`);
@@ -1646,8 +1655,26 @@ async function emojiStep(which: string, stamp: number) {
     return text ? JSON.parse(text) : undefined;
   };
   const listed = async () => ((await asOwner("GET", `/servers/${server}/emoji`)) as { emoji?: { emojiId: string; name: string }[] }).emoji ?? [];
+  const must = (ok: boolean, said: string) => {
+    if (!ok) throw new Error(said);
+  };
+  const until = async (ok: () => Promise<boolean>, ms: number) => {
+    for (const end = Date.now() + ms; Date.now() < end; await Bun.sleep(100)) if (await ok()) return true;
+    return ok();
+  };
+  // Each server emoji drawn in a row: its picture drawn, or its name in words; never a blank.
+  const blanks = (row: Locator) =>
+    row.evaluate((el) =>
+      [...el.querySelectorAll(".lu-cemoji")].filter((c) => {
+        const img = c.querySelector("img");
+        const drawn = !!img && img.complete && img.naturalWidth > 0 && !!img.getAttribute("src");
+        const said = [...c.querySelectorAll(".lu-cemoji__said")].some((s) => s.getBoundingClientRect().width > 8);
+        return !drawn && !said;
+      }).length,
+    );
 
   const t0 = Date.now();
+  let reader: { ctx: BrowserContext; page: Page } | null = null;
   // Chromium: the owner's browser beside the member's. WebKit: the member's alone.
   const mine = which === "chromium" ? await open(which, "emoji-owner") : null;
   const theirs = await open(which, "emoji-member");
@@ -1735,6 +1762,60 @@ async function emojiStep(which: string, stamp: number) {
     // At the height of an emoji in the text, as wide as its shape (both square).
     const box = await sent.getByRole("img", { name: ":party_parrot:" }).boundingBox();
     if (!box || box.height < 15 || box.height > 30 || Math.abs(box.width - box.height) > 1) throw new Error(`the emoji in the text is ${box?.width} by ${box?.height}`);
+
+    phase("the : list as typed");
+    // The list answers what was typed when it was asked: a key pressed before the answer to what is
+    // typed now has come back picks nothing from the list for what was typed before.
+    await composer.fill(":da");
+    await page.getByRole("option", { name: ":dance:" }).waitFor();
+    await composer.evaluate((el: HTMLTextAreaElement) => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(el, ":dax");
+      el.setSelectionRange(4, 4);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    });
+    await Bun.sleep(300);
+    must((await composer.inputValue()) === ":dax", `Tab while ":dax" was being looked up put in ${JSON.stringify(await composer.inputValue())}, from the list for ":da"`);
+    await composer.fill("");
+
+    phase("copied");
+    // A selection of the text holds each emoji as it was typed, for a quote and a copy.
+    const body = sent.locator(".lu-msg__body");
+    const selected = await body.evaluate((el) => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const s = document.getSelection();
+      s?.removeAllRanges();
+      s?.addRange(range);
+      return s?.toString().trim() ?? "";
+    });
+    must(selected === "Look :party_parrot: at 10:30 :dance:", `the selected text reads ${JSON.stringify(selected)}`);
+    if (which === "chromium") {
+      await theirs.ctx.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await page.keyboard.press("ControlOrMeta+c");
+      const copied = (await page.evaluate(() => navigator.clipboard.readText())).trim();
+      must(copied === "Look :party_parrot: at 10:30 :dance:", `the copied text reads ${JSON.stringify(copied)}`);
+    }
+    // Part of it, as Quote reply takes it: from inside the first emoji's name to the word after it.
+    const part = await body.evaluate((el) => {
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const texts: Text[] = [];
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) texts.push(n as Text);
+      const first = texts.find((t) => t.data.includes("Look"));
+      const last = texts.find((t) => t.data.includes("at 10:30"));
+      if (!first || !last) return `no text: ${texts.map((t) => t.data).join("|")}`;
+      const range = document.createRange();
+      range.setStart(first, first.data.indexOf("Look") + 2);
+      range.setEnd(last, last.data.indexOf("at 10:30") + 2);
+      const s = document.getSelection();
+      s?.removeAllRanges();
+      s?.addRange(range);
+      const said = s?.toString() ?? "";
+      s?.removeAllRanges();
+      return said;
+    });
+    must(part === "ok :party_parrot: at", `part of the text selected reads ${JSON.stringify(part)}`);
     if (mine) {
       // The owner's browser draws the member's message the same.
       await mine.page.getByRole("link", { name: "general" }).click();
@@ -1792,6 +1873,9 @@ async function emojiStep(which: string, stamp: number) {
     await chip("parrot").waitFor();
 
     phase("remove");
+    // The : list open on it as it goes: it is not offered once the server no longer has it.
+    await composer.fill(":par");
+    await page.getByRole("option", { name: ":parrot:" }).waitFor();
     if (mine) {
       const o = mine.page;
       await o.getByRole("button", { name: "Remove :parrot:" }).click();
@@ -1815,14 +1899,93 @@ async function emojiStep(which: string, stamp: number) {
     const named = (await left.locator(".lu-reaction__name").textContent())?.trim();
     if (named !== ":parrot:") throw new Error(`the removed emoji's chip reads ${named}, not the name it had when it was removed`);
     if ((await left.locator("img").count()) !== 0) throw new Error("the removed emoji's chip still draws a picture");
+    const stillOffered = await until(async () => (await page.getByRole("option", { name: ":parrot:" }).count()) === 0, 5_000);
+    must(stillOffered, "the : list still offers :parrot: after its removal");
+    await composer.fill("");
     await page.screenshot({ path: `${out}/${which}-emoji-after.png` });
     await left.click();
     await left.waitFor({ state: "detached" });
+
+    phase("pictures not had");
+    // A picture the browser could not fetch is the emoji's name, and is asked for again; under reduced
+    // motion, an animated one's first frame the same.
+    let failing = true;
+    await theirs.ctx.route("**/api/v1/avatars/**", (route) => (failing ? route.abort("connectionrefused") : route.continue()));
+    await asOwner("POST", `/servers/${server}/emoji?name=blink`, undefined, png(48, [30, 90, 220]));
+    await asOwner("POST", `/servers/${server}/emoji?name=wave`, undefined, animated);
+    // Once the member's browser holds both, a message with them.
+    await until(async () => {
+      await composer.fill(":wav");
+      return (await page.getByRole("option", { name: ":wave:" }).count()) > 0;
+    }, 15_000);
+    await composer.fill("");
+    lumia(memberDir, "send", general, "Broken :blink: and :wave:");
+    const broken = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Broken" }) });
+    await broken.locator(".lu-cemoji").nth(1).waitFor();
+    await Bun.sleep(1_000);
+    must((await blanks(broken)) === 0, `with no pictures to be had, ${await blanks(broken)} of the message's emoji are blank`);
+    await page.screenshot({ path: `${out}/${which}-emoji-unfetched.png` });
+    failing = false;
+    must(await until(async () => (await broken.locator(".lu-cemoji img[src]").evaluateAll((imgs) => imgs.filter((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0).length)) === 2, 20_000), "the pictures were not asked for again once they could be had");
+    failing = true;
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await Bun.sleep(1_000);
+    const waved = broken.getByRole("img", { name: ":wave:" });
+    must((await blanks(broken)) === 0, `under reduced motion, with no first frame to be had, ${await blanks(broken)} of the message's emoji are blank`);
+    failing = false;
+    must(await until(async () => !!(await waved.locator("img").getAttribute("src").catch(() => null))?.startsWith("blob:"), 20_000), "the animated emoji's first frame was not made once its picture could be had");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await theirs.ctx.unroute("**/api/v1/avatars/**");
+
+    phase("scrollback");
+    // The instance's history the page holds, read past the store, follows a rename and a removal: a
+    // reaction with an emoji removed reads as the emoji was last called.
+    await message.hover();
+    await message.getByRole("toolbar", { name: "Message actions" }).getByRole("button", { name: "Add reaction" }).click();
+    await picker.getByLabel("Search emoji").fill("dance");
+    await picker.getByRole("button", { name: ":dance:" }).click();
+    await chip("dance").waitFor();
+    // More messages after it than the instance replays to a new device (1,000 events), so a store
+    // begun now starts from the channel's snapshot of its last fifty, well after it.
+    lumia(ownerDir, "send", general, "filler {n}", "--count", "1010");
+    await theirs.ctx.close();
+    reader = await open(which, "emoji-reader");
+    const rp = reader.page;
+    live.page = rp;
+    await signIn(rp, member);
+    const old = rp.locator(".lu-msglist .lu-msg__part", { has: rp.locator(".lu-msg__body", { hasText: "Reporting in." }) });
+    const list = rp.locator(".lu-msglist").first();
+    for (let i = 0; i < 80 && (await old.count()) === 0; i++) {
+      await list.evaluate((el) => el.scrollTo({ top: -el.scrollHeight }));
+      await rp.waitForTimeout(250);
+    }
+    const oldChip = (name: string) => old.getByRole("button", { name: `You reacted with :${name}:` });
+    await oldChip("dance").waitFor();
+    // The composer's picker, open through both, offers the emoji by its present name and then not at all.
+    await rp.getByRole("button", { name: "Emoji", exact: true }).click();
+    const choices = rp.getByRole("dialog", { name: "Emoji" });
+    await choices.getByLabel("Search emoji").fill("danc");
+    await choices.getByRole("button", { name: ":dance:", exact: true }).waitFor();
+    const dancing = (await listed()).find((e) => e.name === "dance");
+    if (!dancing) throw new Error("no dance listed");
+    await asOwner("PATCH", `/servers/${server}/emoji/${dancing.emojiId}`, { name: "dancer" });
+    await oldChip("dancer").waitFor();
+    await choices.getByRole("button", { name: ":dancer:", exact: true }).waitFor();
+    if ((await choices.getByRole("button", { name: ":dance:", exact: true }).count()) !== 0) throw new Error("the picker still offers :dance: after its rename");
+    await asOwner("DELETE", `/servers/${server}/emoji/${dancing.emojiId}`);
+    await choices.getByRole("button", { name: ":dancer:", exact: true }).waitFor({ state: "detached" });
+    await rp.keyboard.press("Escape");
+    const gone = old.locator(".lu-reaction", { has: rp.locator(".lu-reaction__name") });
+    await gone.waitFor();
+    const lastName = await until(async () => (await gone.locator(".lu-reaction__name").textContent())?.trim() === ":dancer:", 10_000);
+    must(lastName, `in the instance's history, the removed emoji's chip reads ${(await gone.locator(".lu-reaction__name").textContent())?.trim()}, not the name it had when it was removed`);
+    await rp.screenshot({ path: `${out}/${which}-emoji-scrollback.png` });
   } finally {
     await theirs.ctx.close();
+    await reader?.ctx.close();
     await mine?.ctx.close();
   }
-  console.log(`  ${which}: ${mine ? "uploaded a still and an animated emoji from Server settings, refused a name taken" : "had the owner upload a still and an animated emoji over HTTP"}, found them in the member's picker and its search with no reload, reacted with one, completed both from the : list and sent them drawn as pictures, put one and a Unicode emoji in from the composer's button with the keyboard kept in the field, drew the animated one still under reduced motion, followed a rename in the message and the chip, and after a removal read the message as typed and the chip as its :name:, taken back, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: ${mine ? "uploaded a still and an animated emoji from Server settings, refused a name taken" : "had the owner upload a still and an animated emoji over HTTP"}, found them in the member's picker and its search with no reload, reacted with one, completed both from the : list and sent them drawn as pictures, put one and a Unicode emoji in from the composer's button with the keyboard kept in the field, drew the animated one still under reduced motion, followed a rename in the message and the chip, picked nothing stale from the : list, selected and copied each emoji as typed, and after a removal read the message as typed, the chip as its :name:, taken back, and the : list no longer offering it, drew pictures not to be had as their names and then as pictures, still ones too, and read a reaction renamed and removed in the instance's history by its last name, in ${Date.now() - t0} ms`);
 }
 
 // The middle button held over a pane and moved up from where it came down

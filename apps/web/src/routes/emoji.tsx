@@ -12,22 +12,26 @@ import type { EmojiSummary, MemberSummary, ServerSummary, SnapshotSummary } from
 import { EMOJI_UPLOAD_MAX, NAME_RULE, REMOVE_QUESTION, TOO_LARGE, emojiCount, emojiFull, emojiRefusal, emojiSubtitle, removeTitle, sizeWords } from "../client/emoji";
 import { avatarSrc, client, queryClient } from "../client/state";
 import { memberName } from "./roles";
+import { pictureRetryIn } from "../design/emoji";
 
 // Whether the system asks for reduced motion, followed as it changes.
 const motion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 const [reduced, setReduced] = createSignal(!!motion?.matches);
 motion?.addEventListener("change", () => setReduced(motion.matches));
 
-// The first frames made, by picture address, as Blob URLs; and the addresses asked for.
+// The first frames made, by picture address, as Blob URLs; the addresses asked for; and how
+// many times each that could not be made has been tried.
 const [stills, setStills] = createSignal<ReadonlyMap<string, string>>(new Map());
 const making = new Set<string>();
+const stillTries = new Map<string, number>();
 
 /**
  * An animated picture's first frame as a still picture, made once an
  * address: the GIF fetched (the instance serves it to this origin) and
  * decoded as a bitmap, which is its first frame, drawn on a canvas.
- * Undefined until it is made, and for good where it cannot be, so nothing
- * moves where motion was asked to stop.
+ * Undefined until it is made, so nothing moves where motion was asked to
+ * stop (the emoji is its name meanwhile); one that could not be made is
+ * tried again later, each time later than the last.
  */
 function stillOf(src: string): string | undefined {
   const made = stills().get(src);
@@ -46,16 +50,30 @@ function stillOf(src: string): string | undefined {
     canvas.getContext("2d")?.drawImage(frame, 0, 0);
     frame.close();
     const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-    if (!png || !making.has(src)) return;
+    if (!png) throw new Error(`no still made of ${src}`);
+    if (!making.has(src)) return;
+    stillTries.delete(src);
     const url = URL.createObjectURL(png);
     setStills((was) => new Map(was).set(src, url));
-  })().catch((e) => console.warn("emoji still:", e));
+  })().catch((e) => {
+    console.warn("emoji still:", e);
+    const tries = (stillTries.get(src) ?? 0) + 1;
+    stillTries.set(src, tries);
+    setTimeout(() => {
+      // Let go of meanwhile (no server lists it): nothing to ask again.
+      if (!making.has(src)) return;
+      making.delete(src);
+      // Whoever draws it reads `stills` again, and so asks for it again.
+      setStills((was) => new Map(was));
+    }, pictureRetryIn(tries));
+  });
   return undefined;
 }
 
 /** Lets go of the first frames made for pictures no server lists any longer (removed emoji): `listed` is every picture address still listed. */
 export function forgetStills(listed: ReadonlySet<string>): void {
   for (const src of [...making]) if (!listed.has(src)) making.delete(src);
+  for (const src of [...stillTries.keys()]) if (!listed.has(src)) stillTries.delete(src);
   const kept = stills();
   if ([...kept.keys()].every((src) => listed.has(src))) return;
   const next = new Map<string, string>();

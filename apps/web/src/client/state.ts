@@ -8,6 +8,7 @@ import { createSignal } from "solid-js";
 import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
 import type { DraftStore } from "./drafts";
 import { type Ended, endedNotice } from "./ended";
+import { type History, historyAgain, namesLeft } from "./history";
 import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 import { redressed } from "./roles";
 
@@ -403,6 +404,8 @@ export async function signOut(): Promise<void> {
 function forgetPage(): void {
   queryClient.clear();
   history.clear();
+  historySettled.clear();
+  historyTurns.clear();
   storedCount.clear();
   setMessagePages(new Map());
   profiles.clear();
@@ -464,14 +467,21 @@ function onGatewayEvent(e: ClientEvent): void {
       // What the core keeps has the change already: the members are read from it, and nothing is asked.
       void membersKept(e.serverId);
       break;
-    case "emojiChanged":
+    case "emojiChanged": {
       // The same: the server's emoji are read from what the core keeps and written into the snapshot held.
-      void emojiKept(e.serverId);
+      const serverId = e.serverId;
       // The core has named the kept reactions with each anew (specs/emoji.md 7), so one left after a
-      // later removal reads as it was last called: the messages shown are read again from the store.
+      // later removal reads as it was last called: the messages shown are read again from the store,
+      // every page of them, and the Mentions pages from the instance. What the instance gave of the
+      // history before the store begins the core does not keep, so it is read again from the
+      // instance where it holds a reaction named by an emoji since removed (`historyAfterEmoji`).
+      void emojiKept(serverId)
+        .then(() => historyAfterEmoji(serverId))
+        .catch((err) => console.warn("emoji:", err));
       void queryClient.invalidateQueries({ queryKey: ["messages"] });
       void queryClient.invalidateQueries({ queryKey: ["mentions"] });
       break;
+    }
     case "profileUpdated":
       // Written in where the page holds the person, not asked again (issue #15),
       // and kept for a list already being fetched, whose answer may be older.
@@ -807,11 +817,54 @@ const MESSAGE_PAGE = 200;
 const [messagePages, setMessagePages] = createSignal<Map<string, number>>(new Map());
 
 /** What the instance gave of a channel's history from before the store begins (`olderMessages`), oldest first, and whether older remains. Kept for the page's life, not stored, as the desktop shell keeps it. */
-type History = { messages: MessageSummary[]; more: boolean };
 const history = new Map<string, History>();
 /** How many messages the store gave for a channel at its last read: fewer than asked means it has no older. */
 const storedCount = new Map<string, number>();
 const loadingOlder = new Set<string>();
+/** By channel, the removed emoji whose reactions in its history have been read again by the name each had when it went, which does not change after. */
+const historySettled = new Map<string, Set<string>>();
+/** One read of a channel's history at a time: a page further back, or the whole read again. */
+const historyTurns = new Map<string, Promise<unknown>>();
+
+function inHistoryTurn<T>(channelId: string, f: () => Promise<T>): Promise<T> {
+  const run = (historyTurns.get(channelId) ?? Promise.resolve()).then(f, f);
+  historyTurns.set(
+    channelId,
+    run.catch(() => {}),
+  );
+  return run;
+}
+
+/**
+ * After a server's emoji changed, with the snapshot holding them as they
+ * now are: each channel of that server whose history from the instance
+ * holds a reaction named by an emoji the server no longer lists (removed
+ * since that page was read, so drawn by the name the instance gave then) is
+ * read again from the instance over the span held, which names it by the
+ * name it had when it went (specs/emoji.md 7). An emoji still listed is
+ * drawn by its present name and needs nothing.
+ */
+async function historyAfterEmoji(serverId: string): Promise<void> {
+  const snapshot = queryClient.getQueryData<SnapshotSummary>(["snapshot"]);
+  const live = new Set((snapshot?.servers ?? []).flatMap((s) => s.emoji.map((x) => x.emojiId)));
+  for (const channelId of [...history.keys()]) {
+    // A channel not in the snapshot (one read from Browse) may be this server's.
+    const where = snapshot?.channels.find((c) => c.channelId === channelId)?.serverId;
+    if (where && where !== serverId) continue;
+    await inHistoryTurn(channelId, async () => {
+      const kept = history.get(channelId);
+      const settled = historySettled.get(channelId) ?? new Set<string>();
+      const left = kept ? namesLeft(kept.messages, live, settled) : [];
+      if (!kept || !left.length) return;
+      const again = await historyAgain(kept, (before, limit) => client().olderMessages(channelId, before, limit), MESSAGE_PAGE);
+      // Let go of meanwhile (signed out).
+      if (history.get(channelId) !== kept) return;
+      history.set(channelId, again);
+      historySettled.set(channelId, new Set([...settled, ...left]));
+      await queryClient.refetchQueries({ queryKey: ["messages", channelId] });
+    }).catch((err) => console.warn("history read again:", err));
+  }
+}
 
 /** What the instance takes of attachments (specs/media.md 2), asked once a session; null where it keeps none, and nothing can be attached. */
 export function uploadLimitsQuery() {
@@ -856,6 +909,14 @@ export async function loadOlderMessages(channelId: string): Promise<boolean> {
   if (loadingOlder.has(channelId)) return false;
   loadingOlder.add(channelId);
   try {
+    return await inHistoryTurn(channelId, () => olderPage(channelId));
+  } finally {
+    loadingOlder.delete(channelId);
+  }
+}
+
+async function olderPage(channelId: string): Promise<boolean> {
+  try {
     const pages = messagePages().get(channelId) ?? 1;
     const stored = storedCount.get(channelId) ?? 0;
     if (stored >= MESSAGE_PAGE * pages) {
@@ -876,8 +937,6 @@ export async function loadOlderMessages(channelId: string): Promise<boolean> {
     // Not asked again until the page is reloaded.
     history.set(channelId, { messages: history.get(channelId)?.messages ?? [], more: false });
     return false;
-  } finally {
-    loadingOlder.delete(channelId);
   }
 }
 

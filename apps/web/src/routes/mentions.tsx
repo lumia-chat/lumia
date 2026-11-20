@@ -107,7 +107,7 @@ export function MentionsPage(props: MentionsPageProps) {
                         }}
                         emoji={(index, typed) => (
                           <Show when={held().get(m.emoji?.[index]?.emojiId ?? "")} fallback={typed}>
-                            {(e) => <CustomEmoji {...e()} />}
+                            {(e) => <CustomEmoji {...e()} typed={typed} />}
                           </Show>
                         )}
                         edited={m.edited}

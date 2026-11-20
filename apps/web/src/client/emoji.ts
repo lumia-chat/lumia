@@ -34,26 +34,53 @@ export function typedEmoji(name: string): string {
   return `:${name}: `;
 }
 
-/** "12 of 50": a server's emoji against its limit; the count alone where the instance names no limit. */
+/**
+ * "12 of 50": a server's emoji against its limit. The instance always names
+ * the limit that applies (`Server.emoji_limit`, specs/emoji.md 5), so 0 is a
+ * server with no room ("0 of 0"), never one without a limit.
+ */
 export function emojiCount(count: number, limit: number): string {
-  const n = count.toLocaleString("en-US");
-  return limit > 0 ? `${n} of ${limit.toLocaleString("en-US")}` : n;
+  return `${count.toLocaleString("en-US")} of ${limit.toLocaleString("en-US")}`;
 }
 
-/** Whether a server has as many emoji as it may: Upload is off. */
+/** Whether a server has as many emoji as it may, a limit of 0 included: Upload is off. */
 export function emojiFull(count: number, limit: number): boolean {
-  return limit > 0 && count >= limit;
+  return count >= limit;
 }
 
 /** The Emoji section's subtitle: what an emoji is and what a picture may be, or, at the limit, that the server has as many as it may. */
 export function emojiSubtitle(server: string, count: number, limit: number): string {
   return emojiFull(count, limit)
-    ? fullWords(server, limit)
+    ? fullWords(server, limit, count)
     : `Used as :name: in ${server}’s channels and server DMs, and as reactions. A PNG, JPEG, WebP or GIF up to 8 MB, made to fit 128 pixels; an animated one plays.`;
 }
 
-function fullWords(server: string, limit: number): string {
-  return `${server} has as many emoji as it may (${limit.toLocaleString("en-US")}). Remove one to upload another.`;
+// Where removing one would not let another in (a limit of 0) or there is none to remove, nothing says to remove one.
+function fullWords(server: string, limit: number, count?: number): string {
+  const said = `${server} has as many emoji as it may (${limit.toLocaleString("en-US")}).`;
+  return limit === 0 || count === 0 ? said : `${said} Remove one to upload another.`;
+}
+
+/** What the core answered for the `:` list, and for what: the server, the prefix typed and the server's emoji as held when it was asked. */
+export interface EmojiAnswer<E> {
+  server: string;
+  query: string;
+  held: ReadonlyMap<string, E>;
+  list: { emojiId: string }[];
+}
+
+/**
+ * The `:` list as it may be offered now: an answer only for the server,
+ * prefix and emoji held it was asked for (while the lookup for what is typed
+ * now is on its way, or after the server's emoji changed, nothing), each as
+ * held now, and none the server no longer has.
+ */
+export function emojiListed<E>(answer: EmojiAnswer<E> | null, now: { server: string; query: string; held: ReadonlyMap<string, E> }): E[] {
+  if (!answer || answer.server !== now.server || answer.query !== now.query || answer.held !== now.held) return [];
+  return answer.list.flatMap((e) => {
+    const held = now.held.get(e.emojiId);
+    return held ? [held] : [];
+  });
 }
 
 /** The words for a name a name may not be. */
