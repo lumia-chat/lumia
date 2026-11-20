@@ -875,9 +875,26 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 }),
                 None => None,
             };
+            // The server's custom emoji the body names, found as the app finds them
+            // (specs/emoji.md 6); none for a personal conversation.
+            let emoji_names = if body.contains(':') {
+                server_emoji_names(&api, &channel).await?
+            } else {
+                Vec::new()
+            };
             let ops = (0..count.max(1))
                 .map(|n| {
                     let body = body.replace("{n}", &n.to_string());
+                    let emoji = lumia_core::emoji::find_refs(&body, &emoji_names)
+                        .into_iter()
+                        .filter_map(|(range, id)| {
+                            Some(lumia_core::proto::EmojiRef {
+                                emoji_id: id,
+                                start: u32::try_from(range.start).ok()?,
+                                end: u32::try_from(range.end).ok()?,
+                            })
+                        })
+                        .collect();
                     let card_urls = if cards {
                         lumia_core::cards::card_links(&body)
                     } else {
@@ -889,6 +906,7 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                         reply_to: reply_to.clone(),
                         attachments: attachments.clone(),
                         card_urls,
+                        emoji,
                         ..Default::default()
                     })
                 })
@@ -1964,6 +1982,29 @@ fn save_tokens(ctx: &mut Ctx, tokens: &lumia_core::proto::TokenPair) -> Result<(
     ctx.keystore
         .put("refresh_token", tokens.refresh_token.as_bytes())?;
     Ok(())
+}
+
+/// The live custom emoji of the server `channel` belongs to, as `(name, id)`, from the
+/// account snapshot; none when the channel is no server's.
+async fn server_emoji_names(
+    api: &Api,
+    channel: &[u8],
+) -> Result<Vec<(String, Vec<u8>)>, ClientError> {
+    let snap = api.account_snapshot().await?;
+    let Some(server_id) = snap
+        .channels
+        .iter()
+        .find(|c| c.channel_id == channel && !c.server_id.is_empty())
+        .map(|c| c.server_id.clone())
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(snap
+        .emoji
+        .into_iter()
+        .filter(|e| e.server_id == server_id)
+        .map(|e| (e.name, e.emoji_id))
+        .collect())
 }
 
 /// Processes, seals and uploads each file into `channel` (specs/media.md 3, 4.1).
