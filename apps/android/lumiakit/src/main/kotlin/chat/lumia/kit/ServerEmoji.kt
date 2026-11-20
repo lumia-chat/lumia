@@ -1,9 +1,12 @@
 // A server's own emoji on the phone (specs/emoji.md, GitHub #17, plan
 // step 12), as plain values `src/test` checks on the JVM: what the phone
-// draws for one (its picture by address, its name, its shape), what the
-// picker's "Frequently used" holds in a server and out of one, the `:word`
-// at the composer's caret and what choosing from its list or the picker
-// puts in, and the words of the Emoji section of Server settings and of
+// draws for one (its picture by address, its name, its shape, its name
+// where its picture could not be had and when that is asked for again),
+// the server's emoji as the core holds them written into the snapshot,
+// what the picker's "Frequently used" holds in a server and out of one,
+// the `:word` at the composer's caret and what choosing from its list or
+// the picker puts in, checked against the core's emoji at the tap, and
+// the words of the Emoji section of Server settings and of
 // its refusals, the boards' ("Emoji settings", "Emoji on phones"). Every
 // rule the core has is the core's: which names a prefix matches
 // (`Client.emojiMatches`), a name from a file's (`emojiNameFromFile`),
@@ -11,7 +14,9 @@
 // at send) and the runs a body is drawn with (`parseBodyMarked`).
 package chat.lumia.kit
 
+import androidx.compose.runtime.mutableStateMapOf
 import uniffi.lumia_ffi.EmojiSummary
+import uniffi.lumia_ffi.SnapshotSummary
 
 // What the phone draws
 
@@ -35,6 +40,100 @@ fun drawnEmoji(emoji: EmojiSummary, pictureOf: (String) -> String?): DrawnEmoji?
 
 /** An emoji in text is drawn this many times the text's size tall, as wide as its shape (the boards' 1.3 em). */
 const val EMOJI_IN_TEXT = 1.3f
+
+/** How long after the first failure in a row an emoji's picture is asked for again; each failure after it doubles that. */
+const val EMOJI_RETRY_FIRST_MS = 2_000L
+
+/** The longest an emoji's picture waits to be asked for again. */
+const val EMOJI_RETRY_MAX_MS = 60_000L
+
+/** How long after its [failures]th failure in a row a picture is asked for again: 2 s, 4 s, 8 s and so on, at most a minute. */
+fun emojiRetryMs(failures: Int): Long =
+    (EMOJI_RETRY_FIRST_MS shl (failures - 1).coerceIn(0, 10)).coerceAtMost(EMOJI_RETRY_MAX_MS)
+
+/**
+ * The emoji pictures that could not be had, by address: the fetch failed
+ * or what came could not be decoded. One of them is its `:name:` where its
+ * picture would be (specs/emoji.md 6: an emoji the phone cannot draw reads
+ * as its name, never as an empty place), and is asked for again
+ * ([emojiRetryMs] after the last failure) for as long as something on
+ * screen still wants it; nothing asks for one no screen shows. A failure
+ * while one already waits (two places asking at once) is the same
+ * failure. A picture had takes it off. Compose state, so what draws one as
+ * its name draws it as its picture once it comes.
+ */
+class EmojiMisses(private val clock: () -> Long = System::currentTimeMillis) {
+    private class Miss(val count: Int, val at: Long)
+
+    private val misses = mutableStateMapOf<String, Miss>()
+
+    /** The picture at [address] could not be had. */
+    fun missed(address: String) {
+        val miss = misses[address]
+        if (miss != null && waitMs(address) > 0) return
+        misses[address] = Miss((miss?.count ?: 0) + 1, clock())
+    }
+
+    /** The picture at [address] was had. */
+    fun had(address: String) {
+        misses.remove(address)
+    }
+
+    /** Whether the picture at [address] could not be had when last asked for: its emoji is drawn as its name. */
+    fun missing(address: String): Boolean = address in misses
+
+    /** How long until the picture at [address] may be asked for again; 0 for now, and for one that never failed. */
+    fun waitMs(address: String): Long {
+        val miss = misses[address] ?: return 0
+        return (miss.at + emojiRetryMs(miss.count) - clock()).coerceAtLeast(0)
+    }
+
+    /** Every failure forgotten but those at the addresses [keep] says to keep. */
+    fun forget(keep: (String) -> Boolean) {
+        for (address in misses.keys.toList()) if (!keep(address)) misses.remove(address)
+    }
+}
+
+// What the phone holds
+
+/**
+ * The snapshot with [serverId]'s emoji as [emoji], the core's
+ * (`serverEmoji`), which has them from the account log's `EmojiUpdated`
+ * as `EmojiChanged` is said: so a removal or a rename is drawn and offered
+ * at once whether or not the snapshot over HTTP came (specs/emoji.md 8). A
+ * server the snapshot does not hold is left out; every other server's are
+ * their own.
+ */
+/**
+ * The Mentions lists held (by server id, `""` Home's, every server's) to
+ * read again when [serverId]'s emoji change: its own and Home's. Their
+ * pages come from the instance, not the core's store, so the core cannot
+ * name their reactions anew as it does the store's; the instance names a
+ * reaction by the emoji as it now is, or as it was last called once
+ * removed (specs/emoji.md 7).
+ */
+fun mentionListsFor(serverId: String, held: Collection<String>): List<String> = held.filter { it.isEmpty() || it == serverId }
+
+/**
+ * A list read a page at a time, read again from its start as far as it
+ * had been read ([count] items) or to its end: each [page] the items after
+ * the last one given (`before`, none for the first) and whether there are
+ * more. What it answers is the items and whether there are more after them.
+ */
+suspend fun <T> readPagesAgain(count: Int, after: (T) -> String, page: suspend (before: String?) -> Pair<List<T>, Boolean>): Pair<List<T>, Boolean> {
+    val read = mutableListOf<T>()
+    var more = true
+    while (more && read.size < count) {
+        val (items, hasMore) = page(read.lastOrNull()?.let(after))
+        read += items
+        more = hasMore && items.isNotEmpty()
+    }
+    return read to more
+}
+
+fun SnapshotSummary.withEmoji(serverId: String, emoji: List<EmojiSummary>): SnapshotSummary =
+    if (servers.none { it.serverId == serverId && it.emoji != emoji }) this
+    else copy(servers = servers.map { if (it.serverId == serverId) it.copy(emoji = emoji) else it })
 
 // The picker and the composer
 
@@ -115,6 +214,17 @@ fun pickEmoji(text: String, query: EmojiQuery, name: String): Picked {
     return Picked(text.substring(0, query.start) + words + text.substring(query.end), query.start + words.length)
 }
 
+/**
+ * One of the server's emoji chosen from a list drawn a moment ago (the `:`
+ * list, the picker), as [now] has it: the core's emoji as they are at the
+ * tap (for the `:` list, what the prefix typed now matches). The same
+ * emoji by id under its present name, or none when it is not there any
+ * more. So what goes in is the emoji chosen, never a name that has since
+ * become another emoji's (a rename and an upload under the old name, told
+ * as one change) nor one removed since.
+ */
+fun chosenNow(chosen: EmojiSummary, now: List<EmojiSummary>): EmojiSummary? = now.firstOrNull { it.emojiId == chosen.emojiId }
+
 /** The draft once [words] are put in at the caret, over what is selected, the caret after them: the composer's emoji button. */
 fun insertAt(text: String, selectionStart: Int, selectionEnd: Int, words: String): Picked {
     val from = minOf(selectionStart, selectionEnd).coerceIn(0, text.length)
@@ -124,14 +234,19 @@ fun insertAt(text: String, selectionStart: Int, selectionEnd: Int, words: String
 
 // Server settings: Emoji
 
-/** "12 of 50": how many a server has against its limit, as the section's row and the screen's head say; the count alone where no limit is known. */
-fun emojiCount(count: Int, limit: UInt): String = if (limit > 0u) "$count of $limit" else "$count"
+/**
+ * "12 of 50": how many a server has against its limit, as the section's
+ * row and the screen's head say. The instance always says the limit that
+ * applies (`Server.emoji_limit`), and 0 is one: "0 of 0".
+ */
+fun emojiCount(count: Int, limit: UInt): String = "$count of $limit"
 
-/** Whether a server has as many as it may: Upload is then off and says so. A server above a lowered limit is at it too. */
-fun emojiFull(count: Int, limit: UInt): Boolean = limit > 0u && count.toLong() >= limit.toLong()
+/** Whether a server has as many as it may: Upload is then off and says so. A server above a lowered limit is at it too, and one whose limit is 0 always. */
+fun emojiFull(count: Int, limit: UInt): Boolean = count.toLong() >= limit.toLong()
 
-/** What the section says at the limit, in Upload's place. */
-fun emojiFullWords(server: String, limit: UInt): String = "$server has as many emoji as it may ($limit). Remove one to upload another."
+/** What the section says at the limit, in Upload's place; at a limit of 0 removing one makes no room, so nothing says to remove one (the web's words). */
+fun emojiFullWords(server: String, limit: UInt): String =
+    "$server has as many emoji as it may ($limit)." + if (limit == 0u) "" else " Remove one to upload another."
 
 /** A row's line under its name: who uploaded it, and "Animated" for one that plays. */
 fun uploadedBy(name: String, animated: Boolean): String = "Uploaded by $name" + if (animated) " · Animated" else ""

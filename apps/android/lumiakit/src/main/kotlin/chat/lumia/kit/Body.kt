@@ -112,7 +112,9 @@ const val THIN_SPACE = "\u2009"
  * run's index) whose emoji the phone holds ([emojiOf], by id) is its
  * present `:name:`, marked as inline content to draw its picture in place
  * of those words, and read out as them (specs/emoji.md 6); one it does not
- * hold (removed, or not yet known) is the text as typed.
+ * hold (removed, or not yet known) is the text as typed. One held whose
+ * picture could not be had ([pictureMissing], `EmojiMisses`) is its present
+ * `:name:` as words, not a place its picture would fill.
  */
 fun styledInline(
     inline: BodyInline,
@@ -122,6 +124,7 @@ fun styledInline(
     edited: Boolean = false,
     emoji: List<EmojiRefSummary> = emptyList(),
     emojiOf: (String) -> DrawnEmoji? = { null },
+    pictureMissing: (DrawnEmoji) -> Boolean = { false },
 ): StyledInline {
     val src = inline.text
     // What changes in the text: a mention replaced by its words, a thin space put in either side of code.
@@ -147,7 +150,7 @@ fun styledInline(
                 if (held != null && end > start) {
                     // Its present name, whatever it was typed as (a rename since rewrites nothing).
                     edits += Edit(start, end, held.label, held.label)
-                    pictured[start] = held
+                    if (!pictureMissing(held)) pictured[start] = held
                 }
             }
             else -> {}

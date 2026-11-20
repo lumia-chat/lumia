@@ -61,6 +61,7 @@
 #   scripts/smoke.sh            # expects the app built (gradle assembleDebug) and the CLI, and an emulator or device on adb
 #   LUMIA_INSTANCE=http://localhost:4000 scripts/smoke.sh
 #   LUMIA_CLI=/path/to/lumia-cli scripts/smoke.sh   # a CLI built elsewhere (a git worktree has none of its own)
+#   LUMIA_SMOKE_DB=postgres://postgres:postgres@localhost/lumia_dev scripts/smoke.sh   # the instance's database: the Emoji section at a limit of 0 too
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root="$here/../../.."
@@ -1131,8 +1132,39 @@ server_emoji | grep -qx "lumia_logo_$stamp" || { echo "FAIL: the instance does n
 await "text=\":lumia_logo_$stamp:\"" 10 || { shot serveremoji-after; echo "FAIL: the uploaded emoji is not in the list; see $work/serveremoji-after.png"; exit 1; }
 shot serveremoji-after
 "$adb" shell rm -f "/sdcard/Download/Lumia-Logo $stamp.png" >/dev/null 2>&1 || true
+# A limit of 0, which the operator may set and the instance holds to (every
+# upload refused): "2 of 0", Upload off, and the line saying the server has
+# as many as it may (0), not that removing one makes room. With LUMIA_SMOKE_DB, the
+# instance's database, written as `lumia-admin emoji-limit` writes it.
+zero_limit=""
+if [ -n "${LUMIA_SMOKE_DB:-}" ]; then
+  psql "$LUMIA_SMOKE_DB" -q -c "update servers set emoji_limit = 0 where id = '$server'" >/dev/null
+  launch serveremoji 0
+  await ' · 2 of 0"' 20 || { shot serveremoji-zero; psql "$LUMIA_SMOKE_DB" -q -c "update servers set emoji_limit = null where id = '$server'" >/dev/null; echo "FAIL: at a limit of 0 the Emoji section does not say 2 of 0; see $work/serveremoji-zero.png"; exit 1; }
+  shot serveremoji-zero
+  seen=$(ui)
+  psql "$LUMIA_SMOKE_DB" -q -c "update servers set emoji_limit = null where id = '$server'" >/dev/null
+  case "$seen" in *"has as many emoji as it may (0)."*) ;; *) echo "FAIL: at a limit of 0 the section does not say the server has as many as it may (0); see $work/serveremoji-zero.png"; exit 1 ;; esac
+  case "$seen" in *"Remove one to upload another."*) echo "FAIL: at a limit of 0 the section says to remove one, which makes no room; see $work/serveremoji-zero.png"; exit 1 ;; esac
+  # Upload emoji's button: what holds its words and takes a tap, off.
+  upload_on=$(printf '%s' "$seen" | python3 -c '
+import re, sys
+nodes = re.findall(r"<node [^>]*>", sys.stdin.read())
+def box(n):
+    return tuple(int(v) for v in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", n).groups())
+def inside(a, b):
+    return a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]
+words = next((box(n) for n in nodes if "text=\"Upload emoji\"" in n), None)
+holders = [n for n in nodes if words and inside(words, box(n)) and ("clickable=\"true\"" in n or "class=\"android.widget.Button\"" in n)]
+print("missing" if not holders else ("on" if any("enabled=\"true\"" in n and "clickable=\"true\"" in n for n in holders) else "off"))
+')
+  [ "$upload_on" = off ] || { echo "FAIL: at a limit of 0 Upload emoji is $upload_on, not off; see $work/serveremoji-zero.png"; exit 1; }
+  zero_limit="; at a limit of 0, 2 of 0 with Upload off and its line not saying to remove one"
+else
+  echo "  (no LUMIA_SMOKE_DB: the Emoji section at a limit of 0 not checked)"
+fi
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
-echo "  emoji: ok (the : list completed :partyparrot: and the instance had its ref; the emoji button put :lgtm: in at the caret from the server's section and the keyboard came back; a reaction with :partyparrot: from the picker, kept by the emoji's id; an emoji renamed elsewhere named anew on its chip, and once removed its chip read as :retired_logo:, the name it was last called, and stayed counted; Emoji said 2 of 50, renamed :lgtm: to :looks_good:, asked before removing :partyparrot:, and uploaded a picture named from its file)"
+echo "  emoji: ok (the : list completed :partyparrot: and the instance had its ref; the emoji button put :lgtm: in at the caret from the server's section and the keyboard came back; a reaction with :partyparrot: from the picker, kept by the emoji's id; an emoji renamed elsewhere named anew on its chip, and once removed its chip read as :retired_logo:, the name it was last called, and stayed counted; Emoji said 2 of 50, renamed :lgtm: to :looks_good:, asked before removing :partyparrot:, and uploaded a picture named from its file$zero_limit)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a

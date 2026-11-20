@@ -398,8 +398,10 @@ class LumiaSession(
     // snapshot and the account log, and every rule: which a typed prefix
     // matches, the refs a send carries (found by the core from the words),
     // and the custom reactions kept by id. A change made here answers with
-    // the snapshot; one made elsewhere comes as `EmojiChanged`, after the
-    // `AccountApplied` whose snapshot the session has taken by then.
+    // the snapshot; one made elsewhere comes as `EmojiChanged`, whose
+    // emoji the core already holds from the account log, written into the
+    // snapshot here with no fetch (the `AccountApplied` before it fetched
+    // the snapshot over HTTP, which can fail while the gateway works).
 
     /** A server's live emoji, oldest first, as the snapshot has them; none for a server not held. */
     fun serverEmoji(serverId: String?): List<EmojiSummary> =
@@ -408,6 +410,9 @@ class LumiaSession(
     /** A server's emoji as drawn, by id: each with its picture's address (only the instance's own, `pictureOf`). */
     fun drawnEmoji(serverId: String?): Map<String, DrawnEmoji> =
         serverEmoji(serverId).mapNotNull { drawnEmoji(it, ::pictureOf) }.associateBy { it.id }
+
+    /** A server's live emoji as the core holds them this moment (its account log's, maybe newer than the snapshot): what a choice is checked against before it goes in (`chosenNow`). */
+    fun emojiNow(serverId: String): List<EmojiSummary> = client.now { serverEmoji(serverId) }
 
     /** The server's emoji the `:word` typed after a colon matches, in the order the composer lists them (the core's; nothing under two characters). */
     fun emojiMatches(serverId: String, prefix: String): List<EmojiSummary> = client.now { emojiMatches(serverId, prefix) }
@@ -429,20 +434,44 @@ class LumiaSession(
     }
 
     /**
-     * A server's emoji changed: read again (the core's `serverEmoji`), the
-     * snapshot taken again should it not have them yet; the server's
-     * conversations held read again from the core, which has named its
-     * reactions anew (one left after a removal reads as the emoji was last
-     * called); and the pictures of those no server lists any more let go.
+     * A server's emoji changed: the core's (`serverEmoji`, from the
+     * account log) written into the snapshot as they are (`withEmoji`), so
+     * a removed one is neither drawn nor offered even when the snapshot
+     * over HTTP the `AccountApplied` asked for timed out or failed; the
+     * server's conversations held read again from the core, which has
+     * named their reactions anew (one left after a removal reads as the
+     * emoji was last called); and the pictures of those no server lists
+     * any more let go.
      */
     private suspend fun emojiChanged(serverId: String) {
         if (leaving || !signedIn) return
         val now = runCatching { client.call { serverEmoji(serverId) } }.getOrNull() ?: return
-        if (now != serverEmoji(serverId)) refreshSnapshot()
+        if (leaving || !signedIn) return
+        snapshot = snapshot?.withEmoji(serverId, now)
         for (channel in snapshot?.channels.orEmpty()) {
             if (channel.serverId == serverId && channel.channelId in messages) refreshMessages(channel.channelId)
         }
         keepListedEmoji()
+        // Over HTTP, so in the session's own time: the gateway's events after this one do not wait for it.
+        for (key in mentionListsFor(serverId, mentionLists.keys.toList())) scope.launch { rereadMentions(key) }
+    }
+
+    /**
+     * A Mentions list read again from the instance as far as it had been
+     * read (`readPagesAgain`), so its reactions are named as the emoji now
+     * are; left as it is when the read fails, and when a page was read
+     * into it meanwhile.
+     */
+    private suspend fun rereadMentions(key: String) {
+        val held = mentionLists[key] ?: return
+        if (held.loading || held.messages.isEmpty()) return
+        val serverId = key.ifEmpty { null }
+        val (read, more) = runCatching {
+            readPagesAgain(held.messages.size, { m: MessageSummary -> m.messageId }) { before -> client.call { mentions(serverId, before) }.let { it.messages to it.hasMore } }
+        }.getOrNull() ?: return
+        val now = mentionLists[key] ?: return
+        if (leaving || !signedIn || now.loading || now.messages !== held.messages) return
+        mentionLists[key] = now.copy(messages = read, more = more, error = null)
     }
 
     /** Lets go of every emoji picture held that no server of the snapshot lists (specs/emoji.md 7). */

@@ -105,6 +105,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import chat.lumia.kit.AskForMissingEmoji
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.DELETE_QUESTION
 import chat.lumia.kit.DrawnEmoji
@@ -112,6 +113,7 @@ import chat.lumia.kit.EmojiPick
 import chat.lumia.kit.EmojiSet
 import chat.lumia.kit.LumiaEmoji
 import chat.lumia.kit.MENTION_ROWS
+import chat.lumia.kit.emojiPictureMissing
 import chat.lumia.kit.emojiSearchPrefix
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaCounter
@@ -301,7 +303,9 @@ private fun Minus() {
  * [emojiOf] holds it, 18 high, named by its present `:name:`; one it does
  * not hold (removed) is its `:name:` as the reaction was last called,
  * counted as before, which this account can take away but nobody can add
- * to: a tap on it does nothing for one who has not reacted with it.
+ * to: a tap on it does nothing for one who has not reacted with it. One
+ * held whose picture could not be had is its present `:name:` until the
+ * picture comes, asked for again meanwhile.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -330,10 +334,11 @@ fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String)
                     horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (custom != null) {
+                    if (custom != null && !emojiPictureMissing(custom)) {
                         LumiaEmoji(custom, Modifier.height(ChipEmoji).width(ChipEmoji * custom.aspect.coerceIn(0.25f, 4f)))
                     } else {
-                        Text(r.reaction, style = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
+                        if (custom != null) AskForMissingEmoji(listOf(custom))
+                        Text(custom?.label ?: r.reaction, style = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
                     }
                     Text("${r.count}", style = LumiaTokens.textLinkSm.scaled, color = if (r.me) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color)
                 }
@@ -482,7 +487,7 @@ private fun EmojiCell(emoji: String, name: String, onPick: (String) -> Unit) {
     }
 }
 
-/** One of the server's emoji in the picker: its picture fitted in 28, `:name:` to a screen reader; its name in words while the picture is not here. */
+/** One of the server's emoji in the picker: its picture fitted in 28, `:name:` to a screen reader; its name in words where it has no picture or its picture could not be had (asked for again meanwhile). */
 @Composable
 private fun CustomEmojiCell(emoji: EmojiSummary, drawn: DrawnEmoji?, onPick: () -> Unit) {
     Box(
@@ -490,8 +495,12 @@ private fun CustomEmojiCell(emoji: EmojiSummary, drawn: DrawnEmoji?, onPick: () 
             .clearAndSetSemantics { contentDescription = ":${emoji.name}:"; role = Role.Button; onClick { onPick(); true } },
         contentAlignment = Alignment.Center,
     ) {
-        if (drawn != null) LumiaEmoji(drawn, Modifier.size(PickerEmoji))
-        else Text(":${emoji.name}:", style = LumiaTokens.textTag.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (drawn != null && !emojiPictureMissing(drawn)) {
+            LumiaEmoji(drawn, Modifier.size(PickerEmoji))
+        } else {
+            if (drawn != null) AskForMissingEmoji(listOf(drawn))
+            Text(":${emoji.name}:", style = LumiaTokens.textTag.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 

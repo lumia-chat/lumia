@@ -5,8 +5,12 @@
 // `AnimatedImageDrawable`, which plays, looping, wherever it is drawn. With
 // animations off in the system's settings (Developer options' animator
 // scale, and Accessibility's "Remove animations", which sets it) an
-// animated one is its first frame, still. A picture the server no longer
-// lists is dropped (`forgetEmojiPictures`), and every one at sign-out.
+// animated one is its first frame, still. A picture that cannot be had,
+// its fetch failed or its bytes not decoded, is kept in `EmojiMisses`: the
+// places that draw it draw its `:name:` instead (`emojiPictureMissing`),
+// and whatever still shows it asks again, later each time
+// (`emojiRetryMs`), until it comes. A picture the server no longer lists
+// is dropped (`forgetEmojiPictures`), and every one at sign-out.
 package chat.lumia.kit
 
 import android.graphics.BitmapFactory
@@ -44,6 +48,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /** The most an emoji's picture may be: the instance makes none over 512 KiB. */
@@ -78,22 +83,47 @@ private object EmojiPictures {
     /** What is drawn, by address and by whether it plays. */
     val held = LruCache<String, Held>(256)
 
+    /** The pictures that could not be had, and when each may be asked for again; written on the main thread, read anywhere. */
+    val misses = EmojiMisses()
+
     private val wanted = HashMap<String, Deferred<ByteArray?>>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun key(address: String, moving: Boolean) = if (moving) "moving $address" else "still $address"
 
-    /** The picture at [address], played when [moving], or none when it cannot be had; one fetch however many ask at once. */
+    /**
+     * The picture at [address], played when [moving], or none when it
+     * cannot be had, which [misses] then holds; none, and nothing asked,
+     * while one that could not be had waits to be asked for again. One
+     * fetch however many ask at once. Bytes that cannot be decoded are not
+     * kept, so the next ask fetches them afresh.
+     */
     suspend fun picture(address: String, moving: Boolean): Held? {
         held.get(key(address, moving))?.let { return it }
-        val data = fetch(address) ?: return null
-        val made = withContext(Dispatchers.Default) { runCatching { decode(data, moving) }.getOrNull() } ?: return null
+        if (misses.waitMs(address) > 0) return null
+        val data = fetch(address)
+        val made = data?.let { withContext(Dispatchers.Default) { runCatching { decode(it, moving) }.getOrNull() } }
         // Made on the main thread's terms: the drawable starts there.
         return withContext(Dispatchers.Main) {
-            held.get(key(address, moving)) ?: made.also {
-                if (it is Held.Moving) it.drawable.start()
-                held.put(key(address, moving), it)
+            if (made == null) {
+                if (data != null) bytes.remove(address)
+                misses.missed(address)
+                null
+            } else {
+                misses.had(address)
+                held.get(key(address, moving)) ?: made.also {
+                    if (it is Held.Moving) it.drawable.start()
+                    held.put(key(address, moving), it)
+                }
             }
+        }
+    }
+
+    /** Asks for the picture at [address] until it is had, each time once it may be asked again; for as long as the caller wants it. */
+    suspend fun keepAsking(address: String, moving: Boolean): Held {
+        while (true) {
+            picture(address, moving)?.let { return it }
+            delay(misses.waitMs(address).coerceAtLeast(EMOJI_RETRY_FIRST_MS / 4))
         }
     }
 
@@ -138,6 +168,7 @@ private object EmojiPictures {
     }
 
     fun forget(keep: (String) -> Boolean) {
+        misses.forget(keep)
         for (key in bytes.snapshot().keys) if (!keep(key)) bytes.remove(key)
         for ((key, value) in held.snapshot()) {
             if (!keep(key.substringAfter(' '))) {
@@ -150,6 +181,28 @@ private object EmojiPictures {
 
 /** Every emoji picture held but those at the addresses [keep] says to keep: what a server no longer lists goes (specs/emoji.md 7). */
 fun forgetEmojiPictures(keep: (String) -> Boolean = { false }) = EmojiPictures.forget(keep)
+
+/**
+ * Whether [emoji]'s picture could not be had when last asked for, so it is
+ * drawn as its `:name:` (specs/emoji.md 6); read as Compose state, so a
+ * place drawing its name draws its picture once it comes. Main thread.
+ */
+fun emojiPictureMissing(emoji: DrawnEmoji): Boolean = EmojiPictures.misses.missing(emoji.address)
+
+/**
+ * Keeps asking for the pictures of [emoji] that could not be had, for as
+ * long as this is drawn: what draws them as their names, where nothing of
+ * [LumiaEmoji] is drawn to ask, so each is drawn as its picture once it
+ * comes.
+ */
+@Composable
+fun AskForMissingEmoji(emoji: List<DrawnEmoji>) {
+    val moving = !animationsOff(LocalContext.current)
+    for (e in emoji.distinctBy { it.address }) {
+        val playing = e.animated && moving
+        LaunchedEffect(e.address, playing) { EmojiPictures.keepAsking(e.address, playing) }
+    }
+}
 
 /** An animated picture drawn at whatever size it is given: the canvas scaled, its own bounds left as they are, so one drawable serves every place. */
 private class MovingPainter(private val held: Held.Moving) : Painter() {
@@ -173,8 +226,11 @@ private class MovingPainter(private val held: Held.Moving) : Painter() {
 /**
  * One of a server's emoji as its picture, fitted inside [modifier]'s
  * bounds at its own shape, played when it is animated and the system plays
- * animations; nothing until it is here or when it cannot be had. Nothing
- * a screen reader is told: what it is drawn in names it (`:name:`).
+ * animations; nothing until it is here. One that cannot be had is asked
+ * for again, later each time, for as long as this is drawn, and meanwhile
+ * [emojiPictureMissing] says so, by which a place draws its `:name:`
+ * instead. Nothing a screen reader is told: what it is drawn in names it
+ * (`:name:`).
  */
 @Composable
 fun LumiaEmoji(emoji: DrawnEmoji, modifier: Modifier = Modifier) {
@@ -182,7 +238,7 @@ fun LumiaEmoji(emoji: DrawnEmoji, modifier: Modifier = Modifier) {
     val moving = emoji.animated && !animationsOff(LocalContext.current)
     var held by remember(emoji.address, moving) { mutableStateOf(EmojiPictures.held.get(EmojiPictures.key(emoji.address, moving))) }
     LaunchedEffect(emoji.address, moving) {
-        if (held == null) held = EmojiPictures.picture(emoji.address, moving)
+        if (held == null) held = EmojiPictures.keepAsking(emoji.address, moving)
     }
     val painter: Painter = when (val h = held) {
         is Held.Still -> remember(h) { BitmapPainter(h.bitmap) }

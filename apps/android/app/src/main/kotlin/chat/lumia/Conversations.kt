@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -112,6 +113,7 @@ import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.firstUnread
 import chat.lumia.kit.CUSTOM_KEPT
 import chat.lumia.kit.EmojiPick
+import chat.lumia.kit.chosenNow
 import chat.lumia.kit.emojiAt
 import chat.lumia.kit.frequentIn
 import chat.lumia.kit.insertAt
@@ -585,6 +587,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     var pickerFor by remember { mutableStateOf<String?>(null) }
     // The picker opened from the composer's emoji button, whose choice goes in at the caret.
     var inserting by remember { mutableStateOf(false) }
+    // Counted up when a choice found the server's emoji changed since its list was drawn, which reads them again.
+    var emojiSeen by remember { mutableIntStateOf(0) }
     var outside by remember { mutableStateOf<Outside?>(null) }
     var flash by remember { mutableStateOf<String?>(null) }
     var holding by remember { mutableStateOf(false) }
@@ -637,11 +641,16 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     val choices = query?.let { q -> mentionChoices(q.query, session.serverMembers[channel?.serverId] ?: emptyList(), session.me, session.channelMemberIds[channelId], server?.canMentionEveryone == true) } ?: emptyList()
     // The server's own emoji (specs/emoji.md), here in its channels and server DMs: drawn in the
     // messages and their reactions, offered in the picker, and listed for a `:word` at the caret.
+    // What is offered is the core's, read again as the snapshot's change and when a choice found them changed
+    // (`emojiSeen`); what is chosen is checked against the core's at the tap (`chosenNow`) before it goes in.
     val serverEmoji = session.serverEmoji(server?.serverId)
+    val offered = remember(server?.serverId, serverEmoji, emojiSeen) { server?.let { session.emojiNow(it.serverId) } ?: emptyList() }
     val drawn = session.drawnEmoji(server?.serverId)
     val emojiOf = { id: String -> drawn[id] }
     val emojiQuery = if (server != null && member) emojiAt(draft.text, draft.selection.start, draft.selection.end) else null
-    val emojiOptions = emojiQuery?.let { q -> session.emojiMatches(server!!.serverId, q.prefix) } ?: emptyList()
+    val emojiOptions = remember(server?.serverId, emojiQuery?.prefix, serverEmoji, emojiSeen) {
+        emojiQuery?.let { q -> server?.let { session.emojiMatches(it.serverId, q.prefix) } } ?: emptyList()
+    }
     val emojiMatches = { prefix: String -> server?.let { session.emojiMatches(it.serverId, prefix) } ?: emptyList() }
 
     LaunchedEffect(channelId) {
@@ -851,8 +860,16 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                     }
                 } else if (emojiOptions.isNotEmpty() && emojiQuery != null) {
                     EmojiList(emojiOptions, emojiOf) { e ->
-                        val picked = pickEmoji(draft.text, emojiQuery, e.name)
-                        draft = TextFieldValue(picked.text, TextRange(picked.caret))
+                        // The `:word` at the caret now, and the emoji as what it matches now has it: its present
+                        // name, or nothing for one removed or no longer matched, the list then read again.
+                        val q = emojiAt(draft.text, draft.selection.start, draft.selection.end)
+                        val now = q?.let { server?.let { s -> chosenNow(e, session.emojiMatches(s.serverId, q.prefix)) } }
+                        if (q == null || now == null) {
+                            emojiSeen++
+                        } else {
+                            val picked = pickEmoji(draft.text, q, now.name)
+                            draft = TextFieldValue(picked.text, TextRange(picked.caret))
+                        }
                     }
                 } else if (missed != null) {
                     OutsideBar(
@@ -920,16 +937,26 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
         )
     }
     // The server's emoji in a section of their own and in "Frequently used", in its conversations only.
-    val section = server?.let { it.name to serverEmoji }
-    val frequent = frequentIn(store.recentEmoji, if (server != null) serverEmoji else null)
+    val section = server?.let { it.name to offered }
+    val frequent = frequentIn(store.recentEmoji, if (server != null) offered else null)
     pickerFor?.let { id -> EmojiPickerSheet(frequent, onPick = { p -> react(id, p); pickerFor = null }, onDismiss = { pickerFor = null }, section, emojiMatches, emojiOf) }
     if (inserting) {
         EmojiPickerSheet(frequent, onPick = { p ->
-            inserting = false
-            draft = inserted(draft, p)
-            store.used(p.kept)
-            focus.requestFocus()
-            keyboard?.show()
+            // One of the server's as the core holds it now: by its present name, never a name since another's;
+            // one removed since puts nothing in, and the sheet, read again, no longer offers it.
+            val put = when (p) {
+                is EmojiPick.Unicode -> p
+                is EmojiPick.Custom -> server?.let { s -> chosenNow(p.emoji, session.emojiNow(s.serverId)) }?.let { EmojiPick.Custom(it) }
+            }
+            if (put == null) {
+                emojiSeen++
+            } else {
+                inserting = false
+                draft = inserted(draft, put)
+                store.used(put.kept)
+                focus.requestFocus()
+                keyboard?.show()
+            }
         }, onDismiss = { inserting = false }, section, emojiMatches, emojiOf)
     }
     deleting?.let { id ->

@@ -99,7 +99,8 @@ private const val COPIED_MS = 1500L
  * uses (its refs) are drawn as their pictures where [emojiOf] holds them
  * (specs/emoji.md 6): in the line, the text's size times
  * [EMOJI_IN_TEXT] tall and as wide as their shape, `:name:` to a screen
- * reader; one not held is its words as typed.
+ * reader; one not held is its words as typed, and one whose picture could
+ * not be had its present `:name:` in words, asked for again meanwhile.
  *
  * With [onExpanded], a body drawn taller than 14 lines is drawn at the
  * height of its first 10, its last fading into the row under it, with
@@ -131,9 +132,12 @@ fun LumiaBody(
     )
     // The names drawn, so a name that changes draws again.
     val names = mentions.map { if (it.everyone) null else nameOf(it.accountId) }
-    // The emoji held, so one renamed, removed or come to be known draws again.
+    // The emoji held, so one renamed, removed or come to be known draws again;
+    // and those whose pictures could not be had, so each draws again as its name and as its picture once it comes.
     val held = emoji.map { emojiOf(it.emojiId) }
-    val drawing = Drawing(look, mentions, names, nameOf, emoji, held, emojiOf)
+    val missing = held.filterNotNull().filter { emojiPictureMissing(it) }
+    AskForMissingEmoji(missing)
+    val drawing = Drawing(look, mentions, names, nameOf, emoji, held, emojiOf, missing.map { it.address }.toSet())
     val inline = edited && editedInline(blocks)
     val words = @Composable {
         Column {
@@ -158,6 +162,8 @@ private class Drawing(
     val emoji: List<EmojiRefSummary>,
     val held: List<DrawnEmoji?>,
     val emojiOf: (String) -> DrawnEmoji?,
+    /** The addresses of the pictures that could not be had: those emoji are drawn as their names. */
+    val missing: Set<String>,
 )
 
 /**
@@ -223,8 +229,8 @@ private fun Block(block: BodyBlock, drawing: Drawing, inItem: Boolean, edited: B
 @Composable
 private fun Paragraph(inline: BodyInline, drawing: Drawing, edited: Boolean) {
     val look = drawing.look
-    val styled = remember(inline, look, drawing.names, drawing.held, edited) {
-        styledInline(inline, look, drawing.mentions, { m, typed -> mentionWords(m, typed, drawing.nameOf) }, edited, drawing.emoji, drawing.emojiOf)
+    val styled = remember(inline, look, drawing.names, drawing.held, drawing.missing, edited) {
+        styledInline(inline, look, drawing.mentions, { m, typed -> mentionWords(m, typed, drawing.nameOf) }, edited, drawing.emoji, drawing.emojiOf) { it.address in drawing.missing }
     }
     // Each emoji's picture in its words' place: as tall as the text's emoji, as wide as its shape.
     val pictures = remember(styled.emoji) {

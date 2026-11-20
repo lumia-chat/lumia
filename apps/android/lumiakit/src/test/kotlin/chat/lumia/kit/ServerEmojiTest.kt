@@ -8,6 +8,7 @@
 package chat.lumia.kit
 
 import androidx.compose.ui.text.SpanStyle
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -17,6 +18,8 @@ import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.BodyStyle
 import uniffi.lumia_ffi.EmojiRefSummary
 import uniffi.lumia_ffi.EmojiSummary
+import uniffi.lumia_ffi.ServerSummary
+import uniffi.lumia_ffi.SnapshotSummary
 import uniffi.lumia_ffi.emojiNameFromFile
 import uniffi.lumia_ffi.isEmojiName
 import uniffi.lumia_ffi.parseBodyMarked
@@ -30,6 +33,14 @@ private fun emoji(id: String, name: String, animated: Boolean = false, width: UI
 private val parrot = emoji("e8", "partyparrot", animated = true)
 private val lgtm = emoji("e2", "lgtm", width = 128u, height = 64u)
 private val acme = listOf(lgtm, parrot)
+
+private fun server(id: String, emoji: List<EmojiSummary>, limit: UInt = 50u) = ServerSummary(
+    serverId = id, name = id, iconUrl = "", retentionDays = 0u, showDeleted = false, attachmentRetentionDays = 0u, deleteOldestWhenFull = false,
+    canManage = true, canManageChannels = true, canStartDms = true, canMentionEveryone = true, canManageMessages = true,
+    channelAddsByInvitation = false, serverDmsOff = false, ownerAccountId = "maya", isOwner = true, canManageRoles = true, canManageMembers = true,
+    tagTitles = false, roles = emptyList(), grantable = emptyList(), roleIds = emptyList(), title = "", guest = false,
+    emoji = emoji, emojiLimit = limit, canManageEmoji = true,
+)
 
 private fun pictureOf(path: String) = pictureAddress("https://chat.acme.dev", path)
 
@@ -94,12 +105,10 @@ class ServerEmojiTest {
     @Test
     fun theSectionSaysItsCountAndItsLimit() {
         assertEquals("12 of 50", emojiCount(12, 50u))
-        assertEquals("3", emojiCount(3, 0u))
         assertFalse(emojiFull(49, 50u))
         assertTrue(emojiFull(50, 50u))
         // Above a lowered limit is at it too.
         assertTrue(emojiFull(60, 50u))
-        assertFalse(emojiFull(60, 0u))
         assertEquals("Acme has as many emoji as it may (50). Remove one to upload another.", emojiFullWords("Acme", 50u))
         assertEquals("Uploaded by Devon Park · Animated", uploadedBy("Devon Park", true))
         assertEquals("Uploaded by Maya Chen", uploadedBy("Maya Chen", false))
@@ -172,5 +181,112 @@ class ServerEmojiTest {
         assertNull(drawnEmoji(emoji("x", "elsewhere").copy(imageUrl = "https://evil.example/p.gif"), ::pictureOf))
         assertEquals(":partyparrot:", drawnEmoji(parrot, ::pictureOf)?.label)
         assertEquals("par", emojiSearchPrefix(" :par: "))
+    }
+    @Test
+    fun aLimitOfZeroIsALimitAndLeavesNoRoom() {
+        // The instance takes 0 (`lumia-admin emoji-limit <id> 0`, or LUMIA_SERVER_EMOJI_MAX=0) and refuses every upload under it.
+        assertEquals("0 of 0", emojiCount(0, 0u))
+        assertEquals("3 of 0", emojiCount(3, 0u))
+        assertTrue(emojiFull(0, 0u))
+        assertTrue(emojiFull(3, 0u))
+        // "Remove one to upload another" would not be true there.
+        assertEquals("Acme has as many emoji as it may (0).", emojiFullWords("Acme", 0u))
+        assertEquals(EmojiRefusal(EmojiAt.FORM, "Acme has as many emoji as it may (0)."), emojiRefusal("RESOURCE_EXHAUSTED", mapOf("state" to "emoji", "limit" to "0"), "Acme", "x", 50u, ""))
+    }
+
+    @Test
+    fun anEmojiChangeTakesTheCoresEmojiWithoutAFetch() {
+        // `EmojiChanged`: the core has the server's emoji from the account log; the snapshot over HTTP may not have come.
+        val oldlogo = emoji("e0", "oldlogo")
+        val held = SnapshotSummary("maya", "maya", "Maya", "", listOf(server("acme", listOf(oldlogo, lgtm, parrot)), server("trail", listOf(oldlogo))), emptyList(), emptyList(), emptyList(), emptyList(), emptyList())
+        val renamed = lgtm.copy(name = "looks_good")
+        val now = held.withEmoji("acme", listOf(renamed, parrot))
+        assertEquals(listOf(renamed, parrot), now.servers[0].emoji)
+        // Another server's are its own, and a server not held is not made up.
+        assertEquals(listOf(oldlogo), now.servers[1].emoji)
+        assertEquals(held.servers.map { it.serverId }, held.withEmoji("elsewhere", listOf(parrot)).servers.map { it.serverId })
+        assertEquals(held, held.withEmoji("elsewhere", listOf(parrot)))
+        // The last one removed leaves none.
+        assertEquals(emptyList<EmojiSummary>(), held.withEmoji("trail", emptyList()).servers[1].emoji)
+    }
+
+    @Test
+    fun aChoiceIsTheEmojiAsTheCoreNowHoldsIt() {
+        // Drawn as :lgtm:, then renamed :looks_good: and another uploaded as :lgtm: before the tap.
+        val newLgtm = emoji("e9", "lgtm")
+        val now = listOf(lgtm.copy(name = "looks_good"), parrot, newLgtm)
+        val chosen = chosenNow(lgtm, now)
+        assertEquals("e2", chosen?.emojiId)
+        // What goes in names the emoji chosen, not the one that has its old name now.
+        assertEquals(":looks_good: ", EmojiPick.Custom(chosen!!).inserted)
+        // Removed since: nothing goes in.
+        assertNull(chosenNow(lgtm, listOf(parrot, newLgtm)))
+        // The `:` list: still among what the prefix typed now matches, or nothing.
+        assertNull(chosenNow(parrot, listOf(newLgtm)))
+        assertEquals(parrot, chosenNow(parrot, listOf(parrot)))
+    }
+
+    @Test
+    fun aPictureThatCannotBeHadIsItsNameAndIsAskedForAgain() {
+        var clock = 0L
+        val misses = EmojiMisses { clock }
+        val held = drawnEmoji(parrot, ::pictureOf)!!
+        val at = held.address
+        assertFalse(misses.missing(at))
+        assertEquals(0L, misses.waitMs(at))
+        // Its fetch or its decoding failed: it is its name in the text, not an empty place.
+        misses.missed(at)
+        assertTrue(misses.missing(at))
+        val body = "yay :partyparrot:"
+        val marked = refs(body, "partyparrot" to "e8")
+        val para = parseBodyMarked(body, emptyList(), marked).single() as BodyBlock.Para
+        val styled = styledInline(para.inline, look, emptyList(), { _, typed -> typed }, emoji = marked, emojiOf = { held }, pictureMissing = { misses.missing(it.address) })
+        assertEquals(body, styled.text.text)
+        assertTrue(styled.text.getStringAnnotations(INLINE_CONTENT_TAG, 0, styled.text.length).isEmpty())
+        assertTrue(styled.emoji.isEmpty())
+        // By its present name, as its picture would be.
+        val renamed = held.copy(name = "parrot")
+        val asNamed = styledInline(para.inline, look, emptyList(), { _, typed -> typed }, emoji = marked, emojiOf = { renamed }, pictureMissing = { true })
+        assertEquals("yay :parrot:", asNamed.text.text)
+        // Asked for again: 2 s after, then twice as long each time, at most a minute apart.
+        assertEquals(2_000L, misses.waitMs(at))
+        clock = 2_000L
+        assertEquals(0L, misses.waitMs(at))
+        misses.missed(at)
+        assertEquals(4_000L, misses.waitMs(at))
+        // A second failure while it waits (another place asking at once) is the same miss.
+        misses.missed(at)
+        assertEquals(4_000L, misses.waitMs(at))
+        repeat(10) { clock += misses.waitMs(at); misses.missed(at) }
+        assertEquals(60_000L, misses.waitMs(at))
+        // Had at last: its picture again, and no wait.
+        misses.had(at)
+        assertFalse(misses.missing(at))
+        assertEquals(0L, misses.waitMs(at))
+        assertEquals(1, styledInline(para.inline, look, emptyList(), { _, typed -> typed }, emoji = marked, emojiOf = { held }, pictureMissing = { misses.missing(it.address) }).emoji.size)
+    }
+
+    @Test
+    fun anEmojiChangeReadsTheMentionsPagesHeldAgain() {
+        // Mentions pages come from the instance, not the core's store, so the core cannot name their reactions anew:
+        // a change to Acme's emoji reads again Acme's list and Home's (every server's), and no other server's.
+        assertEquals(setOf("acme", ""), mentionListsFor("acme", listOf("", "acme", "trail")).toSet())
+        assertEquals(emptyList<String>(), mentionListsFor("acme", listOf("trail")))
+        // Read again as far as it had been read: three pages of two for five held, then no further.
+        val all = (1..9).map { "m$it" }
+        val asked = mutableListOf<String?>()
+        val (read, more) = runBlocking {
+            readPagesAgain(5, { it }) { before ->
+                asked += before
+                val from = if (before == null) 0 else all.indexOf(before) + 1
+                all.drop(from).take(2) to (from + 2 < all.size)
+            }
+        }
+        assertEquals(listOf(null, "m2", "m4"), asked)
+        assertEquals(all.take(6), read)
+        assertTrue(more)
+        // A list grown shorter since ends where the instance's does.
+        val short = runBlocking { readPagesAgain(5, { s: String -> s }) { before -> if (before == null) listOf("m1", "m2") to false else emptyList<String>() to false } }
+        assertEquals(listOf("m1", "m2") to false, short)
     }
 }
