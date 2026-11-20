@@ -34,15 +34,16 @@ defmodule LumiaWeb.Plugs.Cors do
 
   def init(opts), do: opts
 
+  # Every answer varies by the request's origin, one without an origin too: a
+  # cache that kept a plain `<img>`'s answer would otherwise hand it to a
+  # cross-origin `fetch` of the same picture, which then fails for want of
+  # the CORS headers.
   def call(conn, _opts) do
-    case get_req_header(conn, "origin") do
-      [origin] ->
-        allowed? = origin in allowed_origins()
-        conn = put_resp_header(conn, "vary", "origin")
-        respond(conn, origin, allowed?)
+    conn = put_resp_header(conn, "vary", "origin")
 
-      _ ->
-        conn
+    case get_req_header(conn, "origin") do
+      [origin] -> respond(conn, origin, origin in allowed_origins())
+      _ -> conn
     end
   end
 

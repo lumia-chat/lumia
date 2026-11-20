@@ -3529,6 +3529,14 @@ impl App {
                     server.emoji = emoji;
                     true
                 });
+                // Reactions with each are named as it is now called; a removal later leaves
+                // them so (specs/emoji.md 7). A failed write leaves the older name, no worse.
+                let _ = self.write(|inner| {
+                    for e in &u.emoji {
+                        inner.reader.relabel_emoji(&e.emoji_id, &e.name)?;
+                    }
+                    Ok(())
+                });
                 if !touched.contains(&server_id) {
                     touched.push(server_id);
                 }

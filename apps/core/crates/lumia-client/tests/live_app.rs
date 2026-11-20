@@ -1662,6 +1662,15 @@ async fn custom_emoji_reach_every_member() {
         .rename_emoji(&server_id, &parrot.emoji_id, "parrot")
         .await
         .unwrap();
+    // Told by the log, the member's kept reaction takes the new name with no reaction between.
+    assert!(
+        settles(Duration::from_secs(10), || {
+            reaction(&member).is_some_and(|r| r.reaction == ":parrot:")
+        })
+        .await,
+        "the member's kept reaction is named anew: {:?}",
+        reaction(&member)
+    );
     let reacted = owner.seen();
     member
         .app

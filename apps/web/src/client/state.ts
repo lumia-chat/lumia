@@ -467,6 +467,10 @@ function onGatewayEvent(e: ClientEvent): void {
     case "emojiChanged":
       // The same: the server's emoji are read from what the core keeps and written into the snapshot held.
       void emojiKept(e.serverId);
+      // The core has named the kept reactions with each anew (specs/emoji.md 7), so one left after a
+      // later removal reads as it was last called: the messages shown are read again from the store.
+      void queryClient.invalidateQueries({ queryKey: ["messages"] });
+      void queryClient.invalidateQueries({ queryKey: ["mentions"] });
       break;
     case "profileUpdated":
       // Written in where the page holds the person, not asked again (issue #15),

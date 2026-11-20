@@ -63,11 +63,13 @@ defmodule LumiaWeb.Plugs.CorsTest do
     assert get_resp_header(conn, "access-control-allow-origin") == []
   end
 
-  test "a request without an origin is untouched", %{conn: conn} do
+  test "a request without an origin is allowed nothing, and still varies by origin",
+       %{conn: conn} do
     conn = conn |> put_req_header("accept", "application/json") |> get(~p"/api/v1/instance")
 
     assert conn.status == 200
     assert get_resp_header(conn, "access-control-allow-origin") == []
-    assert get_resp_header(conn, "vary") == []
+    # A cache keeps an <img>'s answer apart from a cross-origin fetch's.
+    assert get_resp_header(conn, "vary") == ["origin"]
   end
 end

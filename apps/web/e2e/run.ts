@@ -1808,14 +1808,13 @@ async function emojiStep(which: string, stamp: number) {
     await sent.getByRole("img", { name: ":parrot:" }).waitFor({ state: "detached" });
     await sent.locator(".lu-msg__body", { hasText: "Look :party_parrot:" }).waitFor();
     await sent.getByRole("img", { name: ":dance:" }).waitFor();
-    // Named as the core last heard it named, by a reaction event (`relabel` in its store): with no
-    // reaction since the rename, the name it was reacted with.
+    // Named as it was when removed: the rename's `EmojiUpdated` named the kept reaction anew, with no
+    // reaction between (specs/emoji.md 7).
     const left = message.locator(".lu-reaction", { has: page.locator(".lu-reaction__name") });
     await left.waitFor();
     const named = (await left.locator(".lu-reaction__name").textContent())?.trim();
-    if (named !== ":parrot:" && named !== ":party_parrot:") throw new Error(`the removed emoji's chip reads ${named}`);
+    if (named !== ":parrot:") throw new Error(`the removed emoji's chip reads ${named}, not the name it had when it was removed`);
     if ((await left.locator("img").count()) !== 0) throw new Error("the removed emoji's chip still draws a picture");
-    if (named !== ":parrot:") console.log(`  [${which}] emoji: the removed emoji's chip reads ${named}, the name it was reacted with, not the name it had when removed (the core relabels on reaction events only)`);
     await page.screenshot({ path: `${out}/${which}-emoji-after.png` });
     await left.click();
     await left.waitFor({ state: "detached" });

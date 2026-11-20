@@ -587,6 +587,22 @@ impl SqliteStore {
         rows.collect::<Result<_, _>>().map_err(backend)
     }
 
+    /// Names every kept reaction with the custom emoji `emoji_id` as `:name:`, its name as
+    /// the server now lists it (`EmojiUpdated`, specs/emoji.md 7), so one left after a later
+    /// removal is named as the emoji was last called, whether or not anyone reacted between.
+    ///
+    /// # Errors
+    /// When the store cannot be written.
+    pub fn relabel_emoji(&self, emoji_id: &[u8], name: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "UPDATE reactions SET label = ?2 WHERE emoji_id = ?1 AND label != ?2",
+                params![emoji_id, format!(":{name}:")],
+            )
+            .map(|_| ())
+            .map_err(backend)
+    }
+
     /// Keeps a server's member list in place of the one before: `members`
     /// as `(account_id, member)`, in order. `read_at` is what
     /// [`SqliteStore::member_list_staleness`] answered before the list was
@@ -1828,6 +1844,32 @@ mod tests {
             .unwrap();
         let kept = store.messages(&ch, 10).unwrap();
         assert!(kept[0].emoji.is_empty() && kept[0].reactions.is_empty());
+    }
+
+    #[test]
+    fn a_rename_told_by_the_log_names_reactions_with_no_reaction_between() {
+        use lumia_core::proto::ReactionAdded;
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let parrot = vec![9u8; 16];
+        let reacted = stored(
+            &ch,
+            2,
+            event::Payload::ReactionAdded(ReactionAdded {
+                message_id: vec![1; 16],
+                reaction: ":party_parrot:".into(),
+                account_id: vec![5; 16],
+                emoji_id: parrot.clone(),
+            }),
+        );
+        store
+            .apply(LogKind::Channel, &ch, &[created(&ch, 1, "hi"), reacted])
+            .unwrap();
+        store.relabel_emoji(&parrot, "parrot").unwrap();
+        // Another emoji's reactions are not touched.
+        store.relabel_emoji(&[8u8; 16], "cat").unwrap();
+        let kept = store.messages(&ch, 10).unwrap();
+        assert_eq!(kept[0].reactions[0].reaction, ":parrot:");
     }
 
     #[test]
