@@ -22,6 +22,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.VerifiedUser
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.LumiaTag
+import chat.lumia.kit.emojiCount
 import chat.lumia.kit.grouped
 import chat.lumia.kit.roleSentences
 import androidx.compose.ui.unit.dp
@@ -108,8 +110,9 @@ private val PictureSize = LumiaTokens.tileSize + LumiaTokens.space12
  * "RolesPhoneSettings" board): its sections as a screen of their own, each
  * pushed over it. Only the sections this account may use are listed
  * (the core's `rolesSettingsSections`): Overview with Manage server, Roles with Manage
- * roles, Members with Manage members or Manage roles. Roles says how many
- * the server has at its row's end, Members how many members.
+ * roles, Members with Manage members or Manage roles, Emoji with Manage
+ * emoji. Roles says how many the server has at its row's end, Members how
+ * many members, Emoji how many against its limit ("12 of 50").
  */
 @Composable
 fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: () -> Unit, push: (Screen) -> Unit) {
@@ -126,6 +129,8 @@ fun ServerSettingsScreen(session: LumiaSession, server: ServerSummary?, back: ()
                         SettingsSection.OVERVIEW -> Triple(Icons.Outlined.Settings, null, Screen.ServerOverview(server!!.serverId))
                         SettingsSection.ROLES -> Triple(Icons.Outlined.VerifiedUser, rolesCount(server!!.roles), Screen.Roles(server.serverId))
                         SettingsSection.MEMBERS -> Triple(Icons.Outlined.Group, members?.takeIf { it.isNotEmpty() }?.let { grouped(it.size.toLong()) }, Screen.ServerMembers(server!!.serverId))
+                        // "12 of 50": its emoji against the limit the instance sets (specs/emoji.md 5).
+                        SettingsSection.EMOJI -> Triple(Icons.Outlined.EmojiEmotions, emojiCount(server!!.emoji.size, server.emojiLimit), Screen.ServerEmoji(server.serverId))
                     }
                     Row(
                         Modifier.fillMaxWidth().height(SectionRow)

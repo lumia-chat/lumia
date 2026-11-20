@@ -31,7 +31,11 @@
 # nobody does, a member's row and a role's editor saving what was changed
 # in them and nothing a second session changed meanwhile, and this
 # account's own title refused on its card once the instance's ten changes
-# an hour are spent. Then the channel is read as assistive technology has it: each account's
+# an hour are spent. Then a server's own emoji (specs/emoji.md), in a
+# channel of their own: the composer's : list and its emoji button, a
+# custom reaction from the picker, a removed emoji read as its :name:, and
+# Server settings' Emoji renaming, removing (asked first) and uploading a
+# picture named from its file, each on the instance after. Then the channel is read as assistive technology has it: each account's
 # messages in a row are one block, and the second account, typing through
 # the CLI, is named under the composer until it falls silent (protocol
 # 6.7), in light and dark. Then drafts (issue #23): a reply and words
@@ -307,7 +311,7 @@ shot home
 alive=$(running)
 # The app sends nothing; the CLI's message lands in its view when the gateway is up.
 "$cli" --data-dir "$data" send "$channel" "Still here?" >/dev/null
-for screen in server channel requests devices approve profile preferences new add newchannel invite serversettings serveroverview roles newrole servermembers browse members addpeople newdm profilecard yoursettings startover needssetup signin link; do shoot "$screen" 7; done
+for screen in server channel requests devices approve profile preferences new add newchannel invite serversettings serveroverview roles newrole servermembers serveremoji browse members addpeople newdm profilecard yoursettings startover needssetup signin link; do shoot "$screen" 7; done
 [ -n "$alive" ] || { echo "FAIL: the app was not running after launch"; exit 1; }
 
 # Attachments (specs/media.md 5), in a channel of their own so the rest
@@ -991,6 +995,144 @@ case "$seen" in *'text="Title 10"'*) shot title-limit; echo "FAIL: the title's f
 shot title-limit
 "$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
 echo "  roles: ok (the sections; a role made by taps and the instance had it in its colour; one made elsewhere reached the list and Move up put it first; a role and a title given elsewhere were the tag beside the name in the open channel, as the server showed each; Delete role asked first, said who held it, and then the instance had it gone, and said of a role nobody held that nobody did; a row opened on a member took the role unticked in it and left the one given elsewhere meanwhile; an editor's rename was saved and left off the permission switched off elsewhere while it was open; this account's own title, changed ten times elsewhere, was refused the eleventh on its card in the sheet's words, the page still open)"
+
+# A server's own emoji (specs/emoji.md; plan step 12), in a channel of
+# their own so #general reads as the rest expects: three uploaded over
+# HTTP as the server's owner (an animated GIF and two PNGs from the core's
+# test pictures), then on the phone the composer's `:` list completing
+# :partyparrot:, sent with its ref (the instance has it), the composer's
+# emoji button putting :lgtm: in at the caret from the picker's server
+# section, a custom reaction chosen in the picker after a message's Add
+# reaction, a removed emoji's message and chip read as its :name:, and
+# Server settings' Emoji: its count against the limit, a rename and a
+# removal through a row's sheet (asked first), and an upload of a picture
+# chosen through the system's document picker, named from its file, each
+# on the instance after.
+fixtures="$root/apps/core/crates/lumia-client/tests/fixtures"
+"$cli" --data-dir "$data" channel-create "$server" emoji >/dev/null
+emoji_channel=$("$cli" --data-dir "$data" channels "$server" | grep " #emoji " | grep -oE "[0-9a-f-]{36}" | head -1)
+[ -n "$emoji_channel" ] || { echo "FAIL: the emoji channel was not made"; exit 1; }
+owner=$(sign_in)
+upload_emoji() { # <name> <file> <type>: its id
+  curl -s -H "authorization: Bearer $owner" -H "content-type: $3" --data-binary "@$2" "$instance/api/v1/servers/$server/emoji?name=$1" | field 'd["emojiId"]'
+}
+server_emoji() { # the server's emoji as the instance lists them, a name a line
+  curl -s -H "accept: application/json" -H "authorization: Bearer $owner" "$instance/api/v1/servers/$server/emoji" | field '"\n".join(e["name"] for e in d["emoji"])'
+}
+emoji_messages() { # the emoji channel's messages: body, its refs' count and its reactions, one a line
+  curl -s -H "accept: application/json" -H "authorization: Bearer $owner" "$instance/api/v1/channels/$emoji_channel/messages" \
+    | field '"\n".join("%s|%d|%s" % (m.get("body", ""), len(m.get("emoji", [])), ",".join("%s=%s" % (r["reaction"], "custom" if r.get("emojiId") else "unicode") for r in m.get("reactions", []))) for m in d["messages"])'
+}
+parrot_id=$(upload_emoji partyparrot "$fixtures/animated.gif" image/gif)
+upload_emoji lgtm "$fixtures/logo.png" image/png >/dev/null
+old_id=$(upload_emoji oldlogo "$fixtures/logo.png" image/png)
+[ -n "$parrot_id" ] && [ -n "$old_id" ] || { echo "FAIL: the instance did not take the emoji uploaded over HTTP"; exit 1; }
+# The composer's field: the last text field on the screen.
+emoji_field() {
+  ui | python3 -c '
+import re, sys
+fields = [n for n in re.findall(r"<node [^>]*>", sys.stdin.read()) if "class=\"android.widget.EditText\"" in n]
+print(re.search(r"text=\"([^\"]*)\"", fields[-1]).group(1) if fields else "")
+'
+}
+launch channel 0 --es LUMIA_DEV_CHANNEL emoji
+await 'content-desc="Emoji"' 30 || { shot emoji-channel; echo "FAIL: the composer has no emoji button; see $work/emoji-channel.png"; exit 1; }
+tap "Message #emoji"
+"$adb" shell input text "Shipped%sit%s:par"
+await 'content-desc=":partyparrot:"' 10 || { shot emoji-list; echo "FAIL: typing :par listed no :partyparrot: over the composer; see $work/emoji-list.png"; exit 1; }
+shot emoji-list
+tap ":partyparrot:"
+[ "$(emoji_field)" = "Shipped it :partyparrot: " ] || { shot emoji-list; echo "FAIL: choosing from the : list left \"$(emoji_field)\" in the composer, not the name and a space"; exit 1; }
+tap "Send"
+for _ in $(seq 1 20); do emoji_messages | grep -q '^Shipped it :partyparrot:|1|' && break; sleep 1; done
+emoji_messages | grep -q '^Shipped it :partyparrot:|1|' || { echo "FAIL: the instance does not have the sent :partyparrot: as one of the server's emoji beside the words"; exit 1; }
+# The emoji button: the picker with the server's section, its choice put in at the caret, the keyboard back.
+"$adb" shell input text "Looks%sgood%s"
+tap "Emoji"
+# The server's section, by its emoji: the server was renamed further up.
+await 'content-desc=":lgtm:"' 10 || { shot emoji-button; echo "FAIL: the composer's emoji button opened no picker with the server's section; see $work/emoji-button.png"; exit 1; }
+shot emoji-button
+tap ":lgtm:"
+[ "$(emoji_field)" = "Looks good :lgtm: " ] || { echo "FAIL: the picker's :lgtm: left \"$(emoji_field)\" in the composer"; exit 1; }
+"$adb" shell dumpsys input_method | grep -q "mInputShown=true" || { echo "FAIL: the keyboard did not come back to the composer after the picker"; exit 1; }
+tap "Send"
+for _ in $(seq 1 20); do emoji_messages | grep -q '^Looks good :lgtm:|1|' && break; sleep 1; done
+emoji_messages | grep -q '^Looks good :lgtm:|1|' || { echo "FAIL: the instance does not have the :lgtm: put in by the emoji button as a ref"; exit 1; }
+"$adb" shell input keyevent BACK
+sleep 1
+# A custom reaction, chosen in the picker after a message's Add reaction.
+press "Shipped it :partyparrot:"
+tap "Add reaction"
+await 'content-desc=":partyparrot:"' 10 || { shot emoji-picker; echo "FAIL: the picker has no :partyparrot: in the server's section; see $work/emoji-picker.png"; exit 1; }
+shot emoji-picker
+tap ":partyparrot:"
+await 'You reacted with :partyparrot:' 15 || { shot emoji-reacted; echo "FAIL: reacting with :partyparrot: drew no chip of it; see $work/emoji-reacted.png"; exit 1; }
+emoji_messages | grep -q '^Shipped it :partyparrot:|1|:partyparrot:=custom' || { echo "FAIL: the instance does not have the reaction with :partyparrot: by the emoji's id"; exit 1; }
+shot emoji-reacted
+# A removed emoji: a reaction that used it reads as the name it was last called, renamed elsewhere
+# before it was removed (the core names its reactions anew), the chip still counted.
+press "Looks good :lgtm:"
+tap "Add reaction"
+await 'content-desc=":oldlogo:"' 10 || { echo "FAIL: the picker has no :oldlogo:"; exit 1; }
+tap ":oldlogo:"
+await 'You reacted with :oldlogo:' 15 || { echo "FAIL: reacting with :oldlogo: drew no chip"; exit 1; }
+seen=$(ui)
+case "$seen" in *'text=":oldlogo:"'*) shot emoji-removed; echo "FAIL: :oldlogo:'s chip read as its name while the emoji was there"; exit 1 ;; esac
+curl -s -o /dev/null -X PATCH -H "authorization: Bearer $owner" -H "content-type: application/json" -d '{"name":"retired_logo"}' "$instance/api/v1/servers/$server/emoji/$old_id"
+await 'You reacted with :retired_logo:' 20 || { shot emoji-removed; echo "FAIL: the chip of an emoji renamed elsewhere is not named by its new name"; exit 1; }
+curl -s -o /dev/null -X DELETE -H "authorization: Bearer $owner" "$instance/api/v1/servers/$server/emoji/$old_id"
+await 'text=":retired_logo:"' 20 || { shot emoji-removed; echo "FAIL: once :retired_logo: was removed its chip did not read as the name it was last called; see $work/emoji-removed.png"; exit 1; }
+case "$(ui)" in *'You reacted with :retired_logo:, 1'*) ;; *) shot emoji-removed; echo "FAIL: the removed emoji's reaction is no longer counted"; exit 1 ;; esac
+shot emoji-removed
+# Server settings' Emoji, as the owner: the count, a rename, a removal asked first, an upload.
+launch serveremoji 0
+await ' · 2 of 50"' 20 || { shot serveremoji; echo "FAIL: the Emoji section does not say 2 of 50; see $work/serveremoji.png"; exit 1; }
+shot serveremoji
+tap "More for :lgtm:"
+await 'text="Rename"' 10 || { shot emoji-sheet; echo "FAIL: a row's More opened no sheet of its actions"; exit 1; }
+shot emoji-sheet
+tap "Rename"
+"$adb" shell input keyevent KEYCODE_MOVE_END
+for _ in $(seq 1 6); do "$adb" shell input keyevent KEYCODE_DEL; done
+"$adb" shell input text "looks_good"
+"$adb" shell input keyevent BACK
+tap "Save"
+for _ in $(seq 1 15); do server_emoji | grep -qx looks_good && break; sleep 1; done
+server_emoji | grep -qx looks_good || { shot emoji-rename; echo "FAIL: the instance does not have the emoji renamed :looks_good:; see $work/emoji-rename.png"; exit 1; }
+await 'text=":looks_good:"' 10 || { echo "FAIL: the list does not show :looks_good:"; exit 1; }
+tap "More for :partyparrot:"
+tap "Remove"
+await 'Remove :partyparrot:?' 10 || { shot emoji-remove; echo "FAIL: Remove did not ask first"; exit 1; }
+shot emoji-remove
+server_emoji | grep -qx partyparrot || { echo "FAIL: :partyparrot: was removed before the question was answered"; exit 1; }
+tap "Remove"
+for _ in $(seq 1 15); do server_emoji | grep -qx partyparrot || break; sleep 1; done
+! server_emoji | grep -qx partyparrot || { echo "FAIL: the instance still has :partyparrot: after Remove"; exit 1; }
+"$adb" push "$fixtures/logo.png" "/sdcard/Download/Lumia-Logo $stamp.png" >/dev/null
+"$adb" shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file:///sdcard/Download/Lumia-Logo%20$stamp.png" >/dev/null
+tap "Upload emoji"
+await "Lumia-Logo $stamp.png" 20 || { shot emoji-documents; echo "FAIL: Upload emoji's picker does not offer the picture; see $work/emoji-documents.png"; exit 1; }
+# This run's picture: an earlier run's may still be listed among the recent ones.
+first=$(ui | python3 -c '
+import re, sys
+for node in re.findall(r"<node [^>]*>", sys.stdin.read()):
+    if "content-desc=\"Lumia-Logo %s.png" % sys.argv[1] in node:
+        x0, y0, x1, y1 = (int(n) for n in re.search(r"bounds=\"\[(\d+),(\d+)\]\[(\d+),(\d+)\]\"", node).groups())
+        print("%d %d" % ((x0 + x1) // 2, (y0 + y1) // 2))
+        break
+' "$stamp")
+# shellcheck disable=SC2086
+"$adb" shell input tap $first
+await "lumia_logo_$stamp" 20 || { shot emoji-upload; echo "FAIL: the upload's name was not made from the file's; see $work/emoji-upload.png"; exit 1; }
+shot emoji-upload
+tap "Save"
+for _ in $(seq 1 15); do server_emoji | grep -qx "lumia_logo_$stamp" && break; sleep 1; done
+server_emoji | grep -qx "lumia_logo_$stamp" || { echo "FAIL: the instance does not have the emoji uploaded from the phone"; exit 1; }
+await "text=\":lumia_logo_$stamp:\"" 10 || { shot serveremoji-after; echo "FAIL: the uploaded emoji is not in the list; see $work/serveremoji-after.png"; exit 1; }
+shot serveremoji-after
+"$adb" shell rm -f "/sdcard/Download/Lumia-Logo $stamp.png" >/dev/null 2>&1 || true
+"$adb" shell am force-stop "$bundle" >/dev/null 2>&1 || true
+echo "  emoji: ok (the : list completed :partyparrot: and the instance had its ref; the emoji button put :lgtm: in at the caret from the server's section and the keyboard came back; a reaction with :partyparrot: from the picker, kept by the emoji's id; an emoji renamed elsewhere named anew on its chip, and once removed its chip read as :retired_logo:, the name it was last called, and stayed counted; Emoji said 2 of 50, renamed :lgtm: to :looks_good:, asked before removing :partyparrot:, and uploaded a picture named from its file)"
 
 # Blocks, in the channel: the second account's two messages in a row are
 # under its name once, and the second says whose it is and when to a

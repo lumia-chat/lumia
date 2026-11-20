@@ -175,6 +175,8 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 }
                 "newrole" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.Roles(first), Screen.RoleEditor(first)) }
                 "servermembers" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.ServerMembers(first)) }
+                // A server's own emoji (specs/emoji.md 10).
+                "serveremoji" -> { place = Place.Server(first); stack = listOf(Screen.ServerSettings(first), Screen.ServerEmoji(first)) }
                 "browse" -> { place = Place.Server(first); stack = listOf(Screen.Browse(first)) }
                 "preview" -> {
                     place = Place.Server(first)
@@ -236,6 +238,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
                 is Screen.RoleEditor -> server(screen.serverId)?.let { s -> SettingsSection.ROLES in rolesSettingsSections(s) && (screen.roleId == null || s.roles.any { it.roleId == screen.roleId }) } == true
                 is Screen.RoleHolders -> server(screen.serverId)?.let { s -> SettingsSection.ROLES in rolesSettingsSections(s) && s.roles.any { it.roleId == screen.roleId } } == true
                 is Screen.ServerMembers -> server(screen.serverId)?.let { SettingsSection.MEMBERS in rolesSettingsSections(it) } == true
+                is Screen.ServerEmoji -> server(screen.serverId)?.let { SettingsSection.EMOJI in rolesSettingsSections(it) } == true
                 else -> true
             }
         }
@@ -302,6 +305,7 @@ fun Shell(store: AppStore, session: LumiaSession, devScreen: String?, devChannel
         }
         is Screen.RoleHolders -> RoleHoldersScreen(session, servers.firstOrNull { it.serverId == top.serverId }, top.roleId, pop)
         is Screen.ServerMembers -> ServerMembersScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
+        is Screen.ServerEmoji -> ServerEmojiScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop)
         // Join opens the channel in the Browse screen's place, so back is the server.
         is Screen.Browse -> BrowseScreen(session, servers.firstOrNull { it.serverId == top.serverId }, pop) { id -> stack = stack.dropLast(1) + Screen.Channel(id) }
         is Screen.Members -> ChannelMembersScreen(session, top.channelId, devCard, pop, push, replace)

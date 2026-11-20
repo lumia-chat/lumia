@@ -110,7 +110,12 @@ import chat.lumia.kit.afterSend
 import chat.lumia.kit.blockPlaces
 import chat.lumia.kit.dayOfMicros
 import chat.lumia.kit.firstUnread
-import chat.lumia.kit.frequentEmoji
+import chat.lumia.kit.CUSTOM_KEPT
+import chat.lumia.kit.EmojiPick
+import chat.lumia.kit.emojiAt
+import chat.lumia.kit.frequentIn
+import chat.lumia.kit.insertAt
+import chat.lumia.kit.pickEmoji
 import chat.lumia.kit.initialsOf
 import chat.lumia.kit.invitedWords
 import chat.lumia.kit.keptReply
@@ -151,6 +156,7 @@ import uniffi.lumia_ffi.DmMessageSummary
 import uniffi.lumia_ffi.DraftSummary
 import uniffi.lumia_ffi.MessageSummary
 import uniffi.lumia_ffi.QuoteSummary
+import uniffi.lumia_ffi.ReactionSummary
 
 /** Those a message mentioned who are not in its channel: the bar after a send, while adding them, and once an add made invitations, what it says for a few seconds. */
 private data class Outside(val accountIds: List<String>, val adding: Boolean = false, val said: String? = null, val error: String = "")
@@ -306,6 +312,8 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
     }
     var actionsFor by remember { mutableStateOf<String?>(null) }
     var pickerFor by remember { mutableStateOf<String?>(null) }
+    // The picker opened from the composer's emoji button, whose choice goes in at the caret.
+    var inserting by remember { mutableStateOf(false) }
     var flash by remember { mutableStateOf<String?>(null) }
     var holding by remember { mutableStateOf(false) }
     // The message being edited in place, and what its field holds; the one asked about deleting.
@@ -483,7 +491,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                             onExpanded = { expanded[m.messageId] = it },
                             // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
                             media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, playback, m.messageId, m.attachments, m.cards, display, hold) }) else null,
-                            reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { react(m.messageId, it) }, { pickerFor = m.messageId }) } },
+                            reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { react(m.messageId, it.reaction) }) { pickerFor = m.messageId } } },
                             editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                             under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
                             // A reply to this account, from someone else.
@@ -507,6 +515,7 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
                 room = room,
                 strip = { ComposerStrip(session, channelId, cards, waiting) },
                 leading = if (member) ({ AttachButton(session, channelId) }) else null,
+                trailing = if (member) ({ EmojiButton { inserting = true } }) else null,
                 sendable = maySend(draft.text, pending, false) && !waiting && !sending,
             ) { send() }
             // Nobody is shown typing in a personal conversation, and nothing is sent when this
@@ -529,7 +538,17 @@ fun ConversationScreen(store: AppStore, session: LumiaSession, channelId: String
             onDismiss = { actionsFor = null },
         )
     }
-    pickerFor?.let { id -> EmojiPickerSheet(frequentEmoji(store.recentEmoji), onPick = { react(id, it); pickerFor = null }, onDismiss = { pickerFor = null }) }
+    // No server's emoji here (specs/emoji.md 1): Unicode's alone, for a reaction and for the composer.
+    pickerFor?.let { id -> EmojiPickerSheet(frequentIn(store.recentEmoji, null), onPick = { p -> if (p is EmojiPick.Unicode) react(id, p.emoji); pickerFor = null }, onDismiss = { pickerFor = null }) }
+    if (inserting) {
+        EmojiPickerSheet(frequentIn(store.recentEmoji, null), onPick = { p ->
+            inserting = false
+            draft = inserted(draft, p)
+            store.used(p.kept)
+            focus.requestFocus()
+            keyboard?.show()
+        }, onDismiss = { inserting = false })
+    }
     deleting?.let { id ->
         val m = sent.firstOrNull { it.messageId == id }
         DeleteDialog(
@@ -564,6 +583,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     var replying by remember { mutableStateOf<QuoteSummary?>(null) }
     var actionsFor by remember { mutableStateOf<String?>(null) }
     var pickerFor by remember { mutableStateOf<String?>(null) }
+    // The picker opened from the composer's emoji button, whose choice goes in at the caret.
+    var inserting by remember { mutableStateOf(false) }
     var outside by remember { mutableStateOf<Outside?>(null) }
     var flash by remember { mutableStateOf<String?>(null) }
     var holding by remember { mutableStateOf(false) }
@@ -614,6 +635,14 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     // The @ list, in a server's text channel this account is in: the `@word` at the caret.
     val query = if (channel?.kind == TEXT && member) mentionAt(draft.text, draft.selection.start, draft.selection.end) else null
     val choices = query?.let { q -> mentionChoices(q.query, session.serverMembers[channel?.serverId] ?: emptyList(), session.me, session.channelMemberIds[channelId], server?.canMentionEveryone == true) } ?: emptyList()
+    // The server's own emoji (specs/emoji.md), here in its channels and server DMs: drawn in the
+    // messages and their reactions, offered in the picker, and listed for a `:word` at the caret.
+    val serverEmoji = session.serverEmoji(server?.serverId)
+    val drawn = session.drawnEmoji(server?.serverId)
+    val emojiOf = { id: String -> drawn[id] }
+    val emojiQuery = if (server != null && member) emojiAt(draft.text, draft.selection.start, draft.selection.end) else null
+    val emojiOptions = emojiQuery?.let { q -> session.emojiMatches(server!!.serverId, q.prefix) } ?: emptyList()
+    val emojiMatches = { prefix: String -> server?.let { session.emojiMatches(it.serverId, prefix) } ?: emptyList() }
 
     LaunchedEffect(channelId) {
         session.clearError()
@@ -649,6 +678,24 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
     fun react(id: String, emoji: String) {
         session.react(channelId, id, emoji)
         store.used(emoji)
+    }
+
+    /** Reacts with what the picker chose: one of Unicode's, or one of the server's by its id. */
+    fun react(id: String, pick: EmojiPick) {
+        when (pick) {
+            is EmojiPick.Unicode -> react(id, pick.emoji)
+            is EmojiPick.Custom -> {
+                session.reactEmoji(channelId, id, pick.emoji.emojiId)
+                store.used(pick.kept)
+            }
+        }
+    }
+
+    /** A chip pressed: this account's reaction with its emoji added or taken away; a removed one of the server's can only go. */
+    fun toggle(id: String, r: ReactionSummary) {
+        if (r.emojiId.isEmpty()) return react(id, r.reaction)
+        session.reactEmoji(channelId, id, r.emojiId)
+        if (drawn.containsKey(r.emojiId)) store.used(CUSTOM_KEPT + r.emojiId)
     }
 
     fun addOutside() {
@@ -778,7 +825,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 onExpanded = { expanded[m.messageId] = it },
                                 // None while Preferences hides them: no row and no room for one, Add reaction still in the actions.
                                 media = if (m.attachments.isNotEmpty() || m.cards.isNotEmpty()) ({ hold -> MessageMedia(session, playback, m.messageId, m.attachments, m.cards, display, hold) }) else null,
-                                reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { drawn -> @Composable { ReactionChips(drawn, session.me, session::knownNameOf, { if (member) react(m.messageId, it) }, { if (member) pickerFor = m.messageId }) } },
+                                reactions = display.drawn(m.reactions).takeIf { it.isNotEmpty() && !m.deleted }?.let { shown -> @Composable { ReactionChips(shown, session.me, session::knownNameOf, { if (member) toggle(m.messageId, it) }, emojiOf) { if (member) pickerFor = m.messageId } } },
                                 editor = if (editing == m.messageId && !m.deleted) ({ EditField(editDraft, { editDraft = it }, editRoom, { saveEdit(m) }, { editing = null }) { removals.Field(m.attachments, m.cards) } }) else null,
                                 under = session.editRefusals[m.messageId]?.let { words -> @Composable { LumiaErrorText(words) } },
                                 washed = m.mentionsMe,
@@ -786,6 +833,8 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                                 onLongPress = if (!m.deleted && member) ({ actionsFor = m.messageId }) else null,
                                 // Their role or title, as the server shows: the author's tag in its member list (a message carries none).
                                 tag = server?.let { session.tagOf(it.serverId, m.authorAccountId) },
+                                emoji = m.emoji,
+                                emojiOf = emojiOf,
                             )
                         }
                     }
@@ -798,6 +847,11 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                 if (choices.isNotEmpty() && query != null) {
                     MentionList(choices, name, session::avatarOf) { choice ->
                         val picked = pickMention(draft.text, query, choice)
+                        draft = TextFieldValue(picked.text, TextRange(picked.caret))
+                    }
+                } else if (emojiOptions.isNotEmpty() && emojiQuery != null) {
+                    EmojiList(emojiOptions, emojiOf) { e ->
+                        val picked = pickEmoji(draft.text, emojiQuery, e.name)
                         draft = TextFieldValue(picked.text, TextRange(picked.caret))
                     }
                 } else if (missed != null) {
@@ -827,6 +881,7 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
                     room = room,
                     strip = { ComposerStrip(session, channelId, cards, waiting) },
                     leading = if (member) ({ AttachButton(session, channelId) }) else null,
+                    trailing = if (member) ({ EmojiButton { inserting = true } }) else null,
                     sendable = maySend(draft.text, pending, false) && !waiting && !sending,
                 ) { send() }
             } else {
@@ -864,7 +919,19 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
             onDismiss = { actionsFor = null },
         )
     }
-    pickerFor?.let { id -> EmojiPickerSheet(frequentEmoji(store.recentEmoji), onPick = { react(id, it); pickerFor = null }, onDismiss = { pickerFor = null }) }
+    // The server's emoji in a section of their own and in "Frequently used", in its conversations only.
+    val section = server?.let { it.name to serverEmoji }
+    val frequent = frequentIn(store.recentEmoji, if (server != null) serverEmoji else null)
+    pickerFor?.let { id -> EmojiPickerSheet(frequent, onPick = { p -> react(id, p); pickerFor = null }, onDismiss = { pickerFor = null }, section, emojiMatches, emojiOf) }
+    if (inserting) {
+        EmojiPickerSheet(frequent, onPick = { p ->
+            inserting = false
+            draft = inserted(draft, p)
+            store.used(p.kept)
+            focus.requestFocus()
+            keyboard?.show()
+        }, onDismiss = { inserting = false }, section, emojiMatches, emojiOf)
+    }
     deleting?.let { id ->
         val m = messages.firstOrNull { it.messageId == id }
         DeleteDialog(
@@ -873,6 +940,12 @@ fun ChannelScreen(store: AppStore, session: LumiaSession, channelId: String, dis
             onDismiss = { deleting = null },
         )
     }
+}
+
+/** The composer's field with [pick] put in at its caret, over what is selected (the emoji button): a Unicode emoji as itself, a server's as `:name:` and a space. */
+private fun inserted(field: TextFieldValue, pick: EmojiPick): TextFieldValue {
+    val put = insertAt(field.text, field.selection.start, field.selection.end, pick.inserted)
+    return TextFieldValue(put.text, TextRange(put.caret))
 }
 
 /** The composer's field once the words it held as [sent] have gone (`afterSend`): empty, or what was typed after them, the caret at its end. */
@@ -972,7 +1045,8 @@ private fun MentionItem(session: LumiaSession, m: MessageSummary, home: Boolean,
                     Text(at, style = LumiaTokens.textMeta.style, color = LumiaTokens.inkMuted.color)
                 }
                 m.reply?.let { q -> ReferenceLine(session, q, null, null) }
-                LumiaBody(m.body, mentions = m.mentions, nameOf = session::knownNameOf, edited = m.edited, expanded = expanded, onExpanded = onExpanded)
+                val drawn = session.drawnEmoji(channel?.serverId)
+                LumiaBody(m.body, mentions = m.mentions, nameOf = session::knownNameOf, edited = m.edited, expanded = expanded, onExpanded = onExpanded, emoji = m.emoji, emojiOf = { drawn[it] })
             }
         }
     }

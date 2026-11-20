@@ -24,6 +24,7 @@ import uniffi.lumia_ffi.DeviceSummary
 import uniffi.lumia_ffi.DmChannelSummary
 import uniffi.lumia_ffi.DmLogSummary
 import uniffi.lumia_ffi.DmResponse
+import uniffi.lumia_ffi.EmojiSummary
 import uniffi.lumia_ffi.InvitePreviewSummary
 import uniffi.lumia_ffi.InviteSummary
 import uniffi.lumia_ffi.InstanceSummary
@@ -392,6 +393,63 @@ class LumiaSession(
 
     /** The tag beside a member's name in a server, their role or their title as the server shows; none for none. */
     fun tagOf(serverId: String, accountId: String): TagLook? = rolesTagLook(memberOf(serverId, accountId)?.tag)
+
+    // A server's own emoji (specs/emoji.md). The core holds them, from the
+    // snapshot and the account log, and every rule: which a typed prefix
+    // matches, the refs a send carries (found by the core from the words),
+    // and the custom reactions kept by id. A change made here answers with
+    // the snapshot; one made elsewhere comes as `EmojiChanged`, after the
+    // `AccountApplied` whose snapshot the session has taken by then.
+
+    /** A server's live emoji, oldest first, as the snapshot has them; none for a server not held. */
+    fun serverEmoji(serverId: String?): List<EmojiSummary> =
+        serverId?.let { id -> snapshot?.servers?.firstOrNull { it.serverId == id }?.emoji } ?: emptyList()
+
+    /** A server's emoji as drawn, by id: each with its picture's address (only the instance's own, `pictureOf`). */
+    fun drawnEmoji(serverId: String?): Map<String, DrawnEmoji> =
+        serverEmoji(serverId).mapNotNull { drawnEmoji(it, ::pictureOf) }.associateBy { it.id }
+
+    /** The server's emoji the `:word` typed after a colon matches, in the order the composer lists them (the core's; nothing under two characters). */
+    fun emojiMatches(serverId: String, prefix: String): List<EmojiSummary> = client.now { emojiMatches(serverId, prefix) }
+
+    /** A picture's bytes as chosen, made one of the server's emoji by the instance under [name]. */
+    suspend fun uploadEmoji(serverId: String, name: String, picture: ByteArray, mediaType: String) {
+        took(client.call { uploadEmoji(serverId, name, picture, mediaType) })
+    }
+
+    /** A new name for one of a server's emoji; messages keep theirs and draw it by its new one. */
+    suspend fun renameEmoji(serverId: String, emojiId: String, name: String) {
+        took(client.call { renameEmoji(serverId, emojiId, name) })
+    }
+
+    /** One of a server's emoji removed: its picture goes, its name stays in what used it. */
+    suspend fun removeEmoji(serverId: String, emojiId: String) {
+        took(client.call { removeEmoji(serverId, emojiId) })
+        keepListedEmoji()
+    }
+
+    /**
+     * A server's emoji changed: read again (the core's `serverEmoji`), the
+     * snapshot taken again should it not have them yet; the server's
+     * conversations held read again from the core, which has named its
+     * reactions anew (one left after a removal reads as the emoji was last
+     * called); and the pictures of those no server lists any more let go.
+     */
+    private suspend fun emojiChanged(serverId: String) {
+        if (leaving || !signedIn) return
+        val now = runCatching { client.call { serverEmoji(serverId) } }.getOrNull() ?: return
+        if (now != serverEmoji(serverId)) refreshSnapshot()
+        for (channel in snapshot?.channels.orEmpty()) {
+            if (channel.serverId == serverId && channel.channelId in messages) refreshMessages(channel.channelId)
+        }
+        keepListedEmoji()
+    }
+
+    /** Lets go of every emoji picture held that no server of the snapshot lists (specs/emoji.md 7). */
+    private fun keepListedEmoji() {
+        val listed = snapshot?.servers?.flatMap { s -> s.emoji.mapNotNull { pictureOf(it.imageUrl) } }?.toSet() ?: return
+        forgetEmojiPictures { it in listed }
+    }
 
     // The rail (architecture 6.9)
 
@@ -1375,6 +1433,18 @@ class LumiaSession(
         }
     }
 
+    /**
+     * Adds this account's reaction with one of the server's emoji, by its
+     * id, or takes it away when it has it (specs/emoji.md 9); a removed
+     * one can only be taken away, which the instance holds to.
+     */
+    fun reactEmoji(channelId: String, messageId: String, emojiId: String) {
+        val remove = messages[channelId]?.firstOrNull { it.messageId == messageId }?.reactions?.any { it.emojiId == emojiId && it.me } == true
+        scope.launch {
+            try { client.call { reactEmoji(channelId, messageId, emojiId, remove) } } catch (e: Exception) { lastError = e.lumiaMessage }
+        }
+    }
+
     /** The same in a personal conversation, inside its encryption. */
     fun dmReact(channelId: String, messageId: String, emoji: String) {
         val remove = removes(dmLogs[channelId]?.messages?.firstOrNull { it.messageId == messageId }?.reactions ?: emptyList(), emoji)
@@ -1802,6 +1872,7 @@ class LumiaSession(
             // A server's roles, some members' roles or titles, or which of the two it shows (architecture 7.5):
             // what the core keeps has it, and the snapshot was taken again for the `AccountApplied` before this.
             is ClientEvent.TagsChanged -> refreshTags(event.serverId)
+            is ClientEvent.EmojiChanged -> emojiChanged(event.serverId)
             is ClientEvent.Reconnecting -> { peopleWithStart = false; connection = ConnectionState.Reconnecting(event.attempt) }
             is ClientEvent.Disconnected -> { peopleWithStart = false; connection = ConnectionState.Disconnected(event.reason) }
             is ClientEvent.Closed -> {

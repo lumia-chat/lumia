@@ -35,8 +35,11 @@ private const val PICTURE_SIDE = 256
 /** The most a fetched picture may be; the instance's own square is far less. */
 private const val PICTURE_FETCH_MAX = 4 * 1024 * 1024
 
-/** Every picture fetched, forgotten: a phone removed from its account keeps none of the people it showed. */
-fun forgetPictures() = Pictures.held.evictAll()
+/** Every picture fetched, forgotten, a server's emoji too: a phone removed from its account keeps none of the people it showed. */
+fun forgetPictures() {
+    Pictures.held.evictAll()
+    forgetEmojiPictures()
+}
 
 /** Fetched pictures by address, up to 16 MB of them. */
 private object Pictures {

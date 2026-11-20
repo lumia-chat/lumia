@@ -160,8 +160,8 @@ fun <T> lastEditable(items: List<T>, editable: (T) -> Boolean): T? = items.lastO
 
 // Reactions
 
-/** "Frequently used": what this phone reacted with, newest first, then the quick six, at most [RECENT_EMOJI]. */
-fun frequentEmoji(recent: List<String>): List<String> = (recent + QUICK_REACTIONS.filter { it !in recent }).take(RECENT_EMOJI)
+/** "Frequently used" out of a server: what this phone used of Unicode's, newest first, then the quick six, at most [RECENT_EMOJI] (`frequentIn`, which a server's own join in that server). */
+fun frequentEmoji(recent: List<String>): List<String> = frequentIn(recent, null).mapNotNull { (it as? EmojiPick.Unicode)?.emoji }
 
 /** What this phone has reacted with once [emoji] is used: it first, the rest after, at most [RECENT_EMOJI]. */
 fun usedEmoji(recent: List<String>, emoji: String): List<String> = (listOf(emoji) + recent.filter { it != emoji }).take(RECENT_EMOJI)

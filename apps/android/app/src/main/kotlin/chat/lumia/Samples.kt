@@ -84,7 +84,7 @@ fun BodySamples(display: Display) {
                         mentions = s.mentions, nameOf = nameOf,
                         edited = s.edited, washed = s.washed,
                         expanded = expanded[s.id] == true, onExpanded = { expanded[s.id] = it },
-                        reactions = display.drawn(s.reactions).takeIf { it.isNotEmpty() }?.let { drawn -> @Composable { ReactionChips(drawn, "me", nameOf, {}, {}) } },
+                        reactions = display.drawn(s.reactions).takeIf { it.isNotEmpty() }?.let { drawn -> @Composable { ReactionChips(drawn, "me", nameOf, {}) {} } },
                     )
                 }
                 item { LumiaComposer(draft, { draft = it }, "Message #general", room = MessageRoom(true, 1204)) {} }

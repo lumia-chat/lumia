@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +57,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
@@ -65,13 +69,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.BodyInline
+import uniffi.lumia_ffi.EmojiRefSummary
 import uniffi.lumia_ffi.MentionSummary
 import uniffi.lumia_ffi.MessageRoom
-import uniffi.lumia_ffi.parseBody
+import uniffi.lumia_ffi.parseBodyMarked
 
 /** Inline code beside the message text around it, as the desktop draws it. */
 private const val CODE_SCALE = 0.9f
@@ -89,7 +95,11 @@ private const val COPIED_MS = 1500L
  * soft wash; inline code a chip on the inset ground; links in the link
  * ink, opened in the browser. An [edited] message's words are followed by
  * "(edited)", smaller and quieter, on its last line, or on a line of its
- * own when the body does not end in a paragraph.
+ * own when the body does not end in a paragraph. The server's [emoji] it
+ * uses (its refs) are drawn as their pictures where [emojiOf] holds them
+ * (specs/emoji.md 6): in the line, the text's size times
+ * [EMOJI_IN_TEXT] tall and as wide as their shape, `:name:` to a screen
+ * reader; one not held is its words as typed.
  *
  * With [onExpanded], a body drawn taller than 14 lines is drawn at the
  * height of its first 10, its last fading into the row under it, with
@@ -104,8 +114,10 @@ fun LumiaBody(
     edited: Boolean = false,
     expanded: Boolean = false,
     onExpanded: ((Boolean) -> Unit)? = null,
+    emoji: List<EmojiRefSummary> = emptyList(),
+    emojiOf: (String) -> DrawnEmoji? = { null },
 ) {
-    val blocks = remember(body, mentions) { parseBody(body, mentions) }
+    val blocks = remember(body, mentions, emoji) { parseBodyMarked(body, mentions, emoji) }
     val scale = LocalTextScale.current
     val look = InlineLook(
         emphasis = SpanStyle(fontStyle = FontStyle.Italic),
@@ -119,7 +131,9 @@ fun LumiaBody(
     )
     // The names drawn, so a name that changes draws again.
     val names = mentions.map { if (it.everyone) null else nameOf(it.accountId) }
-    val drawing = Drawing(look, mentions, names, nameOf)
+    // The emoji held, so one renamed, removed or come to be known draws again.
+    val held = emoji.map { emojiOf(it.emojiId) }
+    val drawing = Drawing(look, mentions, names, nameOf, emoji, held, emojiOf)
     val inline = edited && editedInline(blocks)
     val words = @Composable {
         Column {
@@ -136,7 +150,15 @@ fun LumiaBody(
 }
 
 /** What every paragraph of one body is drawn with. */
-private class Drawing(val look: InlineLook, val mentions: List<MentionSummary>, val names: List<String?>, val nameOf: (String) -> String?)
+private class Drawing(
+    val look: InlineLook,
+    val mentions: List<MentionSummary>,
+    val names: List<String?>,
+    val nameOf: (String) -> String?,
+    val emoji: List<EmojiRefSummary>,
+    val held: List<DrawnEmoji?>,
+    val emojiOf: (String) -> DrawnEmoji?,
+)
 
 /**
  * Blocks one under another, as the desktop sets them: paragraphs 4 apart,
@@ -201,7 +223,17 @@ private fun Block(block: BodyBlock, drawing: Drawing, inItem: Boolean, edited: B
 @Composable
 private fun Paragraph(inline: BodyInline, drawing: Drawing, edited: Boolean) {
     val look = drawing.look
-    val styled = remember(inline, look, drawing.names, edited) { styledInline(inline, look, drawing.mentions, { m, typed -> mentionWords(m, typed, drawing.nameOf) }, edited) }
+    val styled = remember(inline, look, drawing.names, drawing.held, edited) {
+        styledInline(inline, look, drawing.mentions, { m, typed -> mentionWords(m, typed, drawing.nameOf) }, edited, drawing.emoji, drawing.emojiOf)
+    }
+    // Each emoji's picture in its words' place: as tall as the text's emoji, as wide as its shape.
+    val pictures = remember(styled.emoji) {
+        styled.emoji.associate { e ->
+            emojiContentId(e) to InlineTextContent(Placeholder((EMOJI_IN_TEXT * e.aspect).em, EMOJI_IN_TEXT.em, PlaceholderVerticalAlign.TextCenter)) {
+                LumiaEmoji(e, Modifier.fillMaxSize())
+            }
+        }
+    }
     val wash = LumiaTokens.accentSoft.color
     val ground = LumiaTokens.inset.color
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -210,9 +242,10 @@ private fun Paragraph(inline: BodyInline, drawing: Drawing, edited: Boolean) {
         styled.text,
         style = LumiaTokens.textMessage.scaled,
         color = LumiaTokens.inkBody.color,
+        inlineContent = pictures,
         onTextLayout = { layout = it },
         modifier = Modifier
-            .then(if (padded || edited) Modifier.semantics { contentDescription = styled.words } else Modifier)
+            .then(if (padded || edited || styled.emoji.isNotEmpty()) Modifier.semantics { contentDescription = styled.words } else Modifier)
             .then(
                 if (!padded) Modifier else Modifier.drawBehind {
                     val l = layout ?: return@drawBehind

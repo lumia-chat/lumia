@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -90,6 +91,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -105,7 +107,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import chat.lumia.kit.AvatarTone
 import chat.lumia.kit.DELETE_QUESTION
+import chat.lumia.kit.DrawnEmoji
+import chat.lumia.kit.EmojiPick
 import chat.lumia.kit.EmojiSet
+import chat.lumia.kit.LumiaEmoji
+import chat.lumia.kit.MENTION_ROWS
+import chat.lumia.kit.emojiSearchPrefix
 import chat.lumia.kit.LumiaAvatar
 import chat.lumia.kit.LumiaCounter
 import chat.lumia.kit.LumiaErrorText
@@ -128,6 +135,7 @@ import chat.lumia.kit.reactedWords
 import chat.lumia.kit.referenceName
 import chat.lumia.kit.referenceWords
 import chat.lumia.kit.replyingTo
+import uniffi.lumia_ffi.EmojiSummary
 import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.QuoteSummary
 import uniffi.lumia_ffi.ReactionSummary
@@ -148,6 +156,11 @@ private val ReplyGlyph = (LumiaTokens.space14 + LumiaTokens.space16) / 2
 private val SwitchGlyph = (LumiaTokens.space12 + LumiaTokens.space14) / 2
 /** A reaction chip: 32 high, 12 at the sides, the emoji at 14. */
 private val ChipHeight = LumiaTokens.space28 + LumiaTokens.space4
+/** A server's emoji in a chip: 18 high, as wide as its shape. */
+private val ChipEmoji = LumiaTokens.space18
+/** A server's emoji in the picker's cell (28), in a row of the `:` list (24). */
+private val PickerEmoji = LumiaTokens.space28
+private val ListEmoji = LumiaTokens.space24
 
 /** The reference line's 13: the small link's size, at the weight given, scaled as the row's text is. */
 @Composable
@@ -283,13 +296,22 @@ private fun Minus() {
  * picker. Not drawn at all while Preferences hides reactions (`Display.drawn`).
  * With no [onToggle] the chips are drawn and nothing more, no tap, no long
  * press and no Add reaction: Preferences' preview, a picture of messages.
+ *
+ * One of the server's emoji (specs/emoji.md 9) is its picture where
+ * [emojiOf] holds it, 18 high, named by its present `:name:`; one it does
+ * not hold (removed) is its `:name:` as the reaction was last called,
+ * counted as before, which this account can take away but nobody can add
+ * to: a tap on it does nothing for one who has not reacted with it.
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String) -> String?, onToggle: ((String) -> Unit)?, onAdd: () -> Unit) {
+fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String) -> String?, onToggle: ((ReactionSummary) -> Unit)?, emojiOf: (String) -> DrawnEmoji? = { null }, onAdd: () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6), verticalArrangement = Arrangement.spacedBy(LumiaTokens.space6)) {
         for (r in reactions) {
-            val words = reactedWords(r, me, nameOf)
+            val custom = r.emojiId.ifEmpty { null }?.let(emojiOf)
+            val words = reactedWords(if (custom != null) r.copy(reaction = custom.label) else r, me, nameOf)
+            // A removed emoji takes no new reactions; this account's own can still go.
+            val toggles = onToggle != null && (r.emojiId.isEmpty() || custom != null || r.me)
             val shape = RoundedCornerShape(LumiaTokens.radiusPill)
             val chip = @Composable {
                 Row(
@@ -299,7 +321,7 @@ fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String)
                         .clip(shape)
                         .background(if (r.me) LumiaTokens.accentSoft.color else LumiaTokens.reaction.color, shape)
                         .border(1.dp, if (r.me) LumiaTokens.reactionOnBorder.color else LumiaTokens.reaction.color, shape)
-                        .then(if (onToggle != null) Modifier.clickable(role = Role.Button) { onToggle(r.reaction) } else Modifier)
+                        .then(if (toggles) Modifier.clickable(role = Role.Button) { onToggle?.invoke(r) } else Modifier)
                         .semantics(mergeDescendants = true) {
                             contentDescription = "$words, ${r.count}"
                             selected = r.me
@@ -308,7 +330,11 @@ fun ReactionChips(reactions: List<ReactionSummary>, me: String, nameOf: (String)
                     horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space6),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(r.reaction, style = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
+                    if (custom != null) {
+                        LumiaEmoji(custom, Modifier.height(ChipEmoji).width(ChipEmoji * custom.aspect.coerceIn(0.25f, 4f)))
+                    } else {
+                        Text(r.reaction, style = LumiaTokens.textLinkSm.scaled.copy(fontWeight = FontWeight(LumiaTokens.textMessage.weight)))
+                    }
                     Text("${r.count}", style = LumiaTokens.textLinkSm.scaled, color = if (r.me) LumiaTokens.accentInk.color else LumiaTokens.inkSecondary.color)
                 }
             }
@@ -369,18 +395,33 @@ private fun SheetItem(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 /**
  * The emoji picker, as a sheet: a search field ("Search emoji"), then
- * "Frequently used" from this phone's own reactions, then every emoji by
- * Unicode's groups (`EmojiSet`: up to Unicode 16, the default skin tone).
- * A search matches an emoji's name and shortcodes. Choosing one reacts
- * with it and closes the sheet.
+ * "Frequently used" from this phone's own, then, in a server's
+ * conversation ([server], its name and its emoji), a section of the
+ * server's emoji headed by its name (specs/emoji.md 10), then every emoji
+ * by Unicode's groups (`EmojiSet`: up to Unicode 16, the default skin
+ * tone). A search lists the server's that match first, as the core
+ * matches a typed `:` prefix ([matches]: by the start of the name, then
+ * anywhere in it, nothing under two characters), then Unicode's by name
+ * and shortcodes, in one grid without headings. A server's emoji is its
+ * picture, named `:name:` to a screen reader. In a personal conversation
+ * there is no server section and none of a server's emoji is offered.
+ * Choosing one hands it to [onPick], which closes the sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun EmojiPickerSheet(frequent: List<String>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+fun EmojiPickerSheet(
+    frequent: List<EmojiPick>,
+    onPick: (EmojiPick) -> Unit,
+    onDismiss: () -> Unit,
+    server: Pair<String, List<EmojiSummary>>? = null,
+    matches: (String) -> List<EmojiSummary> = { emptyList() },
+    emojiOf: (String) -> DrawnEmoji? = { null },
+) {
     var search by rememberSaveable { mutableStateOf("") }
     val found = remember(search) { EmojiSet.search(search) }
+    val foundCustom = remember(search, server) { if (server == null || search.isBlank()) emptyList() else matches(emojiSearchPrefix(search)) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = LumiaTokens.surface.color, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = LumiaTokens.space16).semantics { paneTitle = "Emoji" }) {
             Box(
                 Modifier.fillMaxWidth().height(LumiaTokens.controlHeight)
                     .background(LumiaTokens.field.color, RoundedCornerShape(LumiaTokens.radius8))
@@ -391,24 +432,38 @@ fun EmojiPickerSheet(frequent: List<String>, onPick: (String) -> Unit, onDismiss
                 LumiaInput(search, { search = it }, "Search emoji", modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Search emoji" })
             }
             val cell = LumiaTokens.tileSize
+            val customCell = @Composable { e: EmojiSummary -> CustomEmojiCell(e, emojiOf(e.emojiId)) { onPick(EmojiPick.Custom(e)) } }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(cell),
                 modifier = Modifier.fillMaxWidth().height(cell * 7).padding(top = LumiaTokens.space8),
             ) {
                 fun heading(words: String) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "heading $words", contentType = "heading") {
-                        Text(words, style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color, modifier = Modifier.padding(top = LumiaTokens.space8, bottom = LumiaTokens.space4).semantics { heading() })
+                        Text(words, style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = LumiaTokens.space8, bottom = LumiaTokens.space4).semantics { heading() })
                     }
                 }
                 if (search.isNotBlank()) {
-                    if (found.isEmpty()) heading("No emoji found")
-                    items(found, key = { "found ${it.emoji}" }, contentType = { "emoji" }) { EmojiCell(it.emoji, it.name, onPick) }
+                    if (found.isEmpty() && foundCustom.isEmpty()) heading("No emoji found")
+                    items(foundCustom, key = { "found custom ${it.emojiId}" }, contentType = { "custom" }) { customCell(it) }
+                    items(found, key = { "found ${it.emoji}" }, contentType = { "emoji" }) { EmojiCell(it.emoji, it.name) { e -> onPick(EmojiPick.Unicode(e)) } }
                 } else {
                     heading("Frequently used")
-                    items(frequent, key = { "frequent $it" }, contentType = { "emoji" }) { EmojiCell(it, EmojiSet.nameOf(it) ?: it, onPick) }
+                    items(frequent, key = { "frequent ${it.kept}" }, contentType = { if (it is EmojiPick.Custom) "custom" else "emoji" }) { pick ->
+                        when (pick) {
+                            is EmojiPick.Unicode -> EmojiCell(pick.emoji, EmojiSet.nameOf(pick.emoji) ?: pick.emoji) { onPick(pick) }
+                            is EmojiPick.Custom -> customCell(pick.emoji)
+                        }
+                    }
+                    if (server != null && server.second.isNotEmpty()) {
+                        // Headed by the server's name; a key of its own, so a server named as a group is not that group.
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "server heading", contentType = "heading") {
+                            Text(server.first, style = LumiaTokens.textSection.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = LumiaTokens.space8, bottom = LumiaTokens.space4).semantics { heading() })
+                        }
+                        items(server.second, key = { "server ${it.emojiId}" }, contentType = { "custom" }) { customCell(it) }
+                    }
                     for ((group, emoji) in EmojiSet.byGroup) {
                         heading(group)
-                        items(emoji, key = { "${group} ${it.emoji}" }, contentType = { "emoji" }) { EmojiCell(it.emoji, it.name, onPick) }
+                        items(emoji, key = { "${group} ${it.emoji}" }, contentType = { "emoji" }) { EmojiCell(it.emoji, it.name) { e -> onPick(EmojiPick.Unicode(e)) } }
                     }
                 }
             }
@@ -424,6 +479,64 @@ private fun EmojiCell(emoji: String, name: String, onPick: (String) -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(emoji, style = LumiaTokens.titleChannel.style)
+    }
+}
+
+/** One of the server's emoji in the picker: its picture fitted in 28, `:name:` to a screen reader; its name in words while the picture is not here. */
+@Composable
+private fun CustomEmojiCell(emoji: EmojiSummary, drawn: DrawnEmoji?, onPick: () -> Unit) {
+    Box(
+        Modifier.size(LumiaTokens.tileSize).clip(RoundedCornerShape(LumiaTokens.radius8)).clickable(role = Role.Button, onClick = onPick)
+            .clearAndSetSemantics { contentDescription = ":${emoji.name}:"; role = Role.Button; onClick { onPick(); true } },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (drawn != null) LumiaEmoji(drawn, Modifier.size(PickerEmoji))
+        else Text(":${emoji.name}:", style = LumiaTokens.textTag.style, color = LumiaTokens.inkMuted.color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * The `:` list over the composer (specs/emoji.md 10, the "Emoji composer"
+ * board): the server's emoji whose names match what follows the colon, in
+ * the core's order, each with its picture (24) and `:name:`. A tap
+ * completes the `:name:` with a space after it. At most [MENTION_ROWS]
+ * rows, as the @ list; typing more narrows it.
+ */
+@Composable
+fun EmojiList(options: List<EmojiSummary>, emojiOf: (String) -> DrawnEmoji?, onPick: (EmojiSummary) -> Unit) {
+    val shape = RoundedCornerShape(LumiaTokens.radius14)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = LumiaTokens.space16, end = LumiaTokens.space16, bottom = LumiaTokens.space6)
+            .background(LumiaTokens.surface.color, shape)
+            .border(1.dp, LumiaTokens.lineStrong.color, shape)
+            .padding(LumiaTokens.space6)
+            // Not "Emoji", which is the composer's button beside it.
+            .semantics { contentDescription = "Emoji to complete" },
+        verticalArrangement = Arrangement.spacedBy(LumiaTokens.space2),
+    ) {
+        for (e in options.take(MENTION_ROWS)) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = LumiaTokens.controlHeight + LumiaTokens.space4).clip(RoundedCornerShape(LumiaTokens.radius8))
+                    .clickable(role = Role.Button) { onPick(e) }
+                    .semantics(mergeDescendants = true) { contentDescription = ":${e.name}:" }
+                    .padding(horizontal = LumiaTokens.space10),
+                horizontalArrangement = Arrangement.spacedBy(LumiaTokens.space10),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(ListEmoji), contentAlignment = Alignment.Center) { emojiOf(e.emojiId)?.let { LumiaEmoji(it, Modifier.fillMaxSize()) } }
+                Text(":${e.name}:", style = LumiaTokens.textCompact.style, color = LumiaTokens.ink.color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** The composer's emoji button (Ryan, 2026-11-20): Add reaction's glyph, "Emoji" to a screen reader; it opens the picker, whose choice goes in at the caret. */
+@Composable
+fun EmojiButton(onClick: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onClick, modifier = Modifier.size(LumiaTokens.controlHeight)) {
+        Icon(Icons.Outlined.AddReaction, contentDescription = "Emoji", tint = LumiaTokens.iconStrong.color)
     }
 }
 

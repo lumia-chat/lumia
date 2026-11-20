@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import uniffi.lumia_ffi.BodyBlock
 import uniffi.lumia_ffi.DeviceSummary
+import uniffi.lumia_ffi.EmojiRefSummary
 import uniffi.lumia_ffi.MentionSummary
 import uniffi.lumia_ffi.MessageRoom
 import uniffi.lumia_ffi.TagLook
@@ -279,6 +280,9 @@ fun LumiaMessageRow(
     // The tag beside the author's name where the row draws the name over its words (architecture 7.5):
     // their role or their title, as the server shows and the core worked out. None in one line.
     tag: TagLook? = null,
+    // The server's emoji its words use (its refs), drawn as their pictures where `emojiOf` holds them (specs/emoji.md 6).
+    emoji: List<EmojiRefSummary> = emptyList(),
+    emojiOf: (String) -> DrawnEmoji? = { null },
 ) {
     // Who wrote it, tapped on the avatar or the name: their profile card, where a screen offers one.
     val authorTap = if (onAuthor != null) Modifier.clickable(onClickLabel = "view $author's profile", role = Role.Button, onClick = onAuthor) else Modifier
@@ -292,7 +296,7 @@ fun LumiaMessageRow(
                 deleted -> Text("(deleted)", style = LumiaTokens.textMessage.scaled, color = LumiaTokens.inkQuiet.color)
                 // A message of attachments alone has no words to draw.
                 text.isEmpty() && media != null && !edited -> Unit
-                else -> LumiaBody(text, mentions = mentions, nameOf = nameOf, edited = edited, expanded = expanded, onExpanded = onExpanded)
+                else -> LumiaBody(text, mentions = mentions, nameOf = nameOf, edited = edited, expanded = expanded, onExpanded = onExpanded, emoji = emoji, emojiOf = emojiOf)
             }
             if (media != null && !deleted) media(onLongPress.takeIf { editor == null })
             if (reactions != null && editor == null) Box(Modifier.padding(top = LumiaTokens.space2)) { reactions() }
@@ -548,6 +552,8 @@ fun LumiaComposer(
     // the attach button before it, and whether Send is offered for files alone (null: words only).
     strip: (@Composable () -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
+    // What is drawn after the field, before Send: the emoji button.
+    trailing: (@Composable () -> Unit)? = null,
     sendable: Boolean? = null,
     onSend: () -> Unit,
 ) {
@@ -586,6 +592,7 @@ fun LumiaComposer(
                     }
                 },
             )
+            trailing?.invoke()
             LumiaPrimaryButton("Send", enabled = enabled && (sendable ?: value.text.isNotBlank()) && !isOver(room), onClick = onSend)
         }
         LumiaCounter(room, Modifier.padding(start = LumiaTokens.space10, end = LumiaTokens.space10, bottom = LumiaTokens.space8))

@@ -94,6 +94,8 @@ sealed class Screen {
     data class RoleHolders(val serverId: String, val roleId: String) : Screen()
     /** The Members section: the server's members, their roles and titles. */
     data class ServerMembers(val serverId: String) : Screen()
+    /** The Emoji section: the server's own emoji, uploaded, renamed and removed (specs/emoji.md 10). */
+    data class ServerEmoji(val serverId: String) : Screen()
     data class Browse(val serverId: String) : Screen()
     data class Members(val channelId: String) : Screen()
     data class AddPeople(val channelId: String) : Screen()
@@ -142,6 +144,7 @@ private fun Screen.kept(): String = when (this) {
     is Screen.RoleEditor -> if (roleId == null) "role $serverId" else "role $serverId $roleId"
     is Screen.RoleHolders -> "role-holders $serverId $roleId"
     is Screen.ServerMembers -> "server-members $serverId"
+    is Screen.ServerEmoji -> "server-emoji $serverId"
     is Screen.Browse -> "browse $serverId"
     is Screen.Members -> "members $channelId"
     is Screen.AddPeople -> "add-people $channelId"
@@ -176,6 +179,7 @@ private fun screenOf(kept: String): Screen? {
         "role" -> Screen.RoleEditor(id.substringBefore(' '), id.substringAfter(' ', "").ifEmpty { null })
         "role-holders" -> id.substringAfter(' ', "").takeIf { it.isNotEmpty() }?.let { Screen.RoleHolders(id.substringBefore(' '), it) }
         "server-members" -> Screen.ServerMembers(id)
+        "server-emoji" -> Screen.ServerEmoji(id)
         "browse" -> Screen.Browse(id)
         "members" -> Screen.Members(id)
         "add-people" -> Screen.AddPeople(id)
