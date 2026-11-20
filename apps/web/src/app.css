@@ -64,6 +64,22 @@ a { color: var(--link); }
 .gallery-roles__drag { position: relative; }
 .gallery-roles__ghost { position: absolute; left: var(--space-24); right: calc(var(--space-12) * -1); top: 146px; pointer-events: none; }
 .gallery-roles__ghost .lu-role { box-shadow: var(--shadow-floating); cursor: grabbing; }
+/* A server's own emoji (plan step 12): the picker over the conversation, a tooltip drawn, a section's top, a phone's sheets and keyboard. */
+.gallery-emoji .lu-shell__conversation { position: relative; }
+.gallery-emoji__over { position: absolute; left: 232px; top: 186px; z-index: 6; }
+.gallery-emoji__tipat { position: relative; display: inline-block; }
+.gallery-emoji__tip { position: absolute; left: 50%; bottom: calc(100% + var(--space-6)); transform: translateX(-50%); padding: 3px 8px; border-radius: var(--radius-6); background: var(--ink); color: var(--surface); font-size: 12px; font-weight: 600; line-height: 1.4; white-space: nowrap; }
+.gallery-emoji__tipped .lu-msg { padding-top: var(--space-28); }
+.gallery-emoji__section { align-self: stretch; display: flex; flex-direction: column; gap: var(--space-16); }
+.gallery-emoji__pickersheet { padding: 10px 0 0; gap: var(--space-4); }
+.gallery-emoji__sheethead { display: flex; align-items: center; gap: var(--space-14); }
+.gallery-emoji__sheetactions { display: flex; flex-direction: column; gap: var(--space-8); }
+.gallery-keys { flex: none; display: flex; flex-direction: column; gap: 11px; padding: 8px 3px 40px; background: var(--track); }
+.gallery-keys__row { display: flex; justify-content: center; gap: 6px; }
+.gallery-keys__row--in { padding: 0 18px; }
+.gallery-keys__key { flex: 1; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-6); background: var(--surface); box-shadow: 0 1px 0 var(--line-strong); color: var(--ink); font-size: 20px; }
+.gallery-keys__key--wide { flex: 1.4; font-size: 14px; background: var(--chip); }
+.gallery-keys__key--space { flex: 5; font-size: 14px; }
 
 /* The Phone board: iPhone frames of the Quiet Split folded (the design
    canvas's iOS boards). The status bar and home indicator are the

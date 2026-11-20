@@ -6,7 +6,7 @@ import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { PRESETS, applyPreferences, type Preferences } from "../client/preferences";
 import type { BodyBlock, BodyLink, BodyRun, DeviceSummary, EmbedSummary } from "../client/bridge";
 import { frameBox } from "../client/embeds";
-import { QUICK_REACTIONS } from "../design/emoji";
+import { QUICK_REACTIONS, loadEmoji } from "../design/emoji";
 import {
   AppShell,
   Attachment,
@@ -110,6 +110,12 @@ import {
   type RoleEntry,
   type RosterEntry,
   type TagTone,
+  CustomEmoji,
+  EmojiList,
+  EmojiUpload,
+  ServerEmojiList,
+  type CustomEmojiEntry,
+  type ServerEmojiEntry,
 } from "../design/components";
 import { NeedsBrowser, PhraseStep, RestoreAsk, RestoreForm, RestoreKeep, StartOver } from "./private";
 import { LABEL_MAX, ROLES_HINT, TITLE_HINT, roleNameHint } from "../client/roles";
@@ -1321,7 +1327,7 @@ const SETTINGS_SECTIONS: { id: string; label: string; icon: IconName; note?: str
 ];
 
 /** Server settings in the server's main pane: the section list beside the section shown. */
-function SettingsFrame(props: { section: "overview" | "roles" | "members"; tall?: boolean; onSection?: (id: string) => void; children: JSX.Element }) {
+function SettingsFrame(props: { section: string; sections?: { id: string; label: string; icon: IconName }[]; tall?: boolean; onSection?: (id: string) => void; children: JSX.Element }) {
   return (
     <AppShell
       height={props.tall ? undefined : 900}
@@ -1332,7 +1338,7 @@ function SettingsFrame(props: { section: "overview" | "roles" | "members"; tall?
         <>
           <ChannelHeader kind="page" name="Server settings" topic="Acme" actions={[]} />
           <div class="lu-settings">
-            <SectionList label="Server settings" sections={SETTINGS_SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))} value={props.section} onChange={props.onSection} />
+            <SectionList label="Server settings" sections={(props.sections ?? SETTINGS_SECTIONS).map((s) => ({ id: s.id, label: s.label, icon: s.icon }))} value={props.section} onChange={props.onSection} />
             <div class="lu-page">{props.children}</div>
           </div>
         </>
@@ -1572,14 +1578,14 @@ type EditorPart = "head" | "identity" | "server" | "channels" | "messages" | "ho
  * (a phone's screen, scrolled), `withheld` the permissions the viewer does
  * not hold and so cannot give.
  */
-function RoleEditor(props: { role?: RoleEntry; on: string[]; withheld?: string[]; holders?: AcmePerson[]; parts?: EditorPart[]; class?: string }) {
+function RoleEditor(props: { role?: RoleEntry; on: string[]; withheld?: string[]; holders?: AcmePerson[]; parts?: EditorPart[]; permissions?: typeof PERMISSIONS; class?: string }) {
   const everyone = () => !!props.role?.everyone;
   const [name, setName] = createSignal(props.role?.name ?? "");
   const [tone, setTone] = createSignal<Tone | null>(props.role?.tone ?? null);
   const [tagged, setTagged] = createSignal(!props.role?.untagged);
   const [on, setOn] = createSignal(props.on);
   const has = (part: EditorPart) => !props.parts || props.parts.includes(part);
-  const permissions = (heading: string) => PERMISSIONS.find((g) => g.heading === heading)?.items ?? [];
+  const permissions = (heading: string) => (props.permissions ?? PERMISSIONS).find((g) => g.heading === heading)?.items ?? [];
   const row = (p: { id: string; name: string; caption: string }) => {
     const withheld = () => !!props.withheld?.includes(p.id);
     return (
@@ -2068,23 +2074,615 @@ function RolePhonesBoard() {
   );
 }
 
-type Board = "split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "preferences" | "settings" | "roles" | "role" | "members" | "tags" | "pcard" | "rolephones" | "pieces";
+// ── A server's own emoji (specs/emoji.md, GitHub #17, plan step 12) ──
+// Five boards no canvas drew: the picker, the composer's `:` list, emoji
+// in messages and reactions, Server settings' Emoji section (with Manage
+// emoji in a role's editor), and the same on phones. Acme's emoji are the
+// gallery's own drawings, inline SVG, since the design canvas carries no
+// picture but the rail's logo; the product draws each from its
+// `image_url`. Sample data only.
+
+/** A sample emoji's drawing at its shape, in units of 32. */
+const EMOJI_ART: Record<string, { w: number; h: number; draw: () => JSX.Element }> = {
+  parrot: { w: 32, h: 32, draw: () => <Parrot body="#3dbe5a" wing="#e5484d" /> },
+  parrotwave: { w: 32, h: 32, draw: () => <Parrot body="#4a8bea" wing="#f5b83d" wave /> },
+  sadparrot: { w: 32, h: 32, draw: () => <Parrot body="#8a9bb0" wing="#5d6b7d" sad /> },
+  blob: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="19.5" r="11" fill="#ffc933" />
+        <path d="M10.5 10 L15 1.5 L20.5 9.5 Z" fill="#7c5cff" />
+        <path d="M12.3 6.6 L18.6 7.8 M13.8 3.9 L17 4.5" stroke="#ffc933" stroke-width="1.3" stroke-linecap="round" />
+        <circle cx="15" cy="1.8" r="1.7" fill="#ff5c8a" />
+        <circle cx="12" cy="18.5" r="1.7" fill="#3a2a10" />
+        <circle cx="20" cy="18.5" r="1.7" fill="#3a2a10" />
+        <path d="M11.5 23 Q16 27.5 20.5 23" stroke="#3a2a10" stroke-width="1.9" fill="none" stroke-linecap="round" />
+      </svg>
+    ),
+  },
+  lgtm: {
+    w: 64,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 64 32" aria-hidden="true">
+        <rect x="1" y="3" width="62" height="26" rx="7" fill="#2e9e5b" />
+        <rect x="3.5" y="5.5" width="57" height="21" rx="5" fill="none" stroke="#bff0d2" stroke-width="1.2" />
+        <path d="M8 10 V22 H14 M30 12 A6.2 6.2 0 1 0 30 20 V16.5 H26 M34.5 10 H43.5 M39 10 V22 M47.5 22 V10 L52.5 17 L57.5 10 V22" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    ),
+  },
+  cat: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M5 14 L6.5 3 L13 9 H19 L25.5 3 L27 14 C29 23 23 29.5 16 29.5 C9 29.5 3 23 5 14 Z" fill="#f2a43a" />
+        <path d="M8 6.5 L9 11 L11.8 9.3 Z M24 6.5 L23 11 L20.2 9.3 Z" fill="#ffd9a8" />
+        <ellipse cx="11.5" cy="17.5" rx="1.6" ry="2.3" fill="#2b1d10" />
+        <ellipse cx="20.5" cy="17.5" rx="1.6" ry="2.3" fill="#2b1d10" />
+        <path d="M14.8 21 H17.2 L16 22.4 Z" fill="#e5617a" />
+        <path d="M13.3 23.6 Q14.8 25.2 16 23.2 Q17.2 25.2 18.7 23.6" stroke="#2b1d10" stroke-width="1.2" fill="none" stroke-linecap="round" />
+        <path d="M3 20 L9 21 M3.5 23.5 L9 22.5 M29 20 L23 21 M28.5 23.5 L23 22.5" stroke="#2b1d10" stroke-width="0.9" stroke-linecap="round" />
+      </svg>
+    ),
+  },
+  squirrel: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M18 29.5 C29 28.5 31.5 15 26 8 C22.5 3.5 16.5 5.5 19 10.5 C21.5 15 24 20 18.5 24.5 Z" fill="#a8693a" />
+        <ellipse cx="12.5" cy="22" rx="7" ry="7.5" fill="#c98a4b" />
+        <ellipse cx="12" cy="23.5" rx="3.6" ry="4.8" fill="#efcf9f" />
+        <circle cx="10.5" cy="11.5" r="5.6" fill="#c98a4b" />
+        <path d="M7.5 7.5 L7.8 2.8 L11.2 6.4 Z" fill="#a8693a" />
+        <circle cx="8.6" cy="11" r="1.25" fill="#1d1d1f" />
+        <circle cx="5.2" cy="13.2" r="0.9" fill="#1d1d1f" />
+        <path d="M6.5 4.5 L14.5 3 L13 6.8 Z" fill="#2f6fde" />
+      </svg>
+    ),
+  },
+  acme: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <rect x="2" y="2" width="28" height="28" rx="8" fill="#4f5bd5" />
+        <path d="M10 23 L16 9 L22 23 M12.6 18 H19.4" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    ),
+  },
+  coffee: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M11 9.5 C10 7.5 12 6 11 3.5 M16 9.5 C15 7.5 17 6 16 3.5" stroke="#9aa0a6" stroke-width="1.6" fill="none" stroke-linecap="round" />
+        <path d="M23 14 C28.5 14 28.5 22 23 22" stroke="#8a6a4a" stroke-width="2.2" fill="none" />
+        <path d="M5.5 12.5 H23.5 V21 C23.5 25.8 19.8 28.5 14.5 28.5 C9.2 28.5 5.5 25.8 5.5 21 Z" fill="#f3efe7" stroke="#8a6a4a" stroke-width="1.5" />
+        <ellipse cx="14.5" cy="12.8" rx="8.2" ry="1.9" fill="#6b4226" />
+      </svg>
+    ),
+  },
+  flame: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 30 C8 30 5 24 7 18 C8 14 11 12 11 7 C14 9 15 12 15 14 C17 11 18 7 17 2 C23 6 27 13 26 20 C25.5 26 22 30 16 30 Z" fill="#ff7a1a" />
+        <path d="M16 30 C12 30 10 27 11 23 C12 20 14 19 14 16 C17 18 19 21 20 24 C21 27 19 30 16 30 Z" fill="#ffd23f" />
+      </svg>
+    ),
+  },
+  plusone: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx="16" cy="16" r="14" fill="#2f6fde" />
+        <path d="M7 16 H15 M11 12 V20 M19 12.5 L22.5 10 V22" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    ),
+  },
+  star: {
+    w: 32,
+    h: 32,
+    draw: () => (
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M16 1.5 L19.6 10.6 L29.5 9.4 L22.8 17 L28.4 25.4 L18.7 23.2 L16 30.5 L13.3 23.2 L3.6 25.4 L9.2 17 L2.5 9.4 L12.4 10.6 Z" fill="#ff5c8a" />
+        <path d="M16 9 L17.6 14 L22.5 14.2 L18.6 17.3 L20 22 L16 19.2 L12 22 L13.4 17.3 L9.5 14.2 L14.4 14 Z" fill="#ffd23f" />
+      </svg>
+    ),
+  },
+  heart: {
+    w: 32,
+    h: 28,
+    draw: () => (
+      <svg viewBox="0 0 32 28" aria-hidden="true">
+        <path d="M16 26.5 C5.5 19.5 2 13.5 4.2 8.2 C6.4 3 12.5 2.4 16 6.8 C19.5 2.4 25.6 3 27.8 8.2 C30 13.5 26.5 19.5 16 26.5 Z" fill="#4f5bd5" />
+        <path d="M11.5 18 L16 8.5 L20.5 18 M13.4 14.6 H18.6" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    ),
+  },
+};
+
+/** A parrot, the shape of a well-loved emoji: its body, beak, eye and wing; a wing raised to wave, or a tear. */
+function Parrot(props: { body: string; wing: string; wave?: boolean; sad?: boolean }) {
+  return (
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M9 30 C4.5 23 5.5 12 11.5 7.5 C16 4 23 5 25.5 10.5 C27.5 15.5 24.5 20 22 23 L23.5 30 Z" fill={props.body} />
+      <path d="M24.5 10 L31 13.5 L24.5 16.5 Z" fill="#f59f3a" />
+      <circle cx="19.5" cy="11.5" r="2.8" fill="#fff" />
+      <circle cx={props.sad ? 19.6 : 20.3} cy={props.sad ? 12.6 : 11.8} r="1.4" fill="#1d1d1f" />
+      <Show when={props.wave} fallback={<path d="M9.5 18.5 C11.5 15 17 16 17.5 21.5 C14.5 24 11 23 9.5 18.5 Z" fill={props.wing} />}>
+        <path d="M11 19 C6.5 16 4 10.5 5.5 6 C8.5 8 11 12 13.5 17.5 Z" fill={props.wing} />
+      </Show>
+      <Show when={props.sad}>
+        <path d="M18 15.5 C17 17.5 17.2 19 18.4 19 C19.6 19 19.7 17.5 18 15.5 Z" fill="#7cc4ff" />
+      </Show>
+    </svg>
+  );
+}
+
+/** One of Acme's emoji as the core would hold it, its picture one of the drawings above (a fresh one each time it is drawn). */
+function sampleEmoji(id: string, name: string, art: string, by: string, animated = false): ServerEmojiEntry {
+  const a = EMOJI_ART[art] ?? { w: 32, h: 32, draw: () => <></> };
+  return {
+    id,
+    name,
+    by,
+    animated,
+    width: a.w * 4,
+    height: a.h * 4,
+    get drawing() {
+      return a.draw();
+    },
+  };
+}
+
+// Acme's twelve, oldest first: two of them animated, one wide.
+const ACME_EMOJI: ServerEmojiEntry[] = [
+  sampleEmoji("e1", "acme", "acme", "Ryan Winchester"),
+  sampleEmoji("e2", "lgtm", "lgtm", "Devon Park"),
+  sampleEmoji("e3", "shipit", "squirrel", "Sam Okafor"),
+  sampleEmoji("e4", "plusone", "plusone", "Devon Park"),
+  sampleEmoji("e5", "coffee", "coffee", "Priya Natarajan"),
+  sampleEmoji("e6", "blobcat", "cat", "Maya Chen"),
+  sampleEmoji("e7", "thisisfine", "flame", "Sam Okafor"),
+  sampleEmoji("e8", "partyparrot", "parrot", "Maya Chen", true),
+  sampleEmoji("e9", "parrotwave", "parrotwave", "Devon Park", true),
+  sampleEmoji("e10", "party_blob", "blob", "Maya Chen"),
+  sampleEmoji("e11", "sadparrot", "sadparrot", "Leo Martins"),
+  sampleEmoji("e12", "hype", "star", "Priya Natarajan"),
+];
+const EMOJI: Record<string, ServerEmojiEntry> = Object.fromEntries(ACME_EMOJI.map((e) => [e.name, e]));
+const emoji = (name: string): ServerEmojiEntry => EMOJI[name] ?? ACME_EMOJI[0]!;
+/** An emoji in a message's text: its picture at the text's emoji height. */
+const E = (props: { name: string }) => <CustomEmoji {...emoji(props.name)} />;
+
+/** What `:par` lists: those whose names start with it, then those with it anywhere. */
+const PAR = ["partyparrot", "parrotwave", "party_blob", "sadparrot"].map(emoji);
+const FREQUENT_IN_ACME: (string | CustomEmojiEntry)[] = ["👍", emoji("partyparrot"), "❤️", "😂", "🎉", emoji("lgtm"), "😮", "🙏"];
+const FREQUENT_AT_HOME = ["👍", "❤️", "😂", "🎉", "😮", "🙏", "😢", "👀"];
+
+const EMOJI_SECTIONS: { id: string; label: string; icon: IconName; note?: string }[] = [...SETTINGS_SECTIONS, { id: "emoji", label: "Emoji", icon: "emoji", note: "12 of 50" }];
+
+/** The permissions under their headings with Manage emoji under Server, as the core will list it (its words there come later). */
+const PERMISSIONS_EMOJI: typeof PERMISSIONS = PERMISSIONS.map((g) =>
+  g.heading === "Server" ? { ...g, items: [...g.items, { id: "manage_emoji", name: "Manage emoji", caption: "Upload, rename and remove the server’s emoji." }] } : g,
+);
+
+const OLD_LOGO = { name: "oldlogo" };
+
+/** A morning in #general with Acme's emoji in it. */
+function EmojiTalk(props: { addReaction?: boolean }) {
+  return (
+    <MessageList>
+      <Divider variant="day" label="Yesterday" />
+      <Message author={PEOPLE.leo.name} initials="LM" tone="sky" time="4:12 PM" datetime="2026-11-19T16:12" actions={false} onAddReaction={props.addReaction ? () => {} : undefined} reactions={[{ custom: OLD_LOGO, label: ":oldlogo:", count: 4, who: "Maya, Sam and 2 others reacted with :oldlogo:" }, { emoji: "🚀", label: "🚀", count: 2, who: "Devon and Priya reacted with 🚀" }]}>
+        <p>
+          The launch badge is up: :oldlogo: <E name="shipit" />
+        </p>
+      </Message>
+      <Divider variant="day" label="Today" />
+      <Message
+        author={PEOPLE.maya.name}
+        initials="MC"
+        tone="peach"
+        time="9:04 AM"
+        datetime="2026-11-20T09:04"
+        actions={false}
+        reactions={[
+          { custom: emoji("partyparrot"), label: ":partyparrot:", count: 5, selected: true, who: "You, Devon, Sam and 2 others reacted with :partyparrot:" },
+          { emoji: "🎉", label: "🎉", count: 3, who: "Devon, Priya and Leo reacted with 🎉" },
+          { custom: emoji("hype"), label: ":hype:", count: 2, who: "Priya and Leo reacted with :hype:" },
+        ]}
+      >
+        <p>
+          Onboarding shipped this morning <E name="partyparrot" /> thanks, all.
+        </p>
+      </Message>
+      <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="9:11 AM" datetime="2026-11-20T09:11" actions={false} reactions={[{ custom: emoji("lgtm"), label: ":lgtm:", count: 2, who: "Sam and Maya reacted with :lgtm:" }]}>
+        <p>
+          <E name="lgtm" /> on the copy changes. Merging after lunch <E name="coffee" />
+        </p>
+      </Message>
+      <Message author={PEOPLE.priya.name} initials="PN" tone="amber" time="9:24 AM" datetime="2026-11-20T09:24" actions={false}>
+        <p>
+          The build is red again <E name="thisisfine" />
+        </p>
+      </Message>
+      <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="9:31 AM" datetime="2026-11-20T09:31" actions={false} reactions={[{ custom: emoji("blobcat"), label: ":blobcat:", count: 1, who: "Priya reacted with :blobcat:" }, { emoji: "👍", label: "👍", count: 2, selected: true, who: "You and Priya reacted with 👍" }]}>
+        <p>
+          Fixed, it was the cache. Green now <E name="party_blob" /> <E name="blobcat" />
+        </p>
+      </Message>
+    </MessageList>
+  );
+}
+
+function EmojiShell(props: { height?: number; composer?: JSX.Element; over?: JSX.Element; addReaction?: boolean }) {
+  return (
+    <AppShell
+      height={props.height ?? 760}
+      class="gallery-emoji__shell"
+      rail={<AcmeRail />}
+      sidebar={<AcmeSidebar channel="general" />}
+      main={
+        <>
+          <ChannelHeader name="general" topic="Company-wide announcements and water-cooler chat" />
+          <EmojiTalk addReaction={props.addReaction} />
+          {props.composer ?? <Composer placeholder="Message #general" />}
+          {props.over}
+        </>
+      }
+    />
+  );
+}
+
+function EmojiPickerBoard() {
+  return (
+    <div class="gallery-roles gallery-emoji">
+      <p class="gallery-roles__lead">The emoji picker in a server’s conversation, here opened from a message’s Add reaction: “Frequently used” first, which may hold Acme’s own, then a section of Acme’s emoji headed by its name, then Unicode’s groups. Choosing one reacts with it; in the composer it puts in its :name:. The quick row of six over a message stays Unicode’s.</p>
+      <EmojiShell
+        addReaction
+        over={
+          <div class="gallery-emoji__over">
+            <EmojiPicker frequent={FREQUENT_IN_ACME} server={{ name: "Acme", emoji: ACME_EMOJI }} />
+          </div>
+        }
+      />
+      <div class="gallery-roles__more">
+        <Figure bare caption="A search finds Acme’s emoji by name, ahead of Unicode’s: those whose names start with what was typed, then those with it anywhere (sadparrot), then Unicode’s that match. Each is named by its :name: under the pointer and to assistive technology.">
+          <EmojiPicker frequent={FREQUENT_IN_ACME} server={{ name: "Acme", emoji: ACME_EMOJI }} defaultQuery="par" />
+        </Figure>
+        <Figure bare caption="In a personal conversation: no server section, and “Frequently used” holds Unicode’s alone. A server’s emoji are used in that server only.">
+          <EmojiPicker frequent={FREQUENT_AT_HOME} />
+        </Figure>
+        <Figure bare caption="The same search in a personal conversation finds Unicode’s alone.">
+          <EmojiPicker frequent={FREQUENT_AT_HOME} defaultQuery="par" />
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+function EmojiComposerBoard() {
+  return (
+    <div class="gallery-roles gallery-emoji">
+      <p class="gallery-roles__lead">Typing a colon and two or more letters lists Acme’s emoji whose names match, by the start of the name and then anywhere in it, each with its picture; the first is highlighted. The arrow keys move, Return or Tab chooses, Escape closes it. Choosing one completes the :name: with a space after it.</p>
+      <EmojiShell composer={<Composer placeholder="Message #general" value="Shipped the importer :par" above={<EmojiList id="gallery-emoji-list" options={PAR} active={0} />} />} />
+      <div class="gallery-roles__more">
+        <Figure wide caption="Chosen: the composer holds :partyparrot: as text, a space after it. The core finds it when the message is sent and keeps the emoji beside the text; the field never draws the picture.">
+          <Composer placeholder="Message #general" value="Shipped the importer :partyparrot: " />
+        </Figure>
+        <Figure wide caption="Sent, it is drawn as its picture in the message.">
+          <MessageList class="pieces__list">
+            <Message author={PEOPLE.self.name} initials="RW" tone="indigo" time="9:40 AM" datetime="2026-11-20T09:40" actions={false}>
+              <p>
+                Shipped the importer <E name="partyparrot" />
+              </p>
+            </Message>
+          </MessageList>
+        </Figure>
+        <Figure wide caption="One letter after the colon lists nothing yet: two or more are needed, so a time like 10:30 or a :) is not interrupted.">
+          <Composer placeholder="Message #general" value="Shipped the importer :p" />
+        </Figure>
+        <Figure wide caption="In a personal conversation nothing is listed, and :partyparrot: typed there stays text.">
+          <Composer placeholder="Message Maya Chen" value="Shipped the importer :par" />
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+function EmojiMessagesBoard() {
+  return (
+    <div class="gallery-roles gallery-emoji">
+      <p class="gallery-roles__lead">Acme’s emoji in its messages: each drawn at the height of an emoji in that text, as wide as its shape (lgtm is twice as wide as tall). Leo’s message from yesterday used :oldlogo:, which has since been removed: it is its name as text, and its reaction stays counted, drawn as :oldlogo:, with no new ones. Reactions with Acme’s emoji sit beside Unicode’s, this account’s own tinted.</p>
+      <EmojiShell />
+      <div class="gallery-roles__more">
+        <Figure wide caption="Under the pointer, an emoji’s tooltip is its :name:, the name it has now (here drawn; the browser’s own tooltip in the product). Assistive technology reads the same.">
+          <MessageList class="pieces__list gallery-emoji__tipped">
+            <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:04 AM" datetime="2026-11-20T09:04" actions={false}>
+              <p>
+                Onboarding shipped this morning{" "}
+                <span class="gallery-emoji__tipat">
+                  <E name="partyparrot" />
+                  <span class="gallery-emoji__tip" aria-hidden="true">
+                    :partyparrot:
+                  </span>
+                </span>{" "}
+                thanks, all.
+              </p>
+            </Message>
+          </MessageList>
+        </Figure>
+        <Figure wide caption="partyparrot and parrotwave are animated: they play wherever they are drawn, in text, in a chip and in the picker. Where the system asks for reduced motion their first frame is drawn, as here, and they stay still.">
+          <MessageList class="pieces__list">
+            <Message author={PEOPLE.devon.name} initials="DP" tone="purple" time="9:12 AM" datetime="2026-11-20T09:12" actions={false} reactions={[{ custom: emoji("parrotwave"), label: ":parrotwave:", count: 3, who: "Maya, Sam and Leo reacted with :parrotwave:" }]}>
+              <p>
+                Morning <E name="parrotwave" /> <E name="partyparrot" />
+              </p>
+            </Message>
+          </MessageList>
+        </Figure>
+        <Figure wide caption="Reaction chips: Acme’s emoji by its picture, this account’s own tinted; Unicode’s beside them; a removed emoji’s chip as its :name:, still counted and still taken back by its own reactors, but offering no new ones.">
+          <div class="pieces__row">
+            <ReactionChip custom={emoji("partyparrot")} label=":partyparrot:" count={5} selected />
+            <ReactionChip custom={emoji("lgtm")} label=":lgtm:" count={2} />
+            <ReactionChip emoji="🎉" label="🎉" count={3} />
+            <ReactionChip emoji="👍" label="👍" count={2} selected />
+            <ReactionChip custom={OLD_LOGO} label=":oldlogo:" count={4} />
+            <ReactionChip custom={OLD_LOGO} label=":oldlogo:" count={1} selected />
+          </div>
+        </Figure>
+        <Figure wide caption="A reply quotes its message’s text, so a quoted emoji is its :name:. And in a personal conversation :partyparrot: is only text: Acme’s emoji are not used outside Acme.">
+          <MessageList class="pieces__list">
+            <Message author={PEOPLE.sam.name} initials="SO" tone="mint" time="9:20 AM" datetime="2026-11-20T09:20" actions={false} reference={<ReplyRef {...PEOPLE.maya} text="Onboarding shipped this morning :partyparrot: thanks, all." onOpen={() => {}} />}>
+              Nice work, everyone.
+            </Message>
+            <Message author={PEOPLE.maya.name} initials="MC" tone="peach" time="9:22 AM" datetime="2026-11-20T09:22" actions={false}>
+              In a personal conversation: shipped :partyparrot:
+            </Message>
+          </MessageList>
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+/** The Emoji section's head: the count against the server's limit, and Upload emoji, which is off at the limit and says why. */
+function EmojiHead(props: { count: number; limit: number }) {
+  const full = () => props.count >= props.limit;
+  return (
+    <div class="lu-settings__head">
+      <div class="lu-settings__headtext">
+        <h2 class="lu-settings__title">
+          Emoji{" "}
+          <span class="lu-settings__count">
+            {props.count} of {props.limit}
+          </span>
+        </h2>
+        <p class="lu-settings__subtitle">{full() ? `Acme has as many emoji as it may (${props.limit}). Remove one to upload another.` : "Used as :name: in Acme’s channels and server DMs, and as reactions. A PNG, JPEG, WebP or GIF up to 8 MB, made to fit 128 pixels; an animated one plays."}</p>
+      </div>
+      <Button size="sm" icon="plus" disabled={full()}>
+        Upload emoji
+      </Button>
+    </div>
+  );
+}
+
+const HEART: CustomEmojiEntry = sampleEmoji("new", "acme_heart_v2", "heart", "");
+
+function EmojiSettingsBoard(props: { onSection: (id: string) => void }) {
+  const three = () => ACME_EMOJI.slice(7, 10);
+  return (
+    <div class="gallery-roles gallery-emoji">
+      <p class="gallery-roles__lead">Server settings gain an Emoji section, shown to whoever holds Manage emoji: the count against Acme’s limit, which the instance sets, Upload emoji, and the list, oldest first, each with its picture, :name:, who uploaded it, Rename and Remove. The pane scrolls; here it is drawn at its full length.</p>
+      <SettingsFrame section="emoji" sections={EMOJI_SECTIONS} tall onSection={props.onSection}>
+        <EmojiHead count={12} limit={50} />
+        <ServerEmojiList emoji={ACME_EMOJI} />
+      </SettingsFrame>
+      <div class="gallery-roles__more">
+        <Figure wide caption="Upload emoji opens the system’s picker; the picture chosen comes back here, over the list, with its name made from the file’s name (lowercased, what a name may not hold made _, cut to 32) to change before Save sends it.">
+          <div class="gallery-emoji__section">
+            <EmojiHead count={12} limit={50} />
+            <EmojiUpload picture={HEART} file="Acme-Heart v2.png" size="38 KB" name="acme_heart_v2" />
+            <ServerEmojiList emoji={ACME_EMOJI.slice(0, 2)} />
+          </div>
+        </Figure>
+        <Figure wide caption="Rename, in place: the name between its colons, Save and Cancel. Messages are not rewritten; they draw the emoji by its new name from then on.">
+          <ServerEmojiList emoji={three()} renaming={{ id: "e9", value: "parrot_wave" }} />
+        </Figure>
+        <Figure caption="Upload refused: the name is taken.">
+          <EmojiUpload picture={emoji("partyparrot")} file="Party Parrot.gif" size="412 KB" name="partyparrot" nameError="Acme already has :partyparrot:. Choose another name." />
+        </Figure>
+        <Figure caption="Upload refused: the name is not one a name may be.">
+          <EmojiUpload picture={emoji("party_blob")} file="party blob.png" size="22 KB" name="party-time" nameError="A name is 2 to 32 of a to z, 0 to 9 and _, with no spaces." />
+        </Figure>
+        <Figure caption="Upload refused: the picture (too large here; the other two say “Lumia can’t use this file. Choose a PNG, JPEG, WebP or GIF.” and “This picture couldn’t be read.”).">
+          <EmojiUpload picture={emoji("hype")} file="fireworks.gif" size="6.8 MB" name="fireworks" pictureError="This picture is too large for an emoji. An animated one can have at most 200 frames and come to 512 KB once made." />
+        </Figure>
+        <Figure wide caption="A rename refused, in place: the name is taken.">
+          <ServerEmojiList emoji={three()} renaming={{ id: "e9", value: "partyparrot", error: "Acme already has :partyparrot:. Choose another name." }} />
+        </Figure>
+        <Figure bare caption="Remove asks first, against its button.">
+          <ConfirmPop title="Remove :parrotwave:?" confirm="Remove" danger>
+            <p>Messages that used it will show its name instead.</p>
+          </ConfirmPop>
+        </Figure>
+        <Figure wide caption="At the limit: Upload emoji is off, and the section says Acme has as many as it may. A limit lowered under what a server has deletes nothing; uploads wait until it is under again.">
+          <div class="gallery-emoji__section">
+            <EmojiHead count={50} limit={50} />
+            <ServerEmojiList emoji={ACME_EMOJI.slice(0, 3)} />
+          </div>
+        </Figure>
+        <Figure wide caption="In a role’s editor, Manage emoji under Server (here Moderator’s, on). Its words in the core come later; these stand in for them.">
+          <RoleEditor role={MODERATOR} on={[...MODERATOR_ON, "manage_emoji"]} parts={["server"]} permissions={PERMISSIONS_EMOJI} />
+        </Figure>
+      </div>
+    </div>
+  );
+}
+
+/** A phone's keyboard, drawn: what the composer's list stands over. */
+function Keyboard() {
+  const key = (k: string, wide?: boolean) => <span class={cx("gallery-keys__key", wide && "gallery-keys__key--wide")}>{k}</span>;
+  return (
+    <div class="gallery-keys" aria-hidden="true">
+      <div class="gallery-keys__row">
+        <For each={[..."qwertyuiop"]}>{(k) => key(k)}</For>
+      </div>
+      <div class="gallery-keys__row gallery-keys__row--in">
+        <For each={[..."asdfghjkl"]}>{(k) => key(k)}</For>
+      </div>
+      <div class="gallery-keys__row">
+        {key("⇧", true)}
+        <For each={[..."zxcvbnm"]}>{(k) => key(k)}</For>
+        {key("⌫", true)}
+      </div>
+      <div class="gallery-keys__row">
+        {key("123", true)}
+        <span class="gallery-keys__key gallery-keys__key--space">space</span>
+        {key("return", true)}
+      </div>
+    </div>
+  );
+}
+
+function EmojiPhonesBoard() {
+  const channel = (children: JSX.Element) => (
+    <PhonePanel
+      back="Acme"
+      title={
+        <>
+          <Icon name="hash" size={18} strokeWidth={2.2} class="phone__hash" />
+          general
+        </>
+      }
+      subtitle="Company-wide announcements and water-cooler chat"
+    >
+      {children}
+    </PhonePanel>
+  );
+  const list = () => (
+    <PhonePanel back="Server settings" title="Emoji" subtitle="Acme · 12 of 50">
+      <div class="phone__panel-body">
+        <Button size="sm" block icon="plus">
+          Upload emoji
+        </Button>
+        <ServerEmojiList emoji={ACME_EMOJI} more />
+      </div>
+    </PhonePanel>
+  );
+  const wave = emoji("parrotwave");
+  return (
+    <div class="phones">
+      <PhoneFrame label="The picker as a sheet, from a message’s Add reaction: Frequently used, Acme’s own, then Unicode’s">
+        {channel(<EmojiTalk />)}
+        <div class="phone__scrim" aria-hidden="true"></div>
+        <section class="phone__sheet gallery-emoji__pickersheet" role="dialog" aria-label="Emoji">
+          <span class="phone__sheet-grip" aria-hidden="true"></span>
+          <EmojiPicker frequent={FREQUENT_IN_ACME} server={{ name: "Acme", emoji: ACME_EMOJI }} class="lu-emojipicker--sheet" />
+        </section>
+      </PhoneFrame>
+      <PhoneFrame label="The composer’s list, over the keyboard">
+        {channel(
+          <>
+            <EmojiTalk />
+            <Composer placeholder="Message #general" value="Shipped the importer :par" hint="" tools={false} onAttach={() => {}} above={<EmojiList id="gallery-emoji-phone" options={PAR} active={0} />} />
+          </>,
+        )}
+        <Keyboard />
+      </PhoneFrame>
+      <PhoneFrame label="Server settings: Emoji among its sections, with its count">
+        <PhonePanel back="Acme" title="Server settings" subtitle="Acme">
+          <div class="phone__panel-body">
+            <SectionList label="Server settings" sections={EMOJI_SECTIONS} />
+          </div>
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="Emoji: Upload, and the list; each row’s More opens its actions">{list()}</PhoneFrame>
+      <PhoneFrame label="Upload emoji: the picture chosen, its name made from the file’s, Save">
+        <PhonePanel back="Emoji" title="Upload emoji" subtitle="Acme · 12 of 50">
+          <div class="phone__panel-body">
+            <EmojiUpload picture={HEART} file="Acme-Heart v2.png" size="38 KB" name="acme_heart_v2" />
+          </div>
+        </PhonePanel>
+      </PhoneFrame>
+      <PhoneFrame label="A row’s actions, in a sheet: Rename (in place, as on the desktop) and Remove">
+        {list()}
+        <div class="phone__scrim" aria-hidden="true"></div>
+        <section class="phone__sheet" role="dialog" aria-labelledby="phone-emoji-row">
+          <span class="phone__sheet-grip" aria-hidden="true"></span>
+          <div class="gallery-emoji__sheethead">
+            <CustomEmoji {...wave} size={48} />
+            <div class="lu-card__head">
+              <h2 id="phone-emoji-row" class="lu-card__title">
+                :parrotwave:
+              </h2>
+              <p class="lu-card__subtitle">Uploaded by Devon Park · Animated</p>
+            </div>
+          </div>
+          <div class="gallery-emoji__sheetactions">
+            <Button size="md" block>
+              Rename
+            </Button>
+            <Button size="md" block class="lu-emojis__remove">
+              Remove
+            </Button>
+          </div>
+        </section>
+      </PhoneFrame>
+      <PhoneFrame label="Remove asks first, in a sheet">
+        {list()}
+        <div class="phone__scrim" aria-hidden="true"></div>
+        <section class="phone__sheet" role="dialog" aria-modal="true" aria-labelledby="phone-remove-emoji">
+          <span class="phone__sheet-grip" aria-hidden="true"></span>
+          <div class="lu-card__head">
+            <h2 id="phone-remove-emoji" class="lu-card__title">
+              Remove :parrotwave:?
+            </h2>
+            <p class="lu-card__subtitle">Messages that used it will show its name instead.</p>
+          </div>
+          <div class="pieces__row">
+            <Button variant="danger" size="md">
+              Remove
+            </Button>
+            <Button size="md">Keep it</Button>
+          </div>
+        </section>
+      </PhoneFrame>
+    </div>
+  );
+}
+
+type Board = "split" | "replies" | "home" | "requests" | "devices" | "signin" | "private" | "phone" | "folders" | "preferences" | "settings" | "roles" | "role" | "members" | "tags" | "pcard" | "rolephones" | "epicker" | "ecomposer" | "emessages" | "esettings" | "ephones" | "pieces";
 
 export function DesignGallery() {
   const { theme, apply } = useTheme();
   const [board, setBoard] = createSignal<Board>("split");
   // A settings board's section list leads to the board that draws that section.
-  const toSection = (id: string) => setBoard(id === "roles" ? "roles" : id === "members" ? "members" : "settings");
+  const toSection = (id: string) => setBoard(id === "roles" ? "roles" : id === "members" ? "members" : id === "emoji" ? "esettings" : "settings");
+  // Unicode's emoji are loaded as the gallery opens, so a picker is drawn whole the moment its board is.
+  onMount(() => void loadEmoji().catch(() => {}));
   const roleBoard = () => {
     const b = board();
-    return b === "settings" ? <SettingsBoard onSection={toSection} /> : b === "roles" ? <RolesBoard onSection={toSection} /> : b === "role" ? <RoleEditorBoard onSection={toSection} /> : b === "members" ? <MembersBoard onSection={toSection} /> : b === "tags" ? <TagsBoard /> : b === "pcard" ? <ProfileCardBoard /> : b === "rolephones" ? <RolePhonesBoard /> : undefined;
+    return b === "settings" ? <SettingsBoard onSection={toSection} /> : b === "roles" ? <RolesBoard onSection={toSection} /> : b === "role" ? <RoleEditorBoard onSection={toSection} /> : b === "members" ? <MembersBoard onSection={toSection} /> : b === "tags" ? <TagsBoard /> : b === "pcard" ? <ProfileCardBoard /> : b === "rolephones" ? <RolePhonesBoard /> : emojiBoard();
+  };
+  const emojiBoard = () => {
+    const b = board();
+    return b === "epicker" ? <EmojiPickerBoard /> : b === "ecomposer" ? <EmojiComposerBoard /> : b === "emessages" ? <EmojiMessagesBoard /> : b === "esettings" ? <EmojiSettingsBoard onSection={toSection} /> : b === "ephones" ? <EmojiPhonesBoard /> : undefined;
   };
   return (
     <div class="gallery">
       <header class="gallery__bar">
         <strong>Lumia design system</strong>
         <nav class="gallery__nav" aria-label="Boards">
-          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["preferences", "Preferences"], ["settings", "Server settings"], ["roles", "Roles"], ["role", "Role editor"], ["members", "Members"], ["tags", "Tags"], ["pcard", "Profile card"], ["rolephones", "Roles on phones"], ["pieces", "Pieces"]] as const}>
+          <For each={[["split", "Quiet Split"], ["replies", "Inline replies"], ["home", "Home"], ["requests", "Requests"], ["devices", "Devices"], ["signin", "Sign in"], ["private", "Private messages"], ["phone", "Phone"], ["folders", "Server folders"], ["preferences", "Preferences"], ["settings", "Server settings"], ["roles", "Roles"], ["role", "Role editor"], ["members", "Members"], ["tags", "Tags"], ["pcard", "Profile card"], ["rolephones", "Roles on phones"], ["epicker", "Emoji picker"], ["ecomposer", "Emoji composer"], ["emessages", "Emoji in messages"], ["esettings", "Emoji settings"], ["ephones", "Emoji on phones"], ["pieces", "Pieces"]] as const}>
             {([id, label]) => (
               <button type="button" class="gallery__tab" aria-pressed={board() === id} onClick={() => setBoard(id)}>
                 {label}

@@ -222,10 +222,61 @@ export function IconButton(props: IconButtonProps) {
   );
 }
 
+/* ── A server's own emoji (specs/emoji.md) ─────────────────── */
+
+export interface CustomEmojiPicture {
+  /** Its present name, without the colons. */
+  name: string;
+  /** The picture's address (`image_url`), through the image cache avatars use. */
+  src?: string;
+  /** A drawing in the picture's place: the gallery's samples, which the design canvas carries where it carries no picture. */
+  drawing?: JSX.Element;
+  /** The picture's pixels, which give its shape (at most 128 each way). */
+  width?: number;
+  height?: number;
+  /** An animated GIF: it plays, except under reduced motion, where the shell hands its first frame as `src`. */
+  animated?: boolean;
+}
+
+export interface CustomEmojiEntry extends CustomEmojiPicture {
+  id: string;
+}
+
+export interface CustomEmojiProps extends CustomEmojiPicture {
+  /** In text, at the height of an emoji in that text and as wide as its shape; or a box of so many pixels it fits within (a picker's cell, a list's row, a chip). */
+  size?: "text" | number;
+  class?: string;
+}
+
+/**
+ * One of a server's emoji drawn as its picture: `:name:` (its present
+ * name) is its tooltip and what assistive technology reads. One the client
+ * does not hold is not drawn by this; it is its `:name:` as text.
+ */
+export function CustomEmoji(props: CustomEmojiProps) {
+  const w = () => props.width || 1;
+  const h = () => props.height || 1;
+  const box = () => (typeof props.size === "number" ? props.size : undefined);
+  const pic = () => (
+    <span class="lu-cemoji__pic" style={{ "aspect-ratio": `${w()} / ${h()}`, ...(box() ? (w() >= h() ? { width: "100%" } : { height: "100%" }) : {}) }}>
+      <Show when={props.drawing} fallback={<img src={props.src} alt="" draggable={false} />}>
+        {props.drawing}
+      </Show>
+    </span>
+  );
+  return (
+    <span role="img" aria-label={`:${props.name}:`} title={`:${props.name}:`} class={cx("lu-cemoji", box() ? "lu-cemoji--box" : "lu-cemoji--text", props.class)} style={box() ? { width: box() + "px", height: box() + "px" } : undefined}>
+      {pic()}
+    </span>
+  );
+}
+
 export interface ReactionChipProps {
   /** A board's glyph for the reaction; in the product the reaction is an emoji, drawn as text. */
   icon?: IconName;
   emoji?: string;
+  /** One of the server's emoji: its picture, or its `:name:` as text where the client holds no picture (removed, or not yet known). */
+  custom?: CustomEmojiPicture;
   label: string;
   /** Who reacted, as the tooltip and the accessible name: "Ada and Bo reacted with 👍". */
   who?: string;
@@ -255,6 +306,20 @@ export function ReactionChip(props: ReactionChipProps) {
         props.onToggle?.(next);
       }}
     >
+      <Show when={props.custom}>
+        {(c) => (
+          <Show
+            when={c().src || c().drawing}
+            fallback={
+              <span class="lu-reaction__name" aria-hidden="true">
+                :{c().name}:
+              </span>
+            }
+          >
+            <CustomEmoji {...c()} class="lu-reaction__custom" />
+          </Show>
+        )}
+      </Show>
       <Show when={props.emoji} fallback={<Show when={props.icon}>{(icon) => <Icon name={icon()} size={14} strokeWidth={2} />}</Show>}>
         <span class="lu-reaction__emoji" aria-hidden="true">
           {props.emoji}
@@ -274,11 +339,14 @@ export interface TextFieldProps extends JSX.InputHTMLAttributes<HTMLInputElement
   label: string;
   reveal?: boolean;
   action?: { label: string; href?: string; onClick?: (e: MouseEvent) => void };
+  /** Quiet text in the box around what is typed: an emoji's name between its colons. */
+  before?: string;
+  after?: string;
 }
 
 /** Labelled 46px input with optional action link and password reveal. */
 export function TextField(props: TextFieldProps) {
-  const [local, input] = splitProps(props, ["label", "id", "type", "reveal", "action", "class"]);
+  const [local, input] = splitProps(props, ["label", "id", "type", "reveal", "action", "class", "before", "after"]);
   const fid = fieldId(local.id);
   const [shown, setShown] = createSignal(false);
   const type = () => (local.reveal ? (shown() ? "text" : "password") : local.type ?? "text");
@@ -296,8 +364,18 @@ export function TextField(props: TextFieldProps) {
           )}
         </Show>
       </div>
-      <div class={cx("lu-textfield__box", local.reveal && "has-reveal")}>
+      <div class={cx("lu-textfield__box", local.reveal && "has-reveal", (local.before || local.after) && "has-affix")}>
+        <Show when={local.before}>
+          <span class="lu-textfield__affix" aria-hidden="true">
+            {local.before}
+          </span>
+        </Show>
         <input id={fid} type={type()} class="lu-textfield__input" {...input} />
+        <Show when={local.after}>
+          <span class="lu-textfield__affix" aria-hidden="true">
+            {local.after}
+          </span>
+        </Show>
         <Show when={local.reveal}>
           <button type="button" class="lu-textfield__reveal" aria-label="Show password" aria-pressed={shown()} onClick={() => setShown(!shown())}>
             <Icon name={shown() ? "eye-off" : "eye"} size={18} />
@@ -3444,17 +3522,29 @@ export function MentionList(props: MentionListProps) {
 }
 
 export interface EmojiPickerProps {
-  /** This device's most used, for "Frequently used". */
-  frequent: string[];
+  /** This device's most used, for "Frequently used": a server's own emoji among them only in that server. */
+  frequent: (string | CustomEmojiEntry)[];
+  /** In a server's conversation, its emoji: a section headed by the server's name after "Frequently used", ahead of Unicode's groups. */
+  server?: { name: string; emoji: CustomEmojiEntry[] };
   onPick?: (emoji: string) => void;
+  onPickCustom?: (emoji: CustomEmojiEntry) => void;
+  /** What the search holds as it opens (the boards). */
+  defaultQuery?: string;
   class?: string;
 }
 
-/** Every emoji by Unicode's groups, searchable, with what this device uses most at the top. */
+/** A server's emoji whose names hold what was typed: those that start with it first, then those with it anywhere. */
+function customFound(list: CustomEmojiEntry[], query: string): CustomEmojiEntry[] {
+  const q = query.trim().toLowerCase().replace(/^:|:$/g, "");
+  if (!q) return [];
+  return [...list.filter((e) => e.name.startsWith(q)), ...list.filter((e) => !e.name.startsWith(q) && e.name.includes(q))];
+}
+
+/** Every emoji by Unicode's groups, searchable, with what this device uses most at the top and, in a server, the server's own after it. */
 export function EmojiPicker(props: EmojiPickerProps) {
   const [groups, setGroups] = createSignal<EmojiGroup[] | null>(null);
   const [failed, setFailed] = createSignal(false);
-  const [query, setQuery] = createSignal("");
+  const [query, setQuery] = createSignal(untrack(() => props.defaultQuery) ?? "");
   onMount(() => {
     loadEmoji()
       .then(setGroups)
@@ -3465,12 +3555,20 @@ export function EmojiPicker(props: EmojiPickerProps) {
     for (const g of groups() ?? []) for (const e of g.emoji) names.set(e.emoji, e.name);
     return names;
   });
-  const found = createMemo(() => (query().trim() ? (groups() ?? []).flatMap((g) => g.emoji.filter((e) => emojiMatches(e, query()))) : null));
+  // A server's own come first in a search, then Unicode's.
+  const found = createMemo(() => (query().trim() ? { custom: customFound(props.server?.emoji ?? [], query()), unicode: (groups() ?? []).flatMap((g) => g.emoji.filter((e) => emojiMatches(e, query()))) } : null));
   const cell = (emoji: string, name: string) => (
     <button type="button" class="lu-emojipicker__emoji" aria-label={name} title={name} onClick={() => props.onPick?.(emoji)}>
       {emoji}
     </button>
   );
+  // The button is named by its `:name:`; the picture inside says nothing more.
+  const customCell = (e: CustomEmojiEntry) => (
+    <button type="button" class="lu-emojipicker__emoji" aria-label={`:${e.name}:`} title={`:${e.name}:`} onClick={() => props.onPickCustom?.(e)}>
+      <CustomEmoji {...e} size={28} class="lu-emojipicker__custom" />
+    </button>
+  );
+  const any = (e: string | CustomEmojiEntry) => (typeof e === "string" ? cell(e, named().get(e) ?? e) : customCell(e));
   return (
     <section role="dialog" aria-label="Emoji" class={cx("lu-emojipicker", props.class)}>
       <div class="lu-emojipicker__search">
@@ -3484,8 +3582,18 @@ export function EmojiPicker(props: EmojiPickerProps) {
               <>
                 <h3 class="lu-emojipicker__group">Frequently used</h3>
                 <div class="lu-emojipicker__grid">
-                  <For each={props.frequent}>{(e) => cell(e, named().get(e) ?? e)}</For>
+                  <For each={props.frequent}>{any}</For>
                 </div>
+                <Show when={props.server?.emoji.length ? props.server : undefined}>
+                  {(server) => (
+                    <>
+                      <h3 class="lu-emojipicker__group">{server().name}</h3>
+                      <div class="lu-emojipicker__grid">
+                        <For each={server().emoji}>{customCell}</For>
+                      </div>
+                    </>
+                  )}
+                </Show>
                 <For each={groups() ?? []}>
                   {(g) => (
                     <>
@@ -3500,9 +3608,10 @@ export function EmojiPicker(props: EmojiPickerProps) {
             }
           >
             {(list) => (
-              <Show when={list().length > 0} fallback={<p class="lu-emojipicker__none">No emoji match that.</p>}>
+              <Show when={list().custom.length + list().unicode.length > 0} fallback={<p class="lu-emojipicker__none">No emoji match that.</p>}>
                 <div class="lu-emojipicker__grid">
-                  <For each={list()}>{(e) => cell(e.emoji, e.name)}</For>
+                  <For each={list().custom}>{customCell}</For>
+                  <For each={list().unicode}>{(e) => cell(e.emoji, e.name)}</For>
                 </div>
               </Show>
             )}
@@ -3510,6 +3619,44 @@ export function EmojiPicker(props: EmojiPickerProps) {
         </Show>
       </div>
     </section>
+  );
+}
+
+export interface EmojiListProps {
+  /** The list's id, which the composer's field names as what it controls. */
+  id: string;
+  /** The server's emoji that match what follows the `:`, in the core's order: by the start of the name, then anywhere in it. */
+  options: CustomEmojiEntry[];
+  /** The row the arrow keys are on. */
+  active: number;
+  onPick?: (option: CustomEmojiEntry) => void;
+  onActive?: (index: number) => void;
+  class?: string;
+}
+
+/** The `:` list over the composer: the server's emoji whose names match, each with its picture; one chosen completes `:name: `. */
+export function EmojiList(props: EmojiListProps) {
+  return (
+    <ul id={props.id} role="listbox" aria-label="Emoji" class={cx("lu-mentionlist", "lu-emojilist", props.class)}>
+      <For each={props.options}>
+        {(o, i) => (
+          <li
+            id={props.id + "-" + i()}
+            role="option"
+            aria-selected={i() === props.active}
+            class={cx("lu-mentionlist__row", i() === props.active && "is-active")}
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseMove={() => i() !== props.active && props.onActive?.(i())}
+            onClick={() => props.onPick?.(o)}
+          >
+            <span class="lu-emojilist__pic" aria-hidden="true">
+              <CustomEmoji {...o} size={24} />
+            </span>
+            <span class="lu-mentionlist__name">:{o.name}:</span>
+          </li>
+        )}
+      </For>
+    </ul>
   );
 }
 
@@ -5115,6 +5262,170 @@ export function ConfirmPop(props: ConfirmPopProps) {
         </Button>
       </div>
     </Pop>
+  );
+}
+
+export interface ServerEmojiEntry extends CustomEmojiEntry {
+  /** Who uploaded it, as the server's member list names them. */
+  by: string;
+}
+
+export interface ServerEmojiListProps {
+  /** The server's live emoji, oldest first. */
+  emoji: ServerEmojiEntry[];
+  /** The row being renamed in place: what its field holds, and why it was refused. */
+  renaming?: { id: string; value: string; error?: string; busy?: boolean };
+  /** Each row's Rename and Remove as one More button, whose actions open as a sheet (a phone). */
+  more?: boolean;
+  onRename?: (emoji: ServerEmojiEntry) => void;
+  onRemove?: (emoji: ServerEmojiEntry, pressed: HTMLElement) => void;
+  onMore?: (emoji: ServerEmojiEntry, pressed: HTMLElement) => void;
+  onRenameInput?: (value: string) => void;
+  onRenameSave?: () => void;
+  onRenameCancel?: () => void;
+  class?: string;
+}
+
+/** A server's emoji in its settings: the picture, `:name:`, who uploaded it, Rename in place and Remove. */
+export function ServerEmojiList(props: ServerEmojiListProps) {
+  return (
+    <ul class={cx("lu-emojis", props.class)}>
+      <For each={props.emoji}>
+        {(e) => {
+          const renaming = () => (props.renaming?.id === e.id ? props.renaming : undefined);
+          return (
+            <li class={cx("lu-emojis__item", !!renaming() && "is-renaming")}>
+              <span class="lu-emojis__pic">
+                <CustomEmoji {...e} size={32} />
+              </span>
+              <Show
+                when={renaming()}
+                fallback={
+                  <>
+                    <span class="lu-emojis__text">
+                      <span class="lu-emojis__name">:{e.name}:</span>
+                      <span class="lu-emojis__sub">
+                        Uploaded by {e.by}
+                        <Show when={e.animated}> · Animated</Show>
+                      </span>
+                    </span>
+                    <Show
+                      when={props.more}
+                      fallback={
+                        <span class="lu-emojis__actions">
+                          <Button size="sm" aria-label={`Rename :${e.name}:`} onClick={() => props.onRename?.(e)}>
+                            Rename
+                          </Button>
+                          <Button size="sm" class="lu-emojis__remove" aria-label={`Remove :${e.name}:`} aria-haspopup="dialog" onClick={(ev) => props.onRemove?.(e, ev.currentTarget)}>
+                            Remove
+                          </Button>
+                        </span>
+                      }
+                    >
+                      <IconButton icon="more" label={`More for :${e.name}:`} size={36} aria-haspopup="dialog" onClick={(ev) => props.onMore?.(e, ev.currentTarget)} />
+                    </Show>
+                  </>
+                }
+              >
+                {(r) => (
+                  <form
+                    class="lu-emojis__rename"
+                    onSubmit={(ev) => {
+                      ev.preventDefault();
+                      props.onRenameSave?.();
+                    }}
+                  >
+                    <TextField label={`New name for :${e.name}:`} class="lu-emojis__field" before=":" after=":" value={r().value} maxLength={32} autocomplete="off" spellcheck={false} readOnly={r().busy} onInput={(ev) => props.onRenameInput?.(ev.currentTarget.value)} />
+                    <span class="lu-emojis__actions">
+                      <Button size="sm" disabled={r().busy} onClick={() => props.onRenameCancel?.()}>
+                        Cancel
+                      </Button>
+                      <Button variant="primary" size="sm" type="submit" disabled={r().busy || !r().value.trim()}>
+                        Save
+                      </Button>
+                    </span>
+                    <Show when={r().error}>
+                      <p class="lu-emojis__error" role="alert">
+                        {r().error}
+                      </p>
+                    </Show>
+                  </form>
+                )}
+              </Show>
+            </li>
+          );
+        }}
+      </For>
+    </ul>
+  );
+}
+
+export interface EmojiUploadProps {
+  /** The picture chosen from the system's picker, drawn as it was chosen. */
+  picture: CustomEmojiPicture;
+  /** Its file's name and size, as the system gave them. */
+  file: string;
+  size?: string;
+  /** The name: made from the file's name by the core, then as typed. */
+  name: string;
+  /** Why the name was refused (taken, or not allowed). */
+  nameError?: string;
+  /** Why the picture was refused, in words. */
+  pictureError?: string;
+  busy?: boolean;
+  onChoose?: () => void;
+  onName?: (value: string) => void;
+  onCancel?: () => void;
+  onSave?: () => void;
+  class?: string;
+}
+
+/** Upload emoji's form, once a picture is chosen: the picture, its name to change before it is sent, Save. */
+export function EmojiUpload(props: EmojiUploadProps) {
+  return (
+    <form
+      class={cx("lu-emojiup", props.class)}
+      onSubmit={(e) => {
+        e.preventDefault();
+        props.onSave?.();
+      }}
+    >
+      <div class="lu-emojiup__picture">
+        <span class={cx("lu-emojiup__frame", !!props.pictureError && "is-refused")}>
+          <CustomEmoji {...props.picture} name={props.name || props.picture.name} size={64} />
+        </span>
+        <span class="lu-emojiup__file">
+          <span class="lu-emojiup__filename">{props.file}</span>
+          <Show when={props.size}>
+            <span class="lu-emojiup__size">{props.size}</span>
+          </Show>
+          <Button variant="text" class="lu-emojiup__choose" disabled={props.busy} onClick={() => props.onChoose?.()}>
+            Choose another…
+          </Button>
+        </span>
+      </div>
+      <Show when={props.pictureError}>
+        <p class="lu-emojis__error" role="alert">
+          {props.pictureError}
+        </p>
+      </Show>
+      <div class="lu-emojiup__name">
+        <TextField label="Name" before=":" after=":" value={props.name} maxLength={32} autocomplete="off" spellcheck={false} readOnly={props.busy} onInput={(e) => props.onName?.(e.currentTarget.value)} />
+        <Show when={props.nameError} fallback={<p class="lu-emojiup__hint">2 to 32 letters, digits and _. It is typed as :{props.name || "name"}: in a message.</p>}>
+          <p class="lu-emojis__error" role="alert">
+            {props.nameError}
+          </p>
+        </Show>
+      </div>
+      <div class="lu-emojiup__actions">
+        <Button size="md" disabled={props.busy} onClick={() => props.onCancel?.()}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="md" type="submit" disabled={props.busy || !props.name.trim()}>
+          Save
+        </Button>
+      </div>
+    </form>
   );
 }
 

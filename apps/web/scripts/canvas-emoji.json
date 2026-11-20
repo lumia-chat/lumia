@@ -1,0 +1,61 @@
+{
+  "parts": ".lu-shell, .gallery-roles__figure, .phone-figure",
+  "boards": [
+    {
+      "tab": "Emoji picker",
+      "parts": [
+        ["EmojiPicker", "Emoji picker · in a server’s conversation"],
+        ["EmojiPickerSearch", "Emoji picker · a search"],
+        ["EmojiPickerPersonal", "Emoji picker · in a personal conversation"],
+        ["EmojiPickerPersonalSearch", "Emoji picker · a search, personal"]
+      ]
+    },
+    {
+      "tab": "Emoji composer",
+      "parts": [
+        ["EmojiComposer", "Emoji composer · the : list"],
+        ["EmojiComposerChosen", "Emoji composer · chosen"],
+        ["EmojiComposerSent", "Emoji composer · sent"],
+        ["EmojiComposerOneLetter", "Emoji composer · one letter"],
+        ["EmojiComposerPersonal", "Emoji composer · personal"]
+      ]
+    },
+    {
+      "tab": "Emoji in messages",
+      "parts": [
+        ["EmojiMessages", "Emoji in messages"],
+        ["EmojiMessagesTooltip", "Emoji in messages · tooltip"],
+        ["EmojiMessagesAnimated", "Emoji in messages · animated, held still"],
+        ["EmojiMessagesChips", "Emoji in messages · reaction chips"],
+        ["EmojiMessagesQuoted", "Emoji in messages · quoted, and personal"]
+      ]
+    },
+    {
+      "tab": "Emoji settings",
+      "parts": [
+        ["EmojiSettings", "Server settings · Emoji"],
+        ["EmojiSettingsUpload", "Server settings · Emoji, uploading"],
+        ["EmojiSettingsRename", "Server settings · Emoji, renaming"],
+        ["EmojiSettingsTaken", "Server settings · Emoji, name taken"],
+        ["EmojiSettingsNotAllowed", "Server settings · Emoji, name not allowed"],
+        ["EmojiSettingsPicture", "Server settings · Emoji, picture refused"],
+        ["EmojiSettingsRenameTaken", "Server settings · Emoji, rename refused"],
+        ["EmojiSettingsRemove", "Server settings · Emoji, Remove asks"],
+        ["EmojiSettingsLimit", "Server settings · Emoji, at the limit"],
+        ["EmojiSettingsPermission", "Role editor · Manage emoji"]
+      ]
+    },
+    {
+      "tab": "Emoji on phones",
+      "parts": [
+        ["EmojiPhonePicker", "iOS · Emoji picker"],
+        ["EmojiPhoneComposer", "iOS · The : list over the keyboard"],
+        ["EmojiPhoneSettings", "iOS · Server settings"],
+        ["EmojiPhoneList", "iOS · Emoji"],
+        ["EmojiPhoneUpload", "iOS · Upload emoji"],
+        ["EmojiPhoneRow", "iOS · An emoji’s actions"],
+        ["EmojiPhoneRemove", "iOS · Remove an emoji?"]
+      ]
+    }
+  ]
+}

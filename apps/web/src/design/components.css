@@ -1210,3 +1210,55 @@ button.lu-role__open { cursor: pointer; }
 .lu-sketch--tags { justify-content: center; gap: var(--space-12); background: var(--surface); }
 .lu-sketch__tagrow { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .lu-sketch__tagrow .lu-tag { flex: 0 1 auto; min-width: 0; }
+
+/* A server's own emoji (specs/emoji.md). In text: as tall as an emoji there and as wide as its shape, on the line as an emoji sits. In a box: fitted, never cropped. */
+.lu-cemoji { display: inline-block; flex: none; }
+.lu-cemoji--text { height: 1.3em; vertical-align: -0.28em; }
+.lu-cemoji--text > .lu-cemoji__pic { height: 100%; }
+.lu-cemoji--box { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+.lu-cemoji__pic { display: block; max-width: 100%; max-height: 100%; }
+.lu-cemoji__pic > img, .lu-cemoji__pic > svg { display: block; width: 100%; height: 100%; }
+/* In a chip: the chip's emoji height, as wide as its shape. */
+.lu-cemoji--text.lu-reaction__custom { height: 18px; vertical-align: middle; }
+.lu-reaction__name { font-size: 12.5px; font-weight: 600; }
+/* The picker as a phone's sheet: the sheet is its surface. */
+.lu-emojipicker--sheet { width: auto; height: 600px; border: 0; border-radius: 0; box-shadow: none; background: none; }
+.lu-emojilist__pic { flex: none; display: flex; }
+.lu-textfield__affix { flex: none; color: var(--ink-muted); font-size: 15px; }
+.lu-textfield__box.has-affix { gap: 1px; }
+.lu-textfield__box.has-affix > .lu-textfield__input { flex: 0 1 auto; field-sizing: content; min-width: 2ch; }
+
+/* Server settings, Emoji: the list, a row renamed in place, the upload form. */
+.lu-emojis, .lu-emojiup { font-family: var(--font-sans); }
+.lu-emojis { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.lu-emojis__item { display: flex; align-items: center; gap: var(--space-12); min-height: 60px; padding: 8px 10px 8px 14px; }
+.lu-emojis__item + .lu-emojis__item { border-top: 1px solid var(--line); }
+.lu-emojis__item.is-renaming { align-items: flex-start; padding-top: 12px; padding-bottom: 12px; background: var(--inset); }
+.lu-emojis__item:first-child { border-radius: var(--radius-14) var(--radius-14) 0 0; }
+.lu-emojis__item:last-child { border-radius: 0 0 var(--radius-14) var(--radius-14); }
+.lu-emojis__pic { flex: none; display: flex; }
+.lu-emojis__item.is-renaming .lu-emojis__pic { margin-top: 30px; }
+.lu-emojis__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.lu-emojis__name { font-size: 14.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-emojis__sub { font-size: 12.5px; color: var(--ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-emojis__actions { flex: none; display: flex; gap: var(--space-6); }
+.lu-emojis__actions .lu-btn--sm { height: 32px; padding: 0 12px; }
+.lu-emojis__remove.lu-btn--secondary { border-color: var(--danger-line); color: var(--danger); }
+.lu-emojis__rename { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-8) var(--space-12); }
+.lu-emojis__field { flex: 1 1 220px; min-width: 0; }
+.lu-emojis__field .lu-textfield__box, .lu-emojiup .lu-textfield__box { height: 40px; }
+.lu-emojis__field .lu-textfield__input, .lu-emojiup .lu-textfield__input { height: 38px; }
+.lu-emojis__rename > .lu-emojis__actions { padding-bottom: 4px; }
+.lu-emojis__error { flex-basis: 100%; margin: 0; font-size: 13px; line-height: 1.4; color: var(--dnd); }
+.lu-emojiup { display: flex; flex-direction: column; gap: var(--space-14); padding: var(--space-16); border-radius: var(--radius-14); box-shadow: inset 0 0 0 1px var(--line-strong); background: var(--surface); }
+.lu-emojiup__picture { display: flex; align-items: center; gap: var(--space-14); }
+.lu-emojiup__frame { flex: none; display: flex; align-items: center; justify-content: center; width: 88px; height: 88px; border-radius: var(--radius-12); background: var(--inset); }
+.lu-emojiup__frame.is-refused { box-shadow: inset 0 0 0 1px var(--danger-line); }
+.lu-emojiup__file { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.lu-emojiup__filename { max-width: 100%; font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lu-emojiup__size { font-size: 12.5px; color: var(--ink-muted); }
+.lu-emojiup__choose { margin-top: var(--space-4); }
+.lu-emojiup__name { display: flex; flex-direction: column; gap: var(--space-6); }
+.lu-emojiup__hint { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-muted); }
+.lu-emojiup__actions { display: flex; justify-content: flex-end; gap: var(--space-8); }
+.lu-emojiup .lu-btn--primary.lu-btn--md { height: 40px; font-size: 14.5px; box-shadow: none; }
