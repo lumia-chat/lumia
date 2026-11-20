@@ -11,6 +11,7 @@ defmodule Lumia.Snapshots do
   alias Lumia.Accounts
   alias Lumia.Accounts.Account
   alias Lumia.Authz.Access
+  alias Lumia.CustomEmoji
   alias Lumia.Dms
   alias Lumia.Events
   alias Lumia.Events.Message
@@ -65,6 +66,7 @@ defmodule Lumia.Snapshots do
         end),
       channels: channels,
       roles: Enum.map(Lumia.Servers.roles_of(server_ids), &Proto.role/1),
+      emoji: Enum.map(CustomEmoji.list_of(server_ids), &Proto.custom_emoji/1),
       pending_requests: Enum.map(Lumia.Dms.pending_requests_to(account_id), &Proto.dm_request/1),
       channel_invitations: Lumia.Channels.invitations(account_id),
       read_states: Lumia.Reads.states(account_id),
@@ -157,29 +159,45 @@ defmodule Lumia.Snapshots do
   def reactions([], _viewer), do: %{}
 
   def reactions(message_ids, viewer) do
-    from(r in Lumia.Events.MessageReaction,
-      where: r.message_id in ^message_ids,
-      order_by: [r.created_at, r.account_id]
-    )
-    |> Repo.all()
+    rows =
+      from(r in Lumia.Events.MessageReaction,
+        where: r.message_id in ^message_ids,
+        order_by: [r.created_at, r.account_id]
+      )
+      |> Repo.all()
+
+    # A custom emoji's reactions are named by its present name, or the one
+    # it had when it was removed (specs/emoji.md 7).
+    names =
+      rows
+      |> Enum.map(& &1.emoji_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> CustomEmoji.names()
+
+    rows
     |> Enum.group_by(& &1.message_id)
     |> Map.new(fn {message_id, rows} ->
       counts =
         rows
         |> Enum.group_by(& &1.reaction)
         |> Enum.sort_by(fn {_emoji, [first | _]} -> {first.created_at, first.account_id} end)
-        |> Enum.map(fn {emoji, who} ->
+        |> Enum.map(fn {emoji, [first | _] = who} ->
           %V1.ReactionCount{
-            reaction: emoji,
+            reaction: reaction_name(emoji, first.emoji_id, names),
             count: length(who),
             me: Enum.any?(who, &(&1.account_id == viewer)),
-            account_ids: who |> Enum.take(50) |> Enum.map(&Proto.uuid(&1.account_id))
+            account_ids: who |> Enum.take(50) |> Enum.map(&Proto.uuid(&1.account_id)),
+            emoji_id: Proto.uuid(first.emoji_id)
           }
         end)
 
       {message_id, counts}
     end)
   end
+
+  defp reaction_name(emoji, nil, _names), do: emoji
+  defp reaction_name(_key, emoji_id, names), do: ":" <> Map.get(names, emoji_id, "emoji") <> ":"
 
   @doc "Account events after a cursor, for `GET /account/events`."
   def account_events(account_id, after_seq, limit) do

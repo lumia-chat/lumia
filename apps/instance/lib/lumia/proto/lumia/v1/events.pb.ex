@@ -175,6 +175,7 @@ defmodule Lumia.V1.MessageEdited do
   field :edited_at, 4, type: Google.Protobuf.Timestamp, json_name: "editedAt"
   field :attachments, 5, repeated: true, type: Lumia.V1.Attachment
   field :cards, 6, repeated: true, type: Lumia.V1.Card
+  field :emoji, 7, repeated: true, type: Lumia.V1.EmojiRef
 end
 
 defmodule Lumia.V1.MessageCardsSet do
@@ -212,6 +213,7 @@ defmodule Lumia.V1.ReactionAdded do
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :reaction, 2, type: :string
   field :account_id, 3, type: :bytes, json_name: "accountId"
+  field :emoji_id, 4, type: :bytes, json_name: "emojiId"
 end
 
 defmodule Lumia.V1.ReactionRemoved do
@@ -225,6 +227,7 @@ defmodule Lumia.V1.ReactionRemoved do
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :reaction, 2, type: :string
   field :account_id, 3, type: :bytes, json_name: "accountId"
+  field :emoji_id, 4, type: :bytes, json_name: "emojiId"
 end
 
 defmodule Lumia.V1.MessagePinned do
@@ -434,6 +437,7 @@ defmodule Lumia.V1.AccountEvent do
 
   field :roles_updated, 42, type: Lumia.V1.RolesUpdated, json_name: "rolesUpdated", oneof: 0
   field :members_updated, 43, type: Lumia.V1.MembersUpdated, json_name: "membersUpdated", oneof: 0
+  field :emoji_updated, 44, type: Lumia.V1.EmojiUpdated, json_name: "emojiUpdated", oneof: 0
 end
 
 defmodule Lumia.V1.MembershipAdded do
@@ -447,6 +451,7 @@ defmodule Lumia.V1.MembershipAdded do
   field :member, 1, type: Lumia.V1.Member
   field :server, 2, type: Lumia.V1.Server
   field :roles, 3, repeated: true, type: Lumia.V1.Role
+  field :emoji, 4, repeated: true, type: Lumia.V1.CustomEmoji
 end
 
 defmodule Lumia.V1.MembershipRemoved do
@@ -527,6 +532,18 @@ defmodule Lumia.V1.MembersUpdated do
 
   field :server_id, 1, type: :bytes, json_name: "serverId"
   field :members, 2, repeated: true, type: Lumia.V1.Member
+end
+
+defmodule Lumia.V1.EmojiUpdated do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.EmojiUpdated",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :server_id, 1, type: :bytes, json_name: "serverId"
+  field :emoji, 2, repeated: true, type: Lumia.V1.CustomEmoji
 end
 
 defmodule Lumia.V1.RailArranged do

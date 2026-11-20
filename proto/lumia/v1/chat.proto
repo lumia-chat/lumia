@@ -52,6 +52,7 @@ enum Permission {
   MANAGE_CHANNELS = 4;
   MANAGE_MEMBERS = 5;   // kick, ban, promote guests
   CREATE_INVITES = 6;
+  MANAGE_EMOJI = 7;     // upload, rename and remove the server's custom emoji
   VIEW_CHANNEL = 10;
   READ_HISTORY = 11;
   SEND_MESSAGES = 12;
@@ -104,6 +105,37 @@ message Server {
   StorageFull storage_full = 11;
   // What the tag beside a member's name shows (architecture 7.5).
   MemberTag member_tag = 12;
+  // How many custom emoji the server may have: its own number set by the
+  // operator, or the instance's default (specs/emoji.md 5). An answer only.
+  uint32 emoji_limit = 13;
+}
+
+// One of a server's custom emoji (specs/emoji.md 2). Only live ones are
+// listed; a removed one is gone from every list.
+message CustomEmoji {
+  bytes emoji_id = 1;
+  bytes server_id = 2;
+  // 2 to 32 of a-z, 0-9 and _; written in messages as :name:.
+  string name = 3;
+  // The picture, made by the instance: a path under /api/v1/avatars/.
+  string image_url = 4;
+  // Whether the picture is an animated GIF; otherwise it is a PNG.
+  bool animated = 5;
+  // The picture's pixels, at most 128 each way.
+  uint32 width = 6;
+  uint32 height = 7;
+  bytes created_by_account_id = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// Where a message's body uses one of its server's custom emoji: the text
+// there is :name: as typed (specs/emoji.md 6). A client that does not hold
+// the emoji draws the text.
+message EmojiRef {
+  bytes emoji_id = 1;
+  // Byte offsets into Message.body (UTF-8), half-open.
+  uint32 start = 2;
+  uint32 end = 3;
 }
 
 // A member's tag is its highest role that is shown as one, or its title;
@@ -282,13 +314,17 @@ message Card {
 }
 
 message ReactionCount {
-  // Key into the per-instance reaction registry, e.g. "thumbs_up".
+  // The emoji: one Unicode emoji, or for a server's custom emoji its name as
+  // :name: (specs/emoji.md 9), which a client holding no such emoji draws.
   string reaction = 1;
   uint32 count = 2;
   // Whether the caller has reacted.
   bool me = 3;
   // Who reacted, the first of them up to 50, for "who reacted".
   repeated bytes account_ids = 4;
+  // Set for one of the server's custom emoji; reactions are told apart by
+  // it where it is set and by reaction where it is not.
+  bytes emoji_id = 5;
 }
 
 message ThreadSummary {
@@ -326,6 +362,8 @@ message Message {
   QuoteReply reply_to = 17;
   // Link cards, in the order their links appear (specs/media.md 6).
   repeated Card cards = 18;
+  // The server's custom emoji the body uses (specs/emoji.md 6).
+  repeated EmojiRef emoji = 19;
 }
 
 // A quote of another message of the same conversation: the whole of it or

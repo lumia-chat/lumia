@@ -32,6 +32,8 @@ defmodule Lumia.Events do
 
   # The most of a message a quote keeps, in characters (architecture 6.6).
   @quote_max 2_000
+  # The custom emoji a message's body may name (specs/emoji.md 6).
+  @emoji_refs_max 200
 
   # The largest message body, in bytes of UTF-8 (protocol 14); `Welcome.limits`
   # tells clients, and a longer one is refused with `PAYLOAD_TOO_LARGE`.
@@ -566,21 +568,19 @@ defmodule Lumia.Events do
     message_id = Proto.from_uuid(command.command_id)
 
     with {:ok, op} <- resolve_quote(channel_id, op),
+         {:ok, emoji} <- emoji_refs(channel_id, op.body, op.emoji),
          {:ok, attachments} <-
            Uploads.check_attachments(channel_id, actor.account_id, message_id, op.attachments),
          {:ok, urls} <- Cards.check_urls(op.body, op.card_urls) do
-      {:ok, %{command | op: {:send_message, %{op | attachments: attachments, card_urls: urls}}}}
+      op = %{op | attachments: attachments, card_urls: urls, emoji: emoji}
+      {:ok, %{command | op: {:send_message, op}}}
     end
   end
 
-  defp resolve(_channel_id, _actor, %V1.Command{op: {:edit_message, op}} = command) do
-    case op.cards do
-      nil ->
-        {:ok, command}
-
-      %V1.CardUrls{urls: urls} ->
-        with {:ok, urls} <- Cards.check_urls(op.body, urls),
-             do: {:ok, %{command | op: {:edit_message, %{op | cards: %V1.CardUrls{urls: urls}}}}}
+  defp resolve(channel_id, _actor, %V1.Command{op: {:edit_message, op}} = command) do
+    with {:ok, emoji} <- emoji_refs(channel_id, op.body, op.emoji),
+         {:ok, cards} <- edit_cards(op) do
+      {:ok, %{command | op: {:edit_message, %{op | emoji: emoji, cards: cards}}}}
     end
   end
 
@@ -592,6 +592,12 @@ defmodule Lumia.Events do
   end
 
   defp resolve(channel_id, _actor, command), do: resolve(channel_id, command)
+
+  defp edit_cards(%V1.EditMessage{cards: nil}), do: {:ok, nil}
+
+  defp edit_cards(%V1.EditMessage{cards: %V1.CardUrls{urls: urls}} = op) do
+    with {:ok, urls} <- Cards.check_urls(op.body, urls), do: {:ok, %V1.CardUrls{urls: urls}}
+  end
 
   defp resolve_quote(channel_id, %V1.SendMessage{reply_to: %V1.QuoteReply{} = quote} = op) do
     case quotable(channel_id, quote.message_id) do
@@ -614,14 +620,97 @@ defmodule Lumia.Events do
 
   defp resolve(channel_id, %V1.Command{op: {reaction, op}} = command)
        when reaction in [:add_reaction, :remove_reaction] do
-    cond do
-      not Lumia.Emoji.single?(op.reaction) -> {:error, :invalid_argument}
-      match?({:ok, _}, quotable(channel_id, op.message_id)) -> {:ok, command}
-      true -> {:error, :message_not_found}
+    with {:ok, op} <- reaction_emoji(channel_id, reaction, op),
+         {:ok, _message} <- quotable(channel_id, op.message_id) do
+      {:ok, %{command | op: {reaction, op}}}
     end
   end
 
   defp resolve(_channel_id, command), do: {:ok, command}
+
+  # A reaction is one Unicode emoji or one of the server's custom emoji,
+  # never both (specs/emoji.md 9). A custom one is named `:name:` in what
+  # is written, for clients that know no custom emoji; one that was
+  # removed may be taken away and not added.
+  defp reaction_emoji(_channel_id, _reaction, %{emoji_id: id} = op) when id in [nil, ""] do
+    if Lumia.Emoji.single?(op.reaction), do: {:ok, op}, else: {:error, :invalid_argument}
+  end
+
+  defp reaction_emoji(_channel_id, _reaction, %{reaction: emoji}) when emoji not in [nil, ""],
+    do: {:error, {:invalid_argument, "reaction"}}
+
+  defp reaction_emoji(channel_id, reaction, op) do
+    id = Proto.from_uuid(op.emoji_id)
+    server_id = channel_server(channel_id)
+
+    emoji =
+      if id && server_id,
+        do: Map.get(Lumia.CustomEmoji.of_server(server_id, [id]), id)
+
+    case emoji do
+      nil ->
+        {:error, {:invalid_argument, "emoji_id"}}
+
+      %{deleted_at: %DateTime{}} when reaction == :add_reaction ->
+        {:error, {:invalid_argument, "emoji_id"}}
+
+      %{name: name} ->
+        {:ok, %{op | reaction: ":" <> name <> ":"}}
+    end
+  end
+
+  # The custom emoji a body uses, as the core found them (specs/emoji.md 6):
+  # each range must lie on the body's UTF-8 boundaries, cover `:name:`, and
+  # not overlap another; one whose emoji is not a live emoji of the
+  # channel's server is dropped, its text kept, and past the most a message
+  # carries the rest are dropped.
+  defp emoji_refs(_channel_id, _body, []), do: {:ok, []}
+
+  defp emoji_refs(channel_id, body, refs) do
+    sorted = Enum.sort_by(refs, & &1.start)
+
+    if well_placed?(body, sorted) do
+      ids = sorted |> Enum.map(&Proto.from_uuid(&1.emoji_id)) |> Enum.reject(&is_nil/1)
+      live = live_emoji(channel_server(channel_id), ids)
+
+      kept =
+        sorted
+        |> Enum.filter(&MapSet.member?(live, Proto.from_uuid(&1.emoji_id)))
+        |> Enum.take(@emoji_refs_max)
+
+      {:ok, kept}
+    else
+      {:error, {:invalid_argument, "emoji"}}
+    end
+  end
+
+  defp live_emoji(nil, _ids), do: MapSet.new()
+
+  defp live_emoji(server_id, ids) do
+    for {id, %{deleted_at: nil}} <- Lumia.CustomEmoji.of_server(server_id, ids),
+        into: MapSet.new(),
+        do: id
+  end
+
+  defp well_placed?(body, refs) do
+    size = byte_size(body)
+
+    {ok, _} =
+      Enum.reduce_while(refs, {true, 0}, fn %V1.EmojiRef{start: from, end: to},
+                                            {true, after_last} ->
+        placed =
+          from >= after_last and to > from and to <= size and
+            String.valid?(binary_part(body, 0, from)) and
+            Lumia.CustomEmoji.written?(binary_part(body, from, to - from))
+
+        if placed, do: {:cont, {true, to}}, else: {:halt, {false, to}}
+      end)
+
+    ok
+  end
+
+  defp channel_server(channel_id),
+    do: Repo.one(from c in Channel, where: c.id == ^channel_id, select: c.server_id)
 
   # A message of this channel that is there to quote or react to: not
   # deleted, and not a notice.
@@ -820,6 +909,7 @@ defmodule Lumia.Events do
       parent_id: op.parent_id,
       body: op.body,
       mentions: op.mentions,
+      emoji: op.emoji,
       created_at: Proto.timestamp(now),
       reply_to: op.reply_to
     }
@@ -832,6 +922,7 @@ defmodule Lumia.Events do
       message_id: op.message_id,
       body: op.body,
       mentions: op.mentions,
+      emoji: op.emoji,
       edited_at: Proto.timestamp(now)
     }
 
@@ -846,7 +937,8 @@ defmodule Lumia.Events do
     added = %V1.ReactionAdded{
       message_id: op.message_id,
       reaction: op.reaction,
-      account_id: Proto.uuid(actor.account_id)
+      account_id: Proto.uuid(actor.account_id),
+      emoji_id: op.emoji_id
     }
 
     {:ok, {:reaction_added, added}}
@@ -856,7 +948,8 @@ defmodule Lumia.Events do
     removed = %V1.ReactionRemoved{
       message_id: op.message_id,
       reaction: op.reaction,
-      account_id: Proto.uuid(actor.account_id)
+      account_id: Proto.uuid(actor.account_id),
+      emoji_id: op.emoji_id
     }
 
     {:ok, {:reaction_removed, removed}}
@@ -908,7 +1001,8 @@ defmodule Lumia.Events do
     %MessageReaction{
       message_id: Proto.from_uuid(op.message_id),
       account_id: actor.account_id,
-      reaction: op.reaction,
+      reaction: reaction_key(op),
+      emoji_id: Proto.from_uuid(op.emoji_id),
       channel_id: channel_id,
       created_at: now
     }
@@ -922,7 +1016,7 @@ defmodule Lumia.Events do
       from r in MessageReaction,
         where:
           r.message_id == ^message_id and r.account_id == ^actor.account_id and
-            r.reaction == ^op.reaction
+            r.reaction == ^reaction_key(op)
     )
 
     {:ok, nil}
@@ -950,7 +1044,8 @@ defmodule Lumia.Events do
         edited_at: now,
         mentioned_account_ids: Enum.uniq(named ++ List.wrap(quoted)),
         mentions_everyone: everyone_in?(op.mentions),
-        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
+        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1),
+        emoji_spans: Enum.flat_map(op.emoji, &Proto.emoji_span/1)
       ],
       push: [revision_seqs: seq]
     )
@@ -1012,8 +1107,18 @@ defmodule Lumia.Events do
       message
       | mentioned_account_ids: Enum.uniq(named_in(op.mentions) ++ quoted),
         mentions_everyone: everyone_in?(op.mentions),
-        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1)
+        mention_spans: Enum.flat_map(op.mentions, &Proto.mention_span/1),
+        emoji_spans: Enum.flat_map(op.emoji, &Proto.emoji_span/1)
     }
+  end
+
+  # A reaction as kept: the emoji, or a custom emoji's id as text, so a
+  # rename keeps its reactions together (specs/emoji.md 9).
+  defp reaction_key(op) do
+    case Proto.from_uuid(op.emoji_id) do
+      nil -> op.reaction
+      id -> id
+    end
   end
 
   defp named_in(mentions) do

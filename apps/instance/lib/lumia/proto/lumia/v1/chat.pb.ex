@@ -75,6 +75,7 @@ defmodule Lumia.V1.Permission do
   field :MANAGE_CHANNELS, 4
   field :MANAGE_MEMBERS, 5
   field :CREATE_INVITES, 6
+  field :MANAGE_EMOJI, 7
   field :VIEW_CHANNEL, 10
   field :READ_HISTORY, 11
   field :SEND_MESSAGES, 12
@@ -185,6 +186,39 @@ defmodule Lumia.V1.Server do
   field :attachment_retention_days, 10, type: :uint32, json_name: "attachmentRetentionDays"
   field :storage_full, 11, type: Lumia.V1.StorageFull, json_name: "storageFull", enum: true
   field :member_tag, 12, type: Lumia.V1.MemberTag, json_name: "memberTag", enum: true
+  field :emoji_limit, 13, type: :uint32, json_name: "emojiLimit"
+end
+
+defmodule Lumia.V1.CustomEmoji do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.CustomEmoji",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :emoji_id, 1, type: :bytes, json_name: "emojiId"
+  field :server_id, 2, type: :bytes, json_name: "serverId"
+  field :name, 3, type: :string
+  field :image_url, 4, type: :string, json_name: "imageUrl"
+  field :animated, 5, type: :bool
+  field :width, 6, type: :uint32
+  field :height, 7, type: :uint32
+  field :created_by_account_id, 8, type: :bytes, json_name: "createdByAccountId"
+  field :created_at, 9, type: Google.Protobuf.Timestamp, json_name: "createdAt"
+end
+
+defmodule Lumia.V1.EmojiRef do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.EmojiRef",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :emoji_id, 1, type: :bytes, json_name: "emojiId"
+  field :start, 2, type: :uint32
+  field :end, 3, type: :uint32
 end
 
 defmodule Lumia.V1.Role do
@@ -349,6 +383,7 @@ defmodule Lumia.V1.ReactionCount do
   field :count, 2, type: :uint32
   field :me, 3, type: :bool
   field :account_ids, 4, repeated: true, type: :bytes, json_name: "accountIds"
+  field :emoji_id, 5, type: :bytes, json_name: "emojiId"
 end
 
 defmodule Lumia.V1.ThreadSummary do
@@ -394,6 +429,7 @@ defmodule Lumia.V1.Message do
   field :notice, 16, type: Lumia.V1.ChannelNotice
   field :reply_to, 17, type: Lumia.V1.QuoteReply, json_name: "replyTo"
   field :cards, 18, repeated: true, type: Lumia.V1.Card
+  field :emoji, 19, repeated: true, type: Lumia.V1.EmojiRef
 end
 
 defmodule Lumia.V1.QuoteReply do

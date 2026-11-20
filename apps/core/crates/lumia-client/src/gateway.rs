@@ -94,7 +94,7 @@ pub enum GatewayCommand {
     /// the outbox once the loop has read this, which while the instance
     /// cannot be reached is not at once: a sender that must not lose it to
     /// the process ending writes the outbox itself and says `Outbox`.
-    Send(Command),
+    Send(Box<Command>),
     /// The outbox holds commands their sender wrote there through its own
     /// connection to the store: send those this connection has not sent.
     /// Before the welcome there is nothing to do, since the welcome sends
@@ -739,7 +739,7 @@ fn on_command<S: Store>(
             // sends whole and in order: sent now as well, it went twice.
             if welcomed {
                 sent.insert(command.command_id.clone());
-                pending.push_back(session.command(command));
+                pending.push_back(session.command(*command));
             }
         }
         GatewayCommand::Outbox => {
@@ -875,7 +875,7 @@ mod tests {
                 if attempt == 1 {
                     // Sent during the first wait, and so held through the
                     // second attempt, which fails too.
-                    tx.unbounded_send(GatewayCommand::Send(command.clone()))
+                    tx.unbounded_send(GatewayCommand::Send(Box::new(command.clone())))
                         .unwrap();
                 }
                 attempts = attempt;
@@ -970,7 +970,7 @@ mod tests {
 
         // Before the welcome nothing is sent: one read from the application
         // is kept, and one said to be in the outbox is left there.
-        connection.hears(GatewayCommand::Send(command(1)), false);
+        connection.hears(GatewayCommand::Send(Box::new(command(1))), false);
         connection.written(2);
         connection.hears(GatewayCommand::Outbox, false);
         assert!(connection.gone().is_empty());
@@ -995,7 +995,7 @@ mod tests {
 
         // After the welcome one read from the application goes at once, and
         // is not sent again for being in the outbox.
-        connection.hears(GatewayCommand::Send(command(4)), true);
+        connection.hears(GatewayCommand::Send(Box::new(command(4))), true);
         assert_eq!(connection.gone(), [4]);
         connection.hears(GatewayCommand::Outbox, true);
         assert!(connection.gone().is_empty());

@@ -53,6 +53,20 @@ defmodule Lumia.Media do
     end
   end
 
+  @doc """
+  An uploaded picture as a custom emoji (specs/emoji.md 3): within 128
+  pixels, its shape kept, as PNG, or as an animated GIF when the upload is
+  an animation of more than one frame. `{:ok, {media_type, bytes, width,
+  height, animated}}`, or the refusals of `avatar/1`.
+  """
+  def emoji(upload) when is_binary(upload) do
+    cond do
+      byte_size(upload) > @max_upload_bytes -> {:error, :too_large}
+      upload == "" -> {:error, :unsupported}
+      true -> bounded(fn -> Native.emoji(upload) end)
+    end
+  end
+
   defp bounded(work) do
     slots = slots()
 

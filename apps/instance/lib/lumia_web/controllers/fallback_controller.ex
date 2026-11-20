@@ -42,6 +42,18 @@ defmodule LumiaWeb.FallbackController do
         "quota" => Integer.to_string(quota)
       })
 
+  # A server at its custom emoji limit (specs/emoji.md 4).
+  def call(conn, {:error, {:emoji_limit, limit}}),
+    do:
+      ProtoConn.render_error(conn, :resource_exhausted, %{
+        "state" => "emoji",
+        "limit" => Integer.to_string(limit)
+      })
+
+  # A name another holds, named when the caller may see it.
+  def call(conn, {:error, {:already_exists, existing_id}}) when is_binary(existing_id),
+    do: ProtoConn.render_error(conn, :already_exists, %{"existing_id" => existing_id})
+
   def call(conn, {:error, {:payload_too_large, max}}),
     do: ProtoConn.render_error(conn, :payload_too_large, %{"max" => Integer.to_string(max)})
 

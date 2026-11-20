@@ -34,7 +34,7 @@ defmodule Lumia.Blobs do
   # Each kind has a folder of its own in the store (`avatars/<hex>`), so an
   # operator can tell them apart, count them and treat them differently;
   # attachments are `att/` (`Lumia.Uploads`).
-  @folders %{"avatar" => "avatars", "icon" => "icons", "card" => "cards"}
+  @folders %{"avatar" => "avatars", "icon" => "icons", "emoji" => "emoji", "card" => "cards"}
 
   @cipher :aes_256_gcm
   @content_aad "lumia blob v1"
@@ -45,7 +45,8 @@ defmodule Lumia.Blobs do
 
   @doc """
   Stores `bytes` as a blob of `kind` (`"avatar"` for an account,
-  `"icon"` for a server, `"card"` for a link card's picture), of `media_type`, for
+  `"icon"` for a server, `"emoji"` for a server's custom emoji, `"card"`
+  for a link card's picture), of `media_type`, for
   `owner_account_id`. `{:ok, %Blob{}}`, or `{:error, :unavailable}` when
   the instance keeps no blobs or the store refused the write.
   """
@@ -126,8 +127,9 @@ defmodule Lumia.Blobs do
   end
 
   @doc """
-  Removes account and server pictures more than an hour old that no
-  account's `avatar_url` and no server's `icon_url` names: one whose
+  Removes account and server pictures and custom emoji more than an hour
+  old that no account's `avatar_url`, no server's `icon_url` and no live
+  emoji's `image_url` names: one whose
   replacement could not delete it (the store refused), or one left by a
   failure between keeping it and naming it. Hourly from `SweepMedia`.
   Returns how many went.
@@ -139,7 +141,7 @@ defmodule Lumia.Blobs do
       from b in Blob,
         as: :blob,
         where:
-          b.kind in ["avatar", "icon"] and b.inserted_at < ^before and
+          b.kind in ["avatar", "icon", "emoji"] and b.inserted_at < ^before and
             not exists(
               from a in "accounts",
                 where:
@@ -151,6 +153,13 @@ defmodule Lumia.Blobs do
               from s in "servers",
                 where:
                   s.icon_url ==
+                    fragment("'/api/v1/avatars/' || encode(?, 'hex')", parent_as(:blob).address),
+                select: 1
+            ) and
+            not exists(
+              from e in "custom_emoji",
+                where:
+                  e.image_url ==
                     fragment("'/api/v1/avatars/' || encode(?, 'hex')", parent_as(:blob).address),
                 select: 1
             ),

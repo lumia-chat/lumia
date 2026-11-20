@@ -907,11 +907,13 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 command::Op::RemoveReaction(RemoveReaction {
                     message_id,
                     reaction: emoji,
+                    emoji_id: Vec::new(),
                 })
             } else {
                 command::Op::AddReaction(AddReaction {
                     message_id,
                     reaction: emoji,
+                    emoji_id: Vec::new(),
                 })
             };
             send_commands(api, ctx, channel, vec![op]).await
@@ -1074,7 +1076,7 @@ async fn send_commands(
                 channel_id: channel.clone(),
                 op: Some(op),
             };
-            tx.unbounded_send(GatewayCommand::Send(cmd))
+            tx.unbounded_send(GatewayCommand::Send(Box::new(cmd)))
                 .map_err(|e| ClientError::Transport(e.to_string()))?;
         }
         while !waiting.is_empty() {
@@ -1496,7 +1498,7 @@ async fn dm_loop(
                             println!("-- crashing between the persist and the send");
                             std::process::exit(3);
                         }
-                        tx.unbounded_send(GatewayCommand::Send(cmd))
+                        tx.unbounded_send(GatewayCommand::Send(Box::new(cmd)))
                             .map_err(|e| ClientError::Transport(e.to_string()))?;
                     }
                     Outcome::Subscribe(ch) => {

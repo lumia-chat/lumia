@@ -59,9 +59,38 @@ defmodule Lumia.Proto do
       show_deleted: s.show_deleted || false,
       attachment_retention_days: s.attachment_retention_days || 0,
       storage_full: storage_full(s.storage_full),
-      member_tag: member_tag(s.member_tag)
+      member_tag: member_tag(s.member_tag),
+      emoji_limit: Lumia.CustomEmoji.limit(s)
     }
   end
+
+  @doc "One of a server's custom emoji (specs/emoji.md 2)."
+  def custom_emoji(%Lumia.CustomEmoji.Emoji{} = e) do
+    %V1.CustomEmoji{
+      emoji_id: uuid(e.id),
+      server_id: uuid(e.server_id),
+      name: e.name,
+      image_url: e.image_url || "",
+      animated: e.animated,
+      width: e.width,
+      height: e.height,
+      created_by_account_id: uuid(e.created_by_account_id),
+      created_at: timestamp(e.inserted_at)
+    }
+  end
+
+  @doc "A message's custom emoji range as kept (`Message.emoji_spans`)."
+  def emoji_span(%V1.EmojiRef{emoji_id: id, start: s, end: e}) do
+    case from_uuid(id) do
+      nil -> []
+      emoji_id -> [%{"emoji_id" => emoji_id, "start" => s, "end" => e}]
+    end
+  end
+
+  defp emoji_ref(%{"emoji_id" => id, "start" => s, "end" => e}),
+    do: [%V1.EmojiRef{emoji_id: uuid(id), start: s, end: e}]
+
+  defp emoji_ref(_), do: []
 
   defp member_tag("title"), do: :MEMBER_TAG_TITLE
   defp member_tag(_role), do: :MEMBER_TAG_ROLE
@@ -174,6 +203,7 @@ defmodule Lumia.Proto do
       deleted_at: timestamp(m.deleted_at),
       notice: notice(m.notice, m.notice_account_id),
       mentions: Enum.flat_map(m.mention_spans || [], &mention/1),
+      emoji: Enum.flat_map(m.emoji_spans || [], &emoji_ref/1),
       reply_to: quote_reply(m),
       reactions: reactions,
       attachments: Enum.map(m.attachments || [], &V1.Attachment.decode/1),

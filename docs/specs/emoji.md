@@ -1,6 +1,6 @@
 # Custom Emoji
 
-Status: accepted, 2026-11-20 (GitHub #17; decided with Ryan the same day). This specification makes the custom emoji of section 6.6 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`CustomEmoji`, `EmojiRef`, `Message.emoji`, `ReactionCount.emoji_id`, `Server.emoji_limit`, `Permission.MANAGE_EMOJI`), `commands.proto` (`SendMessage.emoji`, `EditMessage.emoji`, `AddReaction.emoji_id`, `RemoveReaction.emoji_id`), `events.proto` (`ReactionAdded.emoji_id`, `ReactionRemoved.emoji_id`, `EmojiUpdated`, `MembershipAdded.emoji`) and `api.proto` (`ListEmojiResponse`, `UpdateEmojiRequest`, `AccountSnapshot.emoji`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
+Status: accepted, 2026-11-20 (GitHub #17; decided with Ryan the same day). This specification makes the custom emoji of section 6.6 of [architecture.md](../architecture.md) implementable. Wire shapes are in `proto/lumia/v1/chat.proto` (`CustomEmoji`, `EmojiRef`, `Message.emoji`, `ReactionCount.emoji_id`, `Server.emoji_limit`, `Permission.MANAGE_EMOJI`), `commands.proto` (`SendMessage.emoji`, `EditMessage.emoji`, `AddReaction.emoji_id`, `RemoveReaction.emoji_id`), `events.proto` (`MessageEdited.emoji`, `ReactionAdded.emoji_id`, `ReactionRemoved.emoji_id`, `EmojiUpdated`, `MembershipAdded.emoji`) and `api.proto` (`ListEmojiResponse`, `UpdateEmojiRequest`, `AccountSnapshot.emoji`). Where this document and the architecture disagree, the architecture wins and this document is fixed.
 
 ## 1. What was decided
 
@@ -29,7 +29,7 @@ A name is one live emoji's alone in its server. A removed emoji's name is free a
 
 ## 3. The picture
 
-**Made by the instance** (architecture 12, "Avatars", whose reasoning holds whole: nothing of the upload is stored or served, and nobody who looks at the picture decodes bytes its uploader chose). The upload is the request's whole body, at most the instance's picture cap (`LUMIA_UPLOAD_IMAGE_MAX_BYTES`, 2 MiB by default). In `Lumia.Media`'s NIF, in this order:
+**Made by the instance** (architecture 12, "Avatars", whose reasoning holds whole: nothing of the upload is stored or served, and nobody who looks at the picture decodes bytes its uploader chose). The upload is the request's whole body, at most 8 MB, as an avatar's is (`Lumia.Media`). In `Lumia.Media`'s NIF, in this order:
 
 1. **The format** is told from the first bytes: PNG (APNG included), JPEG, WebP or GIF, never from what the upload calls itself.
 2. **Still or animated.** An upload is animated when it is a GIF, an APNG or a WebP of more than one frame. A JPEG, or any of the others with one frame, is still.

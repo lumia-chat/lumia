@@ -6,4 +6,5 @@ defmodule Lumia.Media.Native do
 
   def avatar(_upload), do: :erlang.nif_error(:nif_not_loaded)
   def card(_upload), do: :erlang.nif_error(:nif_not_loaded)
+  def emoji(_upload), do: :erlang.nif_error(:nif_not_loaded)
 end

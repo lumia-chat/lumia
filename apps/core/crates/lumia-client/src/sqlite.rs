@@ -1709,12 +1709,14 @@ mod tests {
                         message_id,
                         reaction,
                         account_id,
+                        emoji_id: Vec::new(),
                     })
                 } else {
                     event::Payload::ReactionRemoved(ReactionRemoved {
                         message_id,
                         reaction,
                         account_id,
+                        emoji_id: Vec::new(),
                     })
                 },
             )

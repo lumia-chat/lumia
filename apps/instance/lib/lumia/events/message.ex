@@ -27,6 +27,9 @@ defmodule Lumia.Events.Message do
     field :mentioned_account_ids, {:array, Ecto.UUID}, default: []
     field :mentions_everyone, :boolean, default: false
     field :mention_spans, {:array, :map}, default: []
+    # The server's custom emoji the body uses: `%{"emoji_id", "start",
+    # "end"}` byte ranges (specs/emoji.md 6).
+    field :emoji_spans, {:array, :map}, default: []
     # Attachments and link cards (specs/media.md), each an encoded proto as
     # the event carried it; `card_ids` are the `link_cards` rows the cards
     # came from, in the same order, and `card_urls` the links it wants.

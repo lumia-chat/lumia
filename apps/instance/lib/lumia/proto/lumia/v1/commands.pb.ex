@@ -35,6 +35,7 @@ defmodule Lumia.V1.SendMessage do
   field :also_send_to_channel, 5, type: :bool, json_name: "alsoSendToChannel"
   field :reply_to, 6, type: Lumia.V1.QuoteReply, json_name: "replyTo"
   field :card_urls, 7, repeated: true, type: :string, json_name: "cardUrls"
+  field :emoji, 8, repeated: true, type: Lumia.V1.EmojiRef
 end
 
 defmodule Lumia.V1.EditMessage do
@@ -50,6 +51,7 @@ defmodule Lumia.V1.EditMessage do
   field :mentions, 3, repeated: true, type: Lumia.V1.Mention
   field :remove_attachment_ids, 4, repeated: true, type: :bytes, json_name: "removeAttachmentIds"
   field :cards, 5, type: Lumia.V1.CardUrls
+  field :emoji, 6, repeated: true, type: Lumia.V1.EmojiRef
 end
 
 defmodule Lumia.V1.CardUrls do
@@ -84,6 +86,7 @@ defmodule Lumia.V1.AddReaction do
 
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :reaction, 2, type: :string
+  field :emoji_id, 3, type: :bytes, json_name: "emojiId"
 end
 
 defmodule Lumia.V1.RemoveReaction do
@@ -96,6 +99,7 @@ defmodule Lumia.V1.RemoveReaction do
 
   field :message_id, 1, type: :bytes, json_name: "messageId"
   field :reaction, 2, type: :string
+  field :emoji_id, 3, type: :bytes, json_name: "emojiId"
 end
 
 defmodule Lumia.V1.PinMessage do

@@ -51,6 +51,9 @@ message SendMessage {
   // The links whose cards the sharer kept, at most 3, each in the body
   // (specs/media.md 6.4).
   repeated string card_urls = 7;
+  // The server's custom emoji the body uses, found by the core (specs/emoji.md
+  // 6). A ref to an emoji that is not one of the server's is dropped.
+  repeated EmojiRef emoji = 8;
 }
 
 message EditMessage {
@@ -62,20 +65,26 @@ message EditMessage {
   // When set, the links whose cards stay or are wanted; unset keeps the
   // cards of the links still in the body.
   CardUrls cards = 5;
+  // The custom emoji of the edited body, as on a send.
+  repeated EmojiRef emoji = 6;
 }
 
 message CardUrls { repeated string urls = 1; }
 
 message DeleteMessage { bytes message_id = 1; }
 
+// A reaction is one Unicode emoji (reaction) or one of the server's custom
+// emoji (emoji_id), never both (specs/emoji.md 9).
 message AddReaction {
   bytes message_id = 1;
   string reaction = 2;
+  bytes emoji_id = 3;
 }
 
 message RemoveReaction {
   bytes message_id = 1;
   string reaction = 2;
+  bytes emoji_id = 3;
 }
 
 message PinMessage { bytes message_id = 1; }

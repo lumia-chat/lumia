@@ -14,6 +14,7 @@ defmodule Lumia.Authz.Permission do
     manage_channels: 4,
     manage_members: 5,
     create_invites: 6,
+    manage_emoji: 7,
     view_channel: 10,
     read_history: 11,
     send_messages: 12,

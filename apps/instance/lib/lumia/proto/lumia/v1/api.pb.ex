@@ -629,6 +629,29 @@ defmodule Lumia.V1.ListRolesResponse do
   field :roles, 1, repeated: true, type: Lumia.V1.Role
 end
 
+defmodule Lumia.V1.ListEmojiResponse do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.ListEmojiResponse",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :emoji, 1, repeated: true, type: Lumia.V1.CustomEmoji
+  field :limit, 2, type: :uint32
+end
+
+defmodule Lumia.V1.UpdateEmojiRequest do
+  @moduledoc false
+
+  use Protobuf,
+    full_name: "lumia.v1.UpdateEmojiRequest",
+    protoc_gen_elixir_version: "0.17.1",
+    syntax: :proto3
+
+  field :name, 1, type: :string
+end
+
 defmodule Lumia.V1.ReorderRolesRequest do
   @moduledoc false
 
@@ -765,6 +788,7 @@ defmodule Lumia.V1.AccountSnapshot do
   field :read_states, 11, repeated: true, type: Lumia.V1.ReadState, json_name: "readStates"
   field :rail, 12, type: Lumia.V1.Rail
   field :roles, 13, repeated: true, type: Lumia.V1.Role
+  field :emoji, 14, repeated: true, type: Lumia.V1.CustomEmoji
 end
 
 defmodule Lumia.V1.ReadState do

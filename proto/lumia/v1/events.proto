@@ -75,6 +75,8 @@ message MessageEdited {
   // The attachments and cards after the edit, in full.
   repeated Attachment attachments = 5;
   repeated Card cards = 6;
+  // The custom emoji of the edited body (specs/emoji.md 6).
+  repeated EmojiRef emoji = 7;
 }
 
 message MessageCardsSet {
@@ -88,16 +90,19 @@ message MessageDeleted {
   bool purge_cache = 2;
 }
 
+// For a custom emoji, emoji_id is set and reaction is its :name: (specs/emoji.md 9).
 message ReactionAdded {
   bytes message_id = 1;
   string reaction = 2;
   bytes account_id = 3;
+  bytes emoji_id = 4;
 }
 
 message ReactionRemoved {
   bytes message_id = 1;
   string reaction = 2;
   bytes account_id = 3;
+  bytes emoji_id = 4;
 }
 
 message MessagePinned { bytes message_id = 1; }
@@ -190,6 +195,7 @@ message AccountEvent {
     LinkSessionUpdated link_session_updated = 41; // a link session of this account moved (identity spec 4.2.1)
     RolesUpdated roles_updated = 42;        // a server this account is in changed its roles (architecture 7.5)
     MembersUpdated members_updated = 43;    // members of a server this account is in changed roles or title
+    EmojiUpdated emoji_updated = 44;        // a server this account is in changed its custom emoji (specs/emoji.md 8)
   }
 }
 
@@ -198,6 +204,8 @@ message MembershipAdded {
   Server server = 2;
   // The server's roles as they are (architecture 7.5).
   repeated Role roles = 3;
+  // The server's custom emoji as they are (specs/emoji.md 8).
+  repeated CustomEmoji emoji = 4;
 }
 message MembershipRemoved { bytes server_id = 1; LeaveReason reason = 2; }
 message MembershipUpdated { Member member = 1; }
@@ -216,6 +224,12 @@ message RolesUpdated {
 message MembersUpdated {
   bytes server_id = 1;
   repeated Member members = 2;
+}
+// A server's live custom emoji as they now are, all of them: what a client
+// held is replaced (specs/emoji.md 8).
+message EmojiUpdated {
+  bytes server_id = 1;
+  repeated CustomEmoji emoji = 2;
 }
 message RailArranged { Rail rail = 1; }
 // An add waiting for its member's yes, because they take adds to channels

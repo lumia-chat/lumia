@@ -113,6 +113,10 @@ defmodule LumiaWeb.Router do
     patch "/servers/:server_id/roles/:role_id", ServerController, :patch_role
     delete "/servers/:server_id/roles/:role_id", ServerController, :delete_role
     put "/servers/:server_id/role-order", ServerController, :reorder_roles
+    get "/servers/:server_id/emoji", ServerController, :emoji
+    post "/servers/:server_id/emoji", ServerController, :create_emoji
+    patch "/servers/:server_id/emoji/:emoji_id", ServerController, :rename_emoji
+    delete "/servers/:server_id/emoji/:emoji_id", ServerController, :delete_emoji
 
     get "/servers/:server_id/invites", InviteController, :index
     post "/invites", InviteController, :create

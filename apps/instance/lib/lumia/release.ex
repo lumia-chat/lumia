@@ -235,6 +235,40 @@ defmodule Lumia.Release do
     end
   end
 
+  @doc """
+  Sets how many custom emoji the server `server_id` may have (specs/emoji.md
+  5): a number, or `"default"` for the instance's. Lowering it deletes
+  nothing. Returns the limit that now applies, or the refusal.
+  """
+  def emoji_limit(server_id, limit, opts \\ []) do
+    load()
+
+    with {:ok, limit} <- emoji_limit_value(limit),
+         {:ok, _} <- Ecto.UUID.cast(server_id) do
+      with_repo(opts[:url] || database_url(), fn _ -> set_emoji_limit(server_id, limit) end)
+    else
+      :error -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  defp set_emoji_limit(server_id, limit) do
+    with {:ok, server} <- Lumia.CustomEmoji.set_limit(server_id, limit),
+         do: {:ok, Lumia.CustomEmoji.limit(server)}
+  end
+
+  defp emoji_limit_value("default"), do: {:ok, :default}
+  defp emoji_limit_value(n) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  defp emoji_limit_value(text) when is_binary(text) do
+    case Integer.parse(text) do
+      {n, ""} when n >= 0 -> {:ok, n}
+      _ -> {:error, {:invalid_argument, "limit"}}
+    end
+  end
+
+  defp emoji_limit_value(_), do: {:error, {:invalid_argument, "limit"}}
+
   @doc false
   def schema_version do
     case Path.wildcard(Path.join([:code.priv_dir(@app), "repo", "migrations", "*.exs"])) do

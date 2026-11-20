@@ -126,6 +126,11 @@ config :lumia, :uploads,
        bytes -> String.to_integer(bytes)
      end)
 
+# How many custom emoji a server may have unless the operator gave it a
+# number of its own with `lumia-admin emoji-limit` (specs/emoji.md 5).
+config :lumia, :emoji,
+  server_max: String.to_integer(System.get_env("LUMIA_SERVER_EMOJI_MAX") || "50")
+
 # Link cards (specs/media.md 6.4): the instance fetches the pages its
 # members link only when the operator says so (architecture hard rule 3).
 config :lumia, :link_cards, System.get_env("LUMIA_LINK_CARDS") == "true"

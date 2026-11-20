@@ -184,7 +184,8 @@ defmodule Lumia.Servers do
                 %V1.MembershipAdded{
                   member: Proto.member(member),
                   server: Proto.server(server),
-                  roles: Enum.map(roles(server_id), &Proto.role/1)
+                  roles: Enum.map(roles(server_id), &Proto.role/1),
+                  emoji: Enum.map(Lumia.CustomEmoji.list(server_id), &Proto.custom_emoji/1)
                 }}
              ),
            :ok <- Lumia.Channels.arrive(server_id, account_id, Keyword.get(opts, :channel_id)),
@@ -838,6 +839,13 @@ defmodule Lumia.Servers do
   # reads only once this is let go, so a change made one with a job that
   # had not begun is in what that job reads. The key is not changed, so
   # rows that refer to the server (someone joining) do not wait.
+  @doc """
+  Takes the server's row for the rest of the transaction, as every change
+  that is told to the members does (`lock_server/1`'s comment has why).
+  `{:ok, server}` or `{:error, :not_found}`.
+  """
+  def lock(server_id), do: lock_server(server_id)
+
   defp lock_server(server_id) do
     case Repo.one(from s in Server, where: s.id == ^server_id, lock: "FOR NO KEY UPDATE") do
       nil -> {:error, :not_found}

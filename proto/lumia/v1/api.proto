@@ -376,6 +376,17 @@ message RoleIds { repeated bytes role_ids = 1; }
 
 message ListRolesResponse { repeated Role roles = 1; }
 
+// GET /servers/{server_id}/emoji: the server's live custom emoji, oldest
+// first, and how many it may have (specs/emoji.md 4 and 5).
+message ListEmojiResponse {
+  repeated CustomEmoji emoji = 1;
+  uint32 limit = 2;
+}
+
+// PATCH /servers/{server_id}/emoji/{emoji_id}. Uploading is POST
+// /servers/{server_id}/emoji?name= with the picture's bytes as the body.
+message UpdateEmojiRequest { string name = 1; }
+
 // PUT /servers/{server_id}/role-order: every role of the server but
 // @everyone, once each, highest first (specs/authorization.md 3.5).
 // Answers ListRolesResponse.
@@ -460,6 +471,8 @@ message AccountSnapshot {
   Rail rail = 12;
   // The roles of every server the account is in (architecture 7.5).
   repeated Role roles = 13;
+  // The custom emoji of every server the account is in (specs/emoji.md 8).
+  repeated CustomEmoji emoji = 14;
 }
 
 // A conversation's read state for the caller: the last event read, how many

@@ -1771,7 +1771,7 @@ fn dispatch(
             Outcome::BackupKeyHandoff(_) => {}
             Outcome::Send(cmd) => {
                 if let Some(tx) = commands {
-                    let _ = tx.unbounded_send(GatewayCommand::Send(cmd));
+                    let _ = tx.unbounded_send(GatewayCommand::Send(Box::new(cmd)));
                 }
             }
             Outcome::Subscribe(channel_id) => {
@@ -5302,6 +5302,7 @@ impl App {
                 mentions,
                 remove_attachment_ids: removed,
                 cards,
+                emoji: Vec::new(),
             })),
         })?;
         Ok(wire::display(&id))
@@ -5352,11 +5353,13 @@ impl App {
             command::Op::RemoveReaction(lumia_core::proto::RemoveReaction {
                 message_id,
                 reaction,
+                emoji_id: Vec::new(),
             })
         } else {
             command::Op::AddReaction(lumia_core::proto::AddReaction {
                 message_id,
                 reaction,
+                emoji_id: Vec::new(),
             })
         };
         self.queue(&Command {

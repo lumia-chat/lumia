@@ -6,6 +6,7 @@ defmodule LumiaWeb.ServerController do
   import Ecto.Query
 
   alias Lumia.Authz.Access
+  alias Lumia.CustomEmoji
   alias Lumia.Proto
   alias Lumia.Repo
   alias Lumia.Servers
@@ -490,6 +491,56 @@ defmodule LumiaWeb.ServerController do
   end
 
   # A server is visible only to its members; anyone else gets NOT_FOUND.
+  @doc "`GET /servers/{server_id}/emoji`: the server's live custom emoji and its limit."
+  def emoji(conn, %{"server_id" => server_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, {emoji, limit}} <-
+           CustomEmoji.for_member(server_id, conn.assigns.current_account_id) do
+      ProtoConn.render(conn, %V1.ListEmojiResponse{
+        emoji: Enum.map(emoji, &Proto.custom_emoji/1),
+        limit: limit
+      })
+    end
+  end
+
+  @doc """
+  `POST /servers/{server_id}/emoji?name=`: a new custom emoji, the
+  request's whole body its picture (specs/emoji.md 4).
+  """
+  def create_emoji(conn, %{"server_id" => server_id} = params) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, upload, conn} <- LumiaWeb.Pictures.read(conn),
+         {:ok, emoji} <-
+           CustomEmoji.create(
+             server_id,
+             conn.assigns.current_account_id,
+             Map.get(params, "name"),
+             upload
+           ) do
+      ProtoConn.render(conn, 201, Proto.custom_emoji(emoji))
+    else
+      other -> LumiaWeb.Pictures.refused(conn, other)
+    end
+  end
+
+  @doc "`PATCH /servers/{server_id}/emoji/{emoji_id}`: a new name."
+  def rename_emoji(conn, %{"server_id" => server_id, "emoji_id" => emoji_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         {:ok, req} <- ProtoConn.decode(conn, V1.UpdateEmojiRequest),
+         {:ok, emoji} <-
+           CustomEmoji.rename(server_id, emoji_id, conn.assigns.current_account_id, req.name) do
+      ProtoConn.render(conn, Proto.custom_emoji(emoji))
+    end
+  end
+
+  @doc "`DELETE /servers/{server_id}/emoji/{emoji_id}`: removed, its name left behind."
+  def delete_emoji(conn, %{"server_id" => server_id, "emoji_id" => emoji_id}) do
+    with {:ok, _server} <- member_server(conn, server_id),
+         :ok <- CustomEmoji.remove(server_id, emoji_id, conn.assigns.current_account_id) do
+      send_resp(conn, 204, "")
+    end
+  end
+
   defp member_server(conn, server_id) do
     with %Server{} = server <- Repo.get(Server, server_id),
          member when not is_nil(member) <-

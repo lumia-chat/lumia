@@ -3,6 +3,7 @@
 #   bin/lumia-admin migrate
 #   bin/lumia-admin backup <dir>
 #   bin/lumia-admin restore <dir> [--replace] [--allow-missing-blobs]
+#   bin/lumia-admin emoji-limit <server_id> <n|default>
 set -eu
 here=$(dirname "$0")
 case "${1:-}" in
@@ -19,5 +20,8 @@ case "${1:-}" in
       esac
     done
     exec "$here/lumia" eval "Lumia.Release.restore(\"$dir\", replace: $replace, allow_missing_blobs: $missing) |> IO.inspect()" ;;
-  *) echo "usage: lumia-admin migrate | backup <dir> | restore <dir> [--replace] [--allow-missing-blobs]" >&2; exit 64 ;;
+  emoji-limit)
+    [ $# -eq 3 ] || { echo "usage: lumia-admin emoji-limit <server_id> <n|default>" >&2; exit 64; }
+    exec "$here/lumia" eval "Lumia.Release.emoji_limit(\"$2\", \"$3\") |> IO.inspect()" ;;
+  *) echo "usage: lumia-admin migrate | backup <dir> | restore <dir> [--replace] [--allow-missing-blobs] | emoji-limit <server_id> <n|default>" >&2; exit 64 ;;
 esac

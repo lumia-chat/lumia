@@ -17,6 +17,9 @@ defmodule Lumia.Servers.Server do
     # What the tag beside a member's name shows (architecture 7.5):
     # `"role"` or `"title"`.
     field :member_tag, :string, default: "role"
+    # How many custom emoji it may have, set by the operator; nil for the
+    # instance's default (specs/emoji.md 5).
+    field :emoji_limit, :integer
     belongs_to :owner, Lumia.Accounts.Account, foreign_key: :owner_account_id
     timestamps()
   end
