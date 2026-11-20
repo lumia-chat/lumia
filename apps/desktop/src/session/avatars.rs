@@ -7,9 +7,13 @@
 //! answers, and holds them by URL for the views. A picture a signed profile names on
 //! another host is not fetched: asking would tell that host who is looking.
 //!
+//! A server's own emoji (specs/emoji.md 3, 10) are pictures of the same kind, made by the
+//! instance and served by address, and are fetched and kept the same way. One the server no
+//! longer lists (removed) is dropped, from memory and from what is kept (spec 7).
+//!
 //! The bytes are held as bytes. Decoding them is the toolkit's, in `app`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -51,11 +55,23 @@ pub struct Avatars {
     known: HashMap<String, Picture>,
     queue: VecDeque<String>,
     in_flight: usize,
+    /// The emoji pictures wanted so far: one no server lists any more is dropped.
+    emoji: HashSet<String>,
+    /// Emoji pictures dropped: one arriving after is not kept.
+    gone: HashSet<String>,
     /// Bumped whenever a picture is gained or dropped, for whoever decodes them.
     pub revision: u64,
 }
 
 impl Avatars {
+    /// The bytes held for a URL.
+    pub fn bytes_of(&self, url: &str) -> Option<&Arc<[u8]>> {
+        match self.known.get(url) {
+            Some(Picture::Held(bytes)) => Some(bytes),
+            _ => None,
+        }
+    }
+
     /// Every picture held: its URL and its bytes.
     pub fn held(&self) -> impl Iterator<Item = (&str, &Arc<[u8]>)> {
         self.known
@@ -149,15 +165,35 @@ impl Session {
             .values()
             .flatten()
             .map(|p| p.avatar_url.as_str());
+        let emoji: HashSet<String> = self
+            .snapshot
+            .iter()
+            .flat_map(|s| s.servers.iter().flat_map(|server| server.emoji.iter()))
+            .map(|e| e.image_url.clone())
+            .filter(|url| is_own_avatar(url))
+            .collect();
+        let dropped: Vec<String> = self.avatars.emoji.difference(&emoji).cloned().collect();
+        let dir = self.avatars_dir();
+        for url in dropped {
+            if self.avatars.known.remove(&url).is_some() {
+                self.avatars.revision += 1;
+            }
+            self.avatars.queue.retain(|queued| *queued != url);
+            if let Some(file) = kept_at(&dir, &url) {
+                let _ = std::fs::remove_file(file);
+            }
+            self.avatars.gone.insert(url);
+        }
         let new: Vec<String> = own
             .into_iter()
             .chain(servers)
             .chain(named)
             .chain(looked_up)
+            .chain(emoji.iter().map(String::as_str))
             .filter(|url| is_own_avatar(url) && !self.avatars.known.contains_key(*url))
             .map(str::to_string)
             .collect();
-        let dir = self.avatars_dir();
+        self.avatars.emoji = emoji;
         for url in new {
             if self.avatars.known.contains_key(&url) {
                 continue;
@@ -223,6 +259,11 @@ impl Session {
         match update {
             AvatarUpdate::Fetched { url, bytes } => {
                 self.avatars.in_flight = self.avatars.in_flight.saturating_sub(1);
+                // An emoji removed while its picture was on its way is not kept.
+                if self.avatars.gone.contains(url) {
+                    self.fetch_pictures();
+                    return;
+                }
                 match bytes {
                     Ok(bytes) => {
                         // Kept for the next launch; a failure to keep costs one more fetch.

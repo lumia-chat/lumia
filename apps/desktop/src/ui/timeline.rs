@@ -49,8 +49,6 @@
 //! such rows or 4 MiB; and while a selection spans many unmounted rows, each scrolled
 //! frame that mounts rows costs more (`benches/timeline.rs` measures it).
 
-use std::ops::Range;
-
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -342,7 +340,7 @@ pub fn samples(s: &State, samples: Vec<Sample<'_>>, look: Look) -> El {
         let mut content = col().w_full().gap(t::SPACE_4).child(body::view_with(
             sample.body,
             false,
-            &[],
+            &body::Marks::default(),
             drawn,
             look,
         ));
@@ -1002,40 +1000,73 @@ fn stored_row(s: &State, i: usize, entry: &Entry, place: Place, look: Look) -> E
 
 /// What a message's body shows: its source with each mention's words in it as `@` and the
 /// person's name (architecture 6.6; `@everyone` as it is), escaped so the name stays text, and
-/// those words, for the renderer to draw as pills.
-fn shown_body(s: &State, entry: &Entry) -> (String, Vec<Range<usize>>) {
-    let mut mentions: Vec<_> = entry
+/// those words, for the renderer to draw as pills; and each of its server's custom emoji over
+/// its `:name:` as typed, drawn as its picture where this computer holds it (specs/emoji.md 6).
+fn shown_body(s: &State, entry: &Entry) -> (String, body::Marks) {
+    enum Mark<'a> {
+        Mention(&'a lumia_client::app::MentionSummary),
+        Emoji(&'a lumia_client::app::EmojiRefSummary),
+    }
+    let fits = |start: u32, end: u32| {
+        let (start, end) = (start as usize, end as usize);
+        start < end
+            && end <= entry.body.len()
+            && entry.body.is_char_boundary(start)
+            && entry.body.is_char_boundary(end)
+    };
+    let mut marks: Vec<(usize, usize, Mark<'_>)> = entry
         .mentions
         .iter()
-        .filter(|m| {
-            entry.body.is_char_boundary(m.start as usize)
-                && entry.body.is_char_boundary(m.end as usize)
-        })
-        .filter(|m| m.start < m.end && (m.end as usize) <= entry.body.len())
+        .filter(|m| fits(m.start, m.end))
+        .map(|m| (m.start as usize, m.end as usize, Mark::Mention(m)))
+        .chain(
+            entry
+                .emoji
+                .iter()
+                .filter(|e| fits(e.start, e.end))
+                .map(|e| (e.start as usize, e.end as usize, Mark::Emoji(e))),
+        )
         .collect();
-    mentions.sort_by_key(|m| m.start);
+    marks.sort_by_key(|(start, ..)| *start);
+    let server = s
+        .session
+        .emoji_server()
+        .map(|server| server.server_id.clone());
     let mut source = String::with_capacity(entry.body.len());
-    let mut ranges = Vec::new();
+    let mut shown = body::Marks::default();
     let mut at = 0usize;
-    for m in mentions {
-        let (start, end) = (m.start as usize, m.end as usize);
+    for (start, end, mark) in marks {
         if start < at {
             continue;
         }
         source.push_str(&entry.body[at..start]);
-        // The core reads a mention as one unit, so a name needs no escaping.
         let from = source.len();
-        if m.everyone {
-            source.push_str("@everyone");
-        } else {
-            source.push('@');
-            source.push_str(&s.session.name_of(&m.account_id));
+        match mark {
+            // The core reads a mention as one unit, so a name needs no escaping.
+            Mark::Mention(m) => {
+                if m.everyone {
+                    source.push_str("@everyone");
+                } else {
+                    source.push('@');
+                    source.push_str(&s.session.name_of(&m.account_id));
+                }
+                shown.mentions.push(from..source.len());
+            }
+            // As typed: a rename rewrites no message.
+            Mark::Emoji(e) => {
+                source.push_str(&entry.body[start..end]);
+                shown.emoji.push(body::BodyEmoji {
+                    range: from..source.len(),
+                    picture: server
+                        .as_deref()
+                        .and_then(|server| s.body_picture(server, &e.emoji_id)),
+                });
+            }
         }
-        ranges.push(from..source.len());
         at = end;
     }
     source.push_str(&entry.body[at..]);
-    (source, ranges)
+    (source, shown)
 }
 
 /// A message's words with what architecture 6.6 adds: its mentions as pills in them,
@@ -1068,7 +1099,7 @@ fn message_content(
             let (source, mentions) = shown_body(s, entry);
             // "(edited)" follows the words on their last line when they end in a paragraph,
             // and stands on a line of its own after code, a quote or a list.
-            let inline = entry.edited && body::edited_inline(&source, &mentions);
+            let inline = entry.edited && body::edited_inline(&source, &mentions.mentions);
             let drawn = body::Drawn {
                 edited: inline,
                 ..drawn
@@ -1237,10 +1268,9 @@ fn pending_row(s: &State, pending: &Pending, place: Place, look: Look) -> El {
         fold: fold_of(s, &pending.id, s.session.self_name(), m),
         copied: copied_in(s, &pending.id),
     };
-    let mut body = col()
-        .w_full()
-        .gap(t::SPACE_4)
-        .child(body::view_with(&pending.body, false, &[], drawn, look).key("body"));
+    let mut body = col().w_full().gap(t::SPACE_4).child(
+        body::view_with(&pending.body, false, &body::Marks::default(), drawn, look).key("body"),
+    );
     if let Some(files) = media::pending(&pending.attachments, &m.ty, look) {
         body = body.child(files);
     }

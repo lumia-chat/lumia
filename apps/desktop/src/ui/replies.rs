@@ -179,7 +179,7 @@ fn reference(
 }
 
 /// Who reacted with an emoji, for its chip's tooltip: "You and Ada reacted with 👍".
-fn reacted_words(s: &State, reaction: &ReactionSummary) -> String {
+fn reacted_words(s: &State, reaction: &ReactionSummary, with: &str) -> String {
     let me = s.session.me();
     let mut names: Vec<String> = Vec::new();
     if reaction.me {
@@ -202,6 +202,7 @@ fn reacted_words(s: &State, reaction: &ReactionSummary) -> String {
     let count = usize::try_from(reaction.count).unwrap_or(usize::MAX);
     let unnamed = count.saturating_sub(names.len());
     let who = match (names.as_slice(), unnamed) {
+        ([], 1) => "1 person".into(),
         ([], n) => format!("{n} people"),
         ([one], 0) => one.clone(),
         ([one, two], 0) => format!("{one} and {two}"),
@@ -209,7 +210,7 @@ fn reacted_words(s: &State, reaction: &ReactionSummary) -> String {
         ([one], n) => format!("{one} and {}", super::others(n)),
         ([one, two, rest @ ..], n) => format!("{one}, {two} and {}", super::others(rest.len() + n)),
     };
-    format!("{who} reacted with {}", reaction.reaction)
+    format!("{who} reacted with {with}")
 }
 
 /// A message's reactions as chips, the one this account has in the accent, with the way to
@@ -224,21 +225,58 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
         .items_center()
         .role("list")
         .label("Reactions");
+    // The server's own emoji: a chip of one this computer holds draws its picture, one it
+    // does not (removed) its `:name:`, still counted and taken back by its own reactors, but
+    // offering no new ones (specs/emoji.md 7, 9).
+    let server = s
+        .session
+        .emoji_server()
+        .map(|server| server.server_id.clone());
     for (n, reaction) in entry.reactions.iter().enumerate() {
         let (id, emoji) = (entry.id.clone(), reaction.reaction.clone());
-        let words = reacted_words(s, reaction);
-        let mut chip = chip(&reaction.reaction, reaction.count, reaction.me, ty, look)
+        let custom = !reaction.emoji_id.is_empty();
+        let held = server
+            .as_deref()
+            .filter(|_| custom)
+            .and_then(|server| s.session.emoji_in(server, &reaction.emoji_id));
+        let words = match held {
+            Some(held) => reacted_words(s, reaction, &format!(":{}:", held.name)),
+            None => reacted_words(s, reaction, &reaction.reaction),
+        };
+        let face = match (custom, held) {
+            (false, _) => text(reaction.reaction.clone()).font(ty.reaction),
+            (true, Some(held)) => super::emoji::picture_tall(s, held, t::REACTION_EMOJI, look),
+            (true, None) => text(reaction.reaction.clone())
+                .font(t::TEXT_REACTION_NAME)
+                .color(if reaction.me {
+                    c.accent_ink
+                } else {
+                    c.ink_body
+                }),
+        };
+        let mut chip = chip_with(face, reaction.count, reaction.me, ty, look)
             .key(format!("reaction-{n}"))
             .role("button")
             .label(format!("{words}, {}", reaction.count))
             .help(words)
-            .checked(reaction.me)
-            .cursor(Cursor::Pointer)
-            .focusable(true)
-            .focus_ring(2.0, 0.0, c.focus)
-            .on_press(move |s: &mut State| s.react_with(&id, &emoji));
-        if !reaction.me {
-            chip = chip.hover(c.hover_icon);
+            .checked(reaction.me);
+        let pressable = !custom || held.is_some() || reaction.me;
+        if pressable {
+            chip = chip
+                .cursor(Cursor::Pointer)
+                .focusable(true)
+                .focus_ring(2.0, 0.0, c.focus);
+            chip = if custom {
+                let emoji_id = reaction.emoji_id.clone();
+                chip.on_press(move |s: &mut State| s.react_custom(&id, &emoji_id))
+            } else {
+                chip.on_press(move |s: &mut State| s.react_with(&id, &emoji))
+            };
+            if !reaction.me {
+                chip = chip.hover(c.hover_icon);
+            }
+        } else {
+            chip = chip.disabled(true);
         }
         chips = chips.child(chip);
     }
@@ -260,6 +298,18 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
 /// How a reaction's chip looks, with nothing to press: its emoji and count, in the accent
 /// when it is this account's (`me`). Preferences' preview draws these.
 pub(crate) fn chip(emoji: &str, count: u32, me: bool, ty: &t::MessageType, look: Look) -> El {
+    chip_with(
+        text(emoji.to_string()).font(ty.reaction),
+        count,
+        me,
+        ty,
+        look,
+    )
+}
+
+/// [`chip`] with what stands for the reaction drawn already: a server's emoji's picture, or
+/// its `:name:`.
+fn chip_with(face: El, count: u32, me: bool, ty: &t::MessageType, look: Look) -> El {
     let c = look.c;
     let chip = row()
         .min_h(t::SPACE_28)
@@ -267,7 +317,7 @@ pub(crate) fn chip(emoji: &str, count: u32, me: bool, ty: &t::MessageType, look:
         .gap(t::SPACE_6)
         .items_center()
         .radius(t::RADIUS_PILL)
-        .child(text(emoji.to_string()).font(ty.reaction))
+        .child(face)
         .child(
             text(count.to_string())
                 .font(ty.reaction_count)
@@ -829,6 +879,66 @@ pub fn mention_list(s: &State, look: Look) -> Option<El> {
         if !note.is_empty() {
             item = item.child(text(note).font(t::TEXT_META).color(c.ink_muted).truncate());
         }
+        if on {
+            item = item.fill(c.hover_member);
+        }
+        list = list.child(item);
+    }
+    Some(shadowed(list, look.shadows.floating).anchored_fit(
+        "composer-box",
+        Side::Top,
+        rune::Align::Start,
+        t::SPACE_6,
+    ))
+}
+
+/// The `:` list over the composer (the "Emoji composer" board): the server's emoji whose
+/// names match what follows the `:`, each its picture and `:name:`, the row the arrow keys are
+/// on marked. As wide as the @ list: the board draws it the composer's width, and Rune's
+/// anchored overlay takes no width from its anchor.
+pub fn emoji_list(s: &State, look: Look) -> Option<El> {
+    let c = look.c;
+    let choices = s.colon_choices();
+    if choices.is_empty() {
+        return None;
+    }
+    let chosen = s.replies.colon.as_ref().map_or(0, |q| q.chosen);
+    let mut list = col()
+        .key("emoji-colon-list")
+        .w(AVATAR_CARD_WIDTH)
+        .padding(t::SPACE_6)
+        .gap(t::SPACE_2)
+        .radius(t::RADIUS_14)
+        .fill(c.surface)
+        .border(1.0, c.line_strong)
+        .role("listbox")
+        .label("Emoji");
+    for (n, e) in choices.iter().enumerate() {
+        let on = n == chosen;
+        let name = format!(":{}:", e.name);
+        let mut item = row()
+            .key(format!("colon-{n}"))
+            .w_full()
+            .h(t::MENU_ITEM_HEIGHT)
+            .px(t::SPACE_10)
+            .gap(t::SPACE_10)
+            .items_center()
+            .radius(t::RADIUS_8)
+            .role("option")
+            .label(name.clone())
+            .checked(on)
+            .cursor(Cursor::Pointer)
+            .hover(c.hover_member)
+            .on_press(move |s: &mut State| s.pick_colon(n))
+            .child(super::emoji::picture(s, e, t::EMOJI_LIST_PICTURE, look))
+            .child(
+                text(name)
+                    .font(t::TEXT_MENU)
+                    .color(c.ink)
+                    .truncate()
+                    .shrink()
+                    .min_w(0.0),
+            );
         if on {
             item = item.fill(c.hover_member);
         }

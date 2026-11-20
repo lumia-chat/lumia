@@ -16,6 +16,7 @@ pub mod autoscroll;
 pub mod channels;
 pub mod context;
 pub mod drafts;
+pub mod emoji;
 pub mod home;
 pub mod links;
 pub mod media;
@@ -130,6 +131,8 @@ pub enum Popover {
     DeleteRole,
     /// "Add members" to the role in the editor.
     AddHolders,
+    /// "Remove :name:?", for the emoji `emoji.removing` names (`emoji`).
+    RemoveEmoji,
     /// The profile card's Roles and Title forms, for `roles.card`.
     CardRoles,
     CardTitle,
@@ -205,6 +208,10 @@ pub struct State {
     /// Roles and titles: a role's editor, its drag and menu, a member's row, the card's forms
     /// (`role_settings`).
     pub roles: role_settings::RoleForms,
+    /// Server settings' Emoji section: the upload form, a rename, the question (`emoji`).
+    pub emoji: emoji::EmojiForms,
+    /// The first frames of animated emoji that Reduce Motion draws (`emoji`).
+    pub stills: emoji::Stills,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
@@ -260,6 +267,8 @@ impl State {
             rail: rail::RailUi::default(),
             context: context::Context::default(),
             roles: role_settings::RoleForms::default(),
+            emoji: emoji::EmojiForms::default(),
+            stills: emoji::Stills::default(),
             clock_24: false,
             updater: None,
         };
@@ -519,6 +528,7 @@ impl State {
     /// when the draft goes over the limit on a message, once, not at every key after.
     pub fn draft_changed(&mut self, tx: &mut Tx) {
         self.follow_mention();
+        self.follow_colon();
         let room = self.session.room(&self.draft.text);
         if room.over() && !self.draft_over {
             tx.announce(room_words(room), LiveRegion::Polite);
@@ -545,6 +555,7 @@ impl State {
         }
         let expired = self.session.expire_typing(now_micros);
         let pictured = self.pictures.sync(&self.session.avatars);
+        let pictured = self.sync_stills() || pictured;
         let replied = self.tick_replies();
         let prompted = self.tick_prompts(now_micros);
         let media = self.tick_media(now_micros);
@@ -680,6 +691,7 @@ impl State {
                 self.react_role(update);
                 self.settle_settings();
             }
+            Update::Emoji(update) => self.react_emoji(update),
             Update::Gateway(event) => {
                 if matches!(
                     event,
@@ -705,6 +717,7 @@ impl State {
         }
         // Whatever arrived may have changed a role or a member that a form is open on.
         self.follow_roles();
+        self.follow_emoji();
     }
 
     /// Applies what the session finished and reacts to it; true when anything changed.

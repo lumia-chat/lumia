@@ -3066,6 +3066,7 @@ dependencies = [
  "chrono",
  "emojis",
  "getrandom 0.4.3",
+ "image",
  "lumia-appcast",
  "lumia-client",
  "lumia-core",

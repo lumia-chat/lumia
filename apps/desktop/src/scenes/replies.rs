@@ -26,6 +26,7 @@ fn entry(id: &str, seq: u64, author: &str, body: &str, ago: i64) -> Entry {
         edited: false,
         attachments: Vec::new(),
         cards: Vec::new(),
+        emoji: Vec::new(),
     }
 }
 

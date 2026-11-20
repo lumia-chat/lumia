@@ -61,6 +61,22 @@ impl Pictures {
         changed
     }
 
+    fn cache(&mut self) -> &ImageCache {
+        self.cache
+            .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})))
+    }
+
+    /// `bytes` decoded on the cache's worker, kept by whoever asked: a file this computer
+    /// chose, drawn before it is sent (an emoji's upload form).
+    pub fn decode(&mut self, bytes: Arc<[u8]>) -> Image {
+        self.cache().load(bytes)
+    }
+
+    /// Pixels made here (an animated emoji's first frame) as an image.
+    pub fn rgba(&mut self, width: u32, height: u32, rgba: Vec<u8>) -> Image {
+        self.cache().rgba(width, height, rgba)
+    }
+
     /// Waits for every image to finish decoding, for a scene drawn in one frame. A window
     /// never waits: an image paints when it is ready.
     pub fn wait(&self) {

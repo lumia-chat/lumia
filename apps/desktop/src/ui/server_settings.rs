@@ -42,8 +42,7 @@ pub fn view(s: &State, server: &ServerSummary, look: Look) -> El {
         ),
         Section::Roles => page_column().child(super::roles::section(s, server, look)),
         Section::Members => page_column().child(super::members::section(s, server, look)),
-        // Not offered until the desktop's emoji screens (plan step 12).
-        Section::Emoji => page_column(),
+        Section::Emoji => page_column().child(super::emoji_settings::section(s, server, look)),
     };
     let header =
         super::conversation::header_with("Server settings", None, Some(&server.name), look);

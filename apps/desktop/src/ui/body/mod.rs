@@ -37,18 +37,37 @@
 //! A mention (architecture 6.6) is drawn as the design system's pill: the core reads the
 //! source with the message's mention ranges (`parse_with`) and gives each paragraph the
 //! ranges of its mentions, none inside code or a link.
+//!
+//! A server's custom emoji (specs/emoji.md 6) is read by the core the same way
+//! (`parse_marked`), and drawn as its picture when this computer holds the emoji, at the
+//! height of an emoji in that text ([`EMOJI_HEIGHT`] of its size, the boards' 1.3 em) and as
+//! wide as its shape. Rune sets no picture in a line of text for an app, but it does set an
+//! icon before a word (`El::inline_icon`, in room of its own that moves the text after it
+//! aside, centred on that word's letters), and that is what draws one here: the `:name:` the
+//! message keeps stays in the text, so a selection and a copy take it, but drawn at no width
+//! and in no colour, and the picture goes before it. Two characters that are never copied
+//! frame it ([`make_room`]): a word joiner before it, drawn at the text's own size, whose
+//! letters the picture is centred on (the name's own are too small to centre on), and a
+//! no-break space after it, which ends the word, so that `:a::b:` is two pictures, and binds
+//! it to what follows as the typed text was bound. What this costs, and what Rune does not
+//! do: the picture is still (Rune draws an inline icon's first frame, never its others: its
+//! painter places one with no clock), a selection's highlight does not cover it, and it has
+//! no tooltip (a text range has one only as a link). Assistive technology reads the
+//! paragraph with each emoji's present `:name:`. One the computer does not hold (removed, or
+//! not yet known) is its text as typed.
 
 use std::cell::Cell;
 use std::ops::Range;
 
 use rune::text::RichLayoutOptions;
 use rune::{
-    Align, Color, Cursor, El, Link, LinkPaint, Span, TextStyle, Tx, col, el, rich, row, text,
+    Align, Color, Cursor, El, InlineIcon, Link, LinkPaint, Pixels, Span, TextStyle, Tx, col, el,
+    rich, row, text,
 };
 use rune_kit::syntax::{self, SyntaxTheme};
 
 use lumia_client::body::PAD;
-pub use lumia_client::body::{Block, Inline, Style, is_web, parse, parse_with};
+pub use lumia_client::body::{Block, Inline, Style, is_web, parse, parse_marked, parse_with};
 
 use super::components::Look;
 use crate::app::State;
@@ -64,7 +83,129 @@ thread_local! {
 /// The body of a message. `selectable` is off for a send that is still pending: its text
 /// cannot be selected and its links do not open.
 pub fn view(source: &str, selectable: bool, look: Look) -> El {
-    view_with(source, selectable, &[], Drawn::default(), look)
+    view_with(
+        source,
+        selectable,
+        &Marks::default(),
+        Drawn::default(),
+        look,
+    )
+}
+
+/// What of a body is marked beside its source: its mentions, drawn as pills, and its
+/// server's custom emoji, each a byte range of the source.
+#[derive(Clone, Default)]
+pub struct Marks {
+    pub mentions: Vec<Range<usize>>,
+    pub emoji: Vec<BodyEmoji>,
+}
+
+/// One of the server's custom emoji a body uses (specs/emoji.md 6): the bytes of the source
+/// its `:name:` takes, and its picture when this computer holds the emoji.
+#[derive(Clone, Debug)]
+pub struct BodyEmoji {
+    pub range: Range<usize>,
+    /// None draws the text as typed: the emoji was removed, or is not known here.
+    pub picture: Option<EmojiPicture>,
+}
+
+/// A held emoji's picture, as a body draws it.
+#[derive(Clone, Debug)]
+pub struct EmojiPicture {
+    /// Empty until it has decoded: its room is kept meanwhile, so the line does not move.
+    pub pixels: Pixels,
+    /// Its width over its height.
+    pub aspect: f32,
+    /// Its name now, which assistive technology reads.
+    pub name: String,
+}
+
+/// An emoji's height in text, over the text's size: the boards' 1.3 em.
+pub const EMOJI_HEIGHT: f32 = 1.3;
+
+/// What frames a pictured emoji's `:name:` ([`make_room`]): a word joiner before it, and a
+/// no-break space after it.
+const JOIN: &str = "\u{2060}";
+const BIND: &str = "\u{a0}";
+/// The size the `:name:` under a picture is set at: no width a reader could see.
+const UNSEEN: f32 = 0.05;
+
+/// Where [`make_room`] put one pictured emoji in the text it made.
+struct Placed<'a> {
+    /// The word joiner's byte, where the picture goes.
+    join: usize,
+    /// The `:name:`.
+    name: Range<usize>,
+    /// The no-break space after it.
+    bind: Range<usize>,
+    picture: &'a EmojiPicture,
+}
+
+/// `inline` with each pictured emoji's `:name:` framed by [`JOIN`] and [`BIND`], every range
+/// moved to match, and where each went. `pictures` are ranges of `inline.text`, in order.
+fn make_room<'a>(
+    inline: &Inline,
+    pictures: &[(Range<usize>, &'a EmojiPicture)],
+) -> (Inline, Vec<Placed<'a>>) {
+    let mut inserts: Vec<(usize, &str)> = Vec::with_capacity(pictures.len() * 2);
+    for (range, _) in pictures {
+        inserts.push((range.start, JOIN));
+        inserts.push((range.end, BIND));
+    }
+    // A range's start comes after what is put in where it starts; its end before what is
+    // put in where it ends.
+    let starts = |pos: usize| -> usize {
+        pos + inserts
+            .iter()
+            .filter(|(at, _)| *at <= pos)
+            .map(|(_, s)| s.len())
+            .sum::<usize>()
+    };
+    let ends = |pos: usize| -> usize {
+        pos + inserts
+            .iter()
+            .filter(|(at, _)| *at < pos)
+            .map(|(_, s)| s.len())
+            .sum::<usize>()
+    };
+    let moved = |r: &Range<usize>| starts(r.start)..ends(r.end).max(starts(r.start));
+    let mut text = String::with_capacity(inline.text.len() + inserts.len() * 3);
+    let mut at = 0;
+    for (pos, put) in &inserts {
+        text.push_str(inline.text.get(at..*pos).unwrap_or_default());
+        text.push_str(put);
+        at = *pos;
+    }
+    text.push_str(inline.text.get(at..).unwrap_or_default());
+    let placed = pictures
+        .iter()
+        .map(|(range, picture)| {
+            let name = starts(range.start)..ends(range.end);
+            Placed {
+                join: name.start - JOIN.len(),
+                bind: name.end..name.end + BIND.len(),
+                name,
+                picture,
+            }
+        })
+        .collect();
+    let made = Inline {
+        text,
+        runs: inline.runs.iter().map(|(r, s)| (moved(r), *s)).collect(),
+        links: inline
+            .links
+            .iter()
+            .map(|(r, url)| (moved(r), url.clone()))
+            .collect(),
+        bracketed: inline.bracketed.iter().map(moved).collect(),
+        mentions: inline
+            .mentions
+            .iter()
+            .map(|(r, i)| (moved(r), *i))
+            .collect(),
+        emoji: inline.emoji.iter().map(|(r, i)| (moved(r), *i)).collect(),
+    };
+    (made, placed)
 }
 
 /// How a body is drawn besides its source.
@@ -130,18 +271,21 @@ impl Default for Drawn<'_> {
     }
 }
 
-/// [`view`] with the message's mentions, their byte ranges of `source`, drawn as pills.
+/// [`view`] with the message's mentions, drawn as pills, and its server's custom emoji,
+/// drawn as their pictures where held.
 pub fn view_with(
     source: &str,
     selectable: bool,
-    mentions: &[Range<usize>],
+    marks: &Marks,
     drawn: Drawn<'_>,
     look: Look,
 ) -> El {
-    let blocks = parse_with(source, mentions);
+    let ranges: Vec<Range<usize>> = marks.emoji.iter().map(|e| e.range.clone()).collect();
+    let blocks = parse_marked(source, &marks.mentions, &ranges);
     let body = Body {
         look,
         ty: *drawn.ty,
+        emoji: marks.emoji.clone(),
         selectable,
         first: Cell::new(true),
         head: Cell::new(drawn.head.map(str::to_owned)),
@@ -219,6 +363,8 @@ struct Lead<'a> {
 struct Body {
     look: Look,
     ty: t::MessageType,
+    /// [`Marks::emoji`], by the index the core gives each in a paragraph.
+    emoji: Vec<BodyEmoji>,
     selectable: bool,
     /// No text of this body has been drawn yet: the first follows the message's author
     /// and time without a blank line.
@@ -410,11 +556,49 @@ impl Body {
         column
     }
 
-    /// A paragraph: its text with its styles, its links pressable.
+    /// A paragraph: its text with its styles, its links pressable, its held emoji pictured.
     fn para(&self, inline: &Inline) -> El {
+        let pictures: Vec<(Range<usize>, &EmojiPicture)> = inline
+            .emoji
+            .iter()
+            .filter_map(|(range, index)| {
+                let picture = self.emoji.get(*index as usize)?.picture.as_ref()?;
+                Some((range.clone(), picture))
+            })
+            .collect();
+        if pictures.is_empty() {
+            return self.para_drawn(inline, &[], None);
+        }
+        // What assistive technology reads: the words, each emoji by its name now.
+        let mut label = String::with_capacity(inline.text.len());
+        let mut at = 0;
+        for (range, picture) in &pictures {
+            label.push_str(inline.text.get(at..range.start).unwrap_or_default());
+            label.push(':');
+            label.push_str(&picture.name);
+            label.push(':');
+            at = range.end;
+        }
+        label.push_str(inline.text.get(at..).unwrap_or_default());
+        let label = label.replace(lumia_client::body::OPEN, "");
+        let label = label.replace(lumia_client::body::CLOSE, "");
+        let (made, placed) = make_room(inline, &pictures);
+        self.para_drawn(&made, &placed, Some(label))
+    }
+
+    fn para_drawn(&self, inline: &Inline, placed: &[Placed<'_>], label: Option<String>) -> El {
         let c = self.look.c;
         let edited = self.edited.replace(false);
         let (words, mut spans) = (inline.text.clone(), self.spans(inline));
+        // A pictured emoji's name takes no room and shows nothing; its frame is the text's.
+        for p in placed {
+            spans.push(
+                Span::new(p.name.start, p.name.end)
+                    .size(UNSEEN)
+                    .color(Color::TRANSPARENT),
+            );
+            spans.push(Span::new(p.bind.start, p.bind.end).size(UNSEEN));
+        }
         let words = if edited {
             spans.push(
                 Span::new(words.len(), words.len() + EDITED.len())
@@ -464,12 +648,29 @@ impl Body {
                 }
             }
         }
-        // Assistive technology reads the words, not the spacing drawn around inline code.
-        if padded {
+        let height = self.ty.message.size * EMOJI_HEIGHT;
+        for p in placed {
+            // As wide as its shape at the emoji height: a wide one's square is as wide as
+            // it is, and the picture fits it, centred.
+            let side = height * p.picture.aspect.max(1.0);
+            let icon = InlineIcon::image(p.picture.pixels.clone())
+                .size(side)
+                .gap(0.0);
+            para = para.inline_icon(p.join, icon);
+            if self.selectable {
+                para = para
+                    .uncopied(p.join..p.join + JOIN.len())
+                    .uncopied(p.bind.clone());
+            }
+        }
+        // Assistive technology reads the words, not the spacing drawn around inline code,
+        // and an emoji by its name now.
+        let label = label.or_else(|| padded.then(|| inline.plain()));
+        if let Some(label) = label {
             para = para.label(if edited {
-                format!("{}{EDITED}", inline.plain())
+                format!("{label}{EDITED}")
             } else {
-                inline.plain()
+                label
             });
         }
         // A copy takes what was said, not that it was changed.
@@ -744,6 +945,41 @@ fn pad_size() -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pictured_emoji_is_framed_and_every_range_moves_with_it() {
+        // "hi :a::b: **x**", two emoji side by side, then strong text.
+        let inline = Inline {
+            text: "hi :a::b: x".into(),
+            runs: vec![(10..11, Style::Strong)],
+            links: Vec::new(),
+            bracketed: Vec::new(),
+            mentions: Vec::new(),
+            emoji: vec![(3..6, 0), (6..9, 1)],
+        };
+        let picture = EmojiPicture {
+            pixels: Pixels::default(),
+            aspect: 1.0,
+            name: "a".into(),
+        };
+        let (made, placed) = make_room(&inline, &[(3..6, &picture), (6..9, &picture)]);
+        assert_eq!(made.text, "hi \u{2060}:a:\u{a0}\u{2060}:b:\u{a0} x");
+        // Each name is its own text still, between its frame.
+        let names: Vec<&str> = placed.iter().map(|p| &made.text[p.name.clone()]).collect();
+        assert_eq!(names, [":a:", ":b:"]);
+        for p in &placed {
+            assert_eq!(&made.text[p.join..p.join + JOIN.len()], JOIN);
+            assert_eq!(&made.text[p.bind.clone()], BIND);
+        }
+        assert_eq!(
+            made.emoji
+                .iter()
+                .map(|(r, _)| &made.text[r.clone()])
+                .collect::<Vec<_>>(),
+            [":a:", ":b:"]
+        );
+        assert_eq!(&made.text[made.runs[0].0.clone()], "x");
+    }
 
     #[test]
     fn a_body_folds_to_ten_lines_only_when_it_is_taller_than_fourteen() {

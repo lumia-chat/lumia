@@ -76,6 +76,21 @@ impl Session {
         // Members are dressed by the snapshot (their tags, who this account manages): where
         // a server's roles or this account's standing there changed, they are read again.
         let redressed = Self::redressed(self.snapshot.as_ref(), &snapshot);
+        // A server's emoji changed: what draws them (bodies, chips, the picker) is drawn
+        // again, by their names and pictures now.
+        let emoji = |s: &SnapshotSummary| -> Vec<_> {
+            s.servers
+                .iter()
+                .map(|server| server.emoji.clone())
+                .collect()
+        };
+        if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|old| emoji(old) != emoji(&snapshot))
+        {
+            self.revision += 1;
+        }
         self.snapshot = Some(snapshot);
         for server_id in redressed {
             self.read_members(&server_id);

@@ -62,6 +62,10 @@ serde_json = "1"
 getrandom = "0.4"
 # The emoji picker's list, names and groups (Unicode's, fully qualified; src/ui/emoji.rs).
 emojis = "0.9.1"
+# The first frame of a server's animated emoji, which Reduce Motion draws (src/app/emoji.rs):
+# Rune plays a GIF wherever it draws one and hands an app no still of it. The core's version,
+# already built as its own; GIF alone.
+image = { version = "0.25.10", default-features = false, features = ["gif"] }
 
 # The Linux AppImage's updater (`src/platform/appimage.rs`): the signed feed, and the feed and
 # the download fetched on a thread of their own. Elsewhere Sparkle or a package manager updates.

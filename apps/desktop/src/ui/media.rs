@@ -49,7 +49,7 @@ use crate::settings::Media;
 use crate::tokens::{self as t, icons};
 
 /// A glyph button that takes the `Tx` (a dialog, the browser), `size` across.
-fn glyph_button(
+pub(crate) fn glyph_button(
     key: impl Into<String>,
     glyph: &'static Icon,
     label: &str,

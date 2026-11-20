@@ -18,6 +18,7 @@ pub mod avatars;
 pub mod browser;
 pub mod channels;
 pub mod dms;
+pub mod emoji;
 pub mod identity;
 pub mod media;
 pub mod notices;
@@ -145,6 +146,7 @@ pub enum Update {
     Rail(rail::RailUpdate),
     Media(media::MediaUpdate),
     Role(roles::RoleUpdate),
+    Emoji(emoji::EmojiUpdate),
 }
 
 /// What is on screen to read and write: a server's channel, or a personal conversation.
@@ -192,6 +194,9 @@ pub struct Entry {
     pub attachments: Vec<AttachmentSummary>,
     /// Its links' cards, in the order the links appear (spec 6).
     pub cards: Vec<CardSummary>,
+    /// The server's custom emoji its body uses, by byte range (specs/emoji.md 6); none in a
+    /// personal conversation.
+    pub emoji: Vec<lumia_client::app::EmojiRefSummary>,
 }
 
 impl From<MessageSummary> for Entry {
@@ -212,6 +217,7 @@ impl From<MessageSummary> for Entry {
             mentions_me: m.mentions_me,
             attachments: m.attachments,
             cards: m.cards,
+            emoji: m.emoji,
         }
     }
 }
@@ -1495,6 +1501,7 @@ impl Session {
             Update::Rail(update) => self.apply_rail(update),
             Update::Media(update) => self.apply_media(update),
             Update::Role(update) => self.apply_role(update),
+            Update::Emoji(update) => self.apply_emoji(update),
         }
     }
 
@@ -1592,8 +1599,8 @@ impl Session {
             // are read again for their tags, and the snapshot the `AccountApplied` before
             // this asked for says afresh what this account may do there.
             AppEvent::TagsChanged { server_id } => self.read_members(server_id),
-            // The snapshot taken again after its `AccountApplied` has them.
-            AppEvent::EmojiChanged { .. } => {}
+            // What the core keeps has them already: taken now, with their pictures.
+            AppEvent::EmojiChanged { server_id } => self.emoji_changed(server_id),
             AppEvent::Error {
                 command_id,
                 message,

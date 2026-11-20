@@ -526,6 +526,7 @@ impl Session {
                     mentions_me: false,
                     attachments: m.attachments.clone(),
                     cards: m.cards.clone(),
+                    emoji: Vec::new(),
                 }
             })
             .collect()

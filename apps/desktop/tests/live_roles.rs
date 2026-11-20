@@ -243,7 +243,12 @@ fn roles_titles_and_tags_are_managed_and_reach_the_other_shell() {
     assert!(mine.is_owner && mine.can_manage_roles && mine.can_manage_members);
     assert_eq!(
         roles::settings_sections(&mine),
-        [Section::Overview, Section::Roles, Section::Members]
+        [
+            Section::Overview,
+            Section::Roles,
+            Section::Members,
+            Section::Emoji
+        ]
     );
     assert!(owner.settings_offered());
     assert!(

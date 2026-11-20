@@ -458,6 +458,28 @@ pub const CARD_PICTURE_UNDER: f32 = SPACE_40 * 6.0;
 pub const PLAY_DISC: f32 = AVATAR_LG + SPACE_8;
 /// The alt text field of a picture waiting in the composer.
 pub const ALT_FIELD: f32 = SPACE_40 * 6.0;
+
+// A server's own emoji (the step 12 boards; specs/emoji.md). In text they are 1.3 of its size
+// (`ui::body::EMOJI_HEIGHT`).
+/// In a reaction chip (`lu-reaction__custom`, 18): as tall as the chip's emoji.
+pub const REACTION_EMOJI: f32 = SPACE_18;
+/// A removed emoji's `:name:` in its chip (`lu-reaction__name`, 12.5 at 600).
+pub const TEXT_REACTION_NAME: TextStyle = TEXT_SECTION;
+/// In the `:` list (`lu-emojilist__pic`, 24).
+pub const EMOJI_LIST_PICTURE: f32 = SPACE_24;
+/// In a row of Server settings' Emoji section (32), and the row's least height (60).
+pub const EMOJI_ROW_PICTURE: f32 = ROW_HEIGHT;
+pub const EMOJI_ROW: f32 = SPACE_40 + SPACE_18 + SPACE_2;
+/// A row's `:name:` (14.5 at 600) and its "Uploaded by" (12.5 at 400).
+pub const TEXT_EMOJI_NAME: TextStyle = TEXT_BUTTON_SECONDARY;
+/// A row's buttons (32 tall, 12 across).
+pub const EMOJI_ACTION: f32 = ROW_HEIGHT;
+/// The upload form's picture: its frame (88, `radius-12`, on `inset`) and the picture in it
+/// (64).
+pub const EMOJI_UPLOAD_FRAME: f32 = SPACE_40 * 2.0 + SPACE_8;
+pub const EMOJI_UPLOAD_PICTURE: f32 = SPACE_40 + SPACE_24;
+/// The fields where a name is typed (40 tall).
+pub const EMOJI_FIELD: f32 = SPACE_40;
 /// The viewer's bars over and under the picture, and its margin to the window's edge.
 pub const VIEWER_BAR: f32 = HEADER_HEIGHT;
 pub const VIEWER_MARGIN: f32 = SPACE_24;

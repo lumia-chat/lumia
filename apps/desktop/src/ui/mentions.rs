@@ -164,10 +164,17 @@ fn item(s: &State, message: &MessageSummary, look: Look) -> El {
             look,
         ));
     }
+    // Its server's emoji, by the server it was said in.
+    let emoji = s
+        .session
+        .channel_summary(&message.channel_id)
+        .map(|channel| s.body_emoji(&channel.server_id, &entry.body, &entry.emoji))
+        .unwrap_or_default();
+    let marks = body::Marks { mentions, emoji };
     content = content.child(body::view_with(
         &entry.body,
         false,
-        &mentions,
+        &marks,
         body::Drawn::default(),
         look,
     ));

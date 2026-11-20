@@ -9,6 +9,8 @@ use lumia_client::app::{
 };
 
 mod account;
+/// Public for its sample emoji, which the tests use.
+pub mod emoji;
 /// Public for its sample clips and `written`, which the tests play.
 pub mod media;
 mod rail;
@@ -372,6 +374,21 @@ pub const SCENES: &[Scene] = &[
     ("replies", replies::replies),
     ("mention-list", replies::mention_list),
     ("emoji-picker", replies::emoji_picker),
+    // A server's own emoji (`scenes/emoji.rs`, the step 12 boards), at `--size 1440x940`, the
+    // settings at `1440x1100`.
+    ("emoji-messages", emoji::messages),
+    ("emoji-server-picker", emoji::picker),
+    ("emoji-picker-search", emoji::picker_search),
+    ("emoji-composer", emoji::composer),
+    ("emoji-composer-picker", emoji::composer_picker),
+    ("emoji-settings", emoji::settings),
+    ("emoji-upload", emoji::upload),
+    ("emoji-upload-taken", emoji::upload_taken),
+    ("emoji-upload-too-large", emoji::upload_too_large),
+    ("emoji-rename", emoji::rename),
+    ("emoji-rename-taken", emoji::rename_taken),
+    ("emoji-remove", emoji::remove),
+    ("emoji-full", emoji::full),
     ("message-toolbar", replies::message_toolbar),
     ("message-menu", replies::message_menu),
     // The menus a right-click opens (#25).
@@ -610,6 +627,7 @@ fn channels_sample(state: &mut State) {
         edited: false,
         attachments: Vec::new(),
         cards: Vec::new(),
+        emoji: Vec::new(),
     };
     state.session.entries = vec![
         entry("n1", "grace", "", 40, "joined", "grace"),
@@ -1169,6 +1187,7 @@ pub fn blocks(state: &mut State) {
             edited: false,
             attachments: Vec::new(),
             cards: Vec::new(),
+            emoji: Vec::new(),
         })
         .collect();
     // Reactions to a message in the middle of a block, one of them this account's.
@@ -1303,6 +1322,7 @@ pub fn bodies(state: &mut State) {
             edited: false,
             attachments: Vec::new(),
             cards: Vec::new(),
+            emoji: Vec::new(),
         })
         .collect();
     state.session.revision += 1;

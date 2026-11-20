@@ -108,6 +108,7 @@ pub fn media(state: &mut State) {
         edited: false,
         attachments: Vec::new(),
         cards: Vec::new(),
+        emoji: Vec::new(),
     };
     let card = CardSummary {
         url: "https://example.com/notes/compilers".into(),

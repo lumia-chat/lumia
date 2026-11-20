@@ -451,6 +451,7 @@ fn talk(state: &mut State, said: &[(&str, (u32, u32), &str)]) {
             edited: false,
             attachments: Vec::new(),
             cards: Vec::new(),
+            emoji: Vec::new(),
         })
         .collect();
     state.session.revision += 1;

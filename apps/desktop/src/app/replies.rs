@@ -19,7 +19,7 @@ use crate::settings::Reactions;
 /// "Frequently used".
 pub const QUICK: [&str; 6] = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 /// How many emoji "Frequently used" keeps.
-const RECENT: usize = 16;
+pub(super) const RECENT: usize = 16;
 /// How many rows the @ list shows.
 const LIST_ROWS: usize = 8;
 /// How long a message a jump reached stays marked.
@@ -41,6 +41,8 @@ pub struct Replies {
     pub selected: Option<(Vec<String>, String)>,
     /// The `@word` being typed at the caret, which the @ list completes.
     pub mention: Option<MentionQuery>,
+    /// The `:name` being typed at the caret, which the `:` list completes (`emoji`).
+    pub colon: Option<super::emoji::ColonQuery>,
     /// The bar after a send naming those mentioned who are not in the channel.
     pub outside: Option<Outside>,
     /// The message the emoji picker reacts to, the control it hangs from, and its search.
@@ -101,9 +103,13 @@ pub struct Outside {
 
 #[derive(Debug)]
 pub struct Picker {
+    /// The message a choice reacts to; empty for the composer's.
     pub message_id: String,
     pub anchor: String,
     pub search: TextEdit,
+    /// Opened by the composer's emoji button: a choice goes in at the caret, and the picker
+    /// stays open for more.
+    pub composer: bool,
 }
 
 /// The `@word` ending at the caret of `draft`: an `@` at the start or after whitespace, and
@@ -376,11 +382,7 @@ impl State {
     /// account has it already. Kept in "Frequently used".
     pub fn react_with(&mut self, message_id: &str, emoji: &str) {
         self.session.react(message_id, emoji);
-        let recent = &mut self.settings.recent_emoji;
-        recent.retain(|e| e != emoji);
-        recent.insert(0, emoji.to_string());
-        recent.truncate(RECENT);
-        self.settings.save(&self.data_dir);
+        self.keep_recent(emoji);
     }
 
     /// Preferences' Reactions: whether messages' reactions are drawn under them. One of the
@@ -396,21 +398,36 @@ impl State {
             message_id: message_id.to_string(),
             anchor: anchor.to_string(),
             search: TextEdit::new(""),
+            composer: false,
         });
         self.open_popover(Popover::EmojiPicker);
     }
 
-    /// An emoji chosen in the picker.
+    /// An emoji chosen in the picker: a reaction to the message it is for, or the emoji at
+    /// the composer's caret, the picker staying open for more.
     pub fn pick_emoji(&mut self, emoji: &str) {
+        if self.replies.picker.as_ref().is_some_and(|p| p.composer) {
+            self.insert_in_composer(emoji);
+            self.keep_recent(emoji);
+            return;
+        }
         if let Some(picker) = self.replies.picker.take() {
             self.react_with(&picker.message_id, emoji);
         }
         self.close_popover();
     }
 
-    /// "Frequently used": what this computer reacted with, then the quick six.
+    /// "Frequently used": what this computer used, then the quick six. A server's own are
+    /// among them only in that server's conversations, and only while it has them
+    /// (`emoji::frequent_custom` draws them); kept as `custom:` and the emoji's id.
     pub fn frequent_emoji(&self) -> Vec<String> {
-        let mut all: Vec<String> = self.settings.recent_emoji.clone();
+        let mut all: Vec<String> = self
+            .settings
+            .recent_emoji
+            .iter()
+            .filter(|kept| !kept.starts_with("custom:") || self.frequent_custom(kept).is_some())
+            .cloned()
+            .collect();
         for quick in QUICK {
             if !all.iter().any(|e| e == quick) {
                 all.push(quick.to_string());
@@ -496,6 +513,14 @@ impl State {
     /// Keys in the composer before it takes them: the @ list's Up, Down, Return, Tab and
     /// Escape while it shows, and Escape to cancel a reply. True when taken.
     pub fn composer_key(&mut self, key: &KeyEvent) -> bool {
+        if key.key == Key::Escape && self.composer_picker_open() {
+            self.replies.picker = None;
+            self.close_popover();
+            return true;
+        }
+        if self.colon_key(key) {
+            return true;
+        }
         let rows = self.mention_choices().len();
         if rows > 0
             && let Some(query) = &mut self.replies.mention

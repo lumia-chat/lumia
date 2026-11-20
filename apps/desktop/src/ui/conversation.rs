@@ -400,6 +400,12 @@ fn composer(s: &State, placeholder: &str, look: Look) -> El {
                 .justify_center()
                 .child(input),
         )
+        // The emoji button at the field's end, before Send (Ryan, 2026-11-20).
+        .child(
+            el().h(t::COMPOSER_LINE)
+                .center()
+                .child(super::emoji::composer_button(look)),
+        )
         .child(el().h(t::COMPOSER_LINE).center().child(send));
     // While replying, the strip of the message replied to is inside the frame, above the
     // words (the "Inline replies" board), and the frame's border is the focused one.

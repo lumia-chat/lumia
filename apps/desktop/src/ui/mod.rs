@@ -6,6 +6,7 @@ mod channels;
 pub mod components;
 mod conversation;
 mod emoji;
+mod emoji_settings;
 mod home;
 mod link;
 mod media;
@@ -78,6 +79,9 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
     let mut screen = screen;
     if s.route == Route::Shell && s.popover.is_none() {
         if let Some(list) = replies::mention_list(s, look) {
+            screen = screen.child(list);
+        }
+        if let Some(list) = replies::emoji_list(s, look) {
             screen = screen.child(list);
         }
         if let Some((id, words, backward)) = &s.replies.selection
@@ -182,5 +186,6 @@ fn overlay(s: &State, popover: Popover, look: Look) -> Option<El> {
         | Popover::DeleteRole
         | Popover::AddHolders => roles::overlay(s, popover, look),
         Popover::CardRoles | Popover::CardTitle => members::overlay(s, popover, look),
+        Popover::RemoveEmoji => emoji_settings::remove_question(s, look),
     }
 }
