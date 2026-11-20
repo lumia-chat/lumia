@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS reactions (
   label TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (message_id, reaction, account_id)
 );
+CREATE TABLE IF NOT EXISTS emoji_names (
+  emoji_id BLOB PRIMARY KEY,
+  label TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS messages_channel_seq ON messages (channel_id, seq);
 CREATE TABLE IF NOT EXISTS outbox (
   command_id BLOB PRIMARY KEY,
@@ -461,6 +465,11 @@ impl SqliteStore {
                 .conn
                 .execute("DELETE FROM outbox", [])
                 .map_err(backend)?;
+            // Told by that account's log, which the next account's does not continue.
+            store
+                .conn
+                .execute("DELETE FROM emoji_names", [])
+                .map_err(backend)?;
             store.forget_drafts()?;
             Ok::<_, StoreError>(())
         })
@@ -587,20 +596,43 @@ impl SqliteStore {
         rows.collect::<Result<_, _>>().map_err(backend)
     }
 
-    /// Names every kept reaction with the custom emoji `emoji_id` as `:name:`, its name as
-    /// the server now lists it (`EmojiUpdated`, specs/emoji.md 7), so one left after a later
-    /// removal is named as the emoji was last called, whether or not anyone reacted between.
+    /// Names the kept reactions with each custom emoji of `named` (its id and its name, as
+    /// the account log tells it: `EmojiUpdated`, specs/emoji.md 7 and 8) as `:name:`, so one
+    /// left after a later removal is named as the emoji was last called, whether or not
+    /// anyone reacted between. The name is kept too, and a reaction applied later is named by
+    /// it ([`told_label`]), not by the older name it may have been made under. An emoji whose
+    /// name the log told before is passed over. Answers how many were renamed. Made in the
+    /// caller's transaction, if any ([`App::write`](crate::app::App)).
     ///
     /// # Errors
     /// When the store cannot be written.
-    pub fn relabel_emoji(&self, emoji_id: &[u8], name: &str) -> Result<(), StoreError> {
-        self.conn
-            .execute(
-                "UPDATE reactions SET label = ?2 WHERE emoji_id = ?1 AND label != ?2",
-                params![emoji_id, format!(":{name}:")],
+    pub fn relabel_emoji<'a>(
+        &self,
+        named: impl IntoIterator<Item = (&'a [u8], &'a str)>,
+    ) -> Result<usize, StoreError> {
+        let mut keep = self
+            .conn
+            .prepare_cached(
+                "INSERT INTO emoji_names (emoji_id, label) VALUES (?1, ?2)
+                 ON CONFLICT (emoji_id) DO UPDATE SET label = excluded.label
+                 WHERE label != excluded.label",
             )
-            .map(|_| ())
-            .map_err(backend)
+            .map_err(backend)?;
+        let mut relabel = self.conn.prepare_cached(RELABEL).map_err(backend)?;
+        let mut renamed = 0;
+        for (emoji_id, name) in named {
+            if emoji_id.is_empty() || name.is_empty() {
+                continue;
+            }
+            let label = format!(":{name}:");
+            // Nothing written: the log told this name before, and the reactions have it.
+            if keep.execute(params![emoji_id, label]).map_err(backend)? == 0 {
+                continue;
+            }
+            relabel.execute(params![emoji_id, label]).map_err(backend)?;
+            renamed += 1;
+        }
+        Ok(renamed)
     }
 
     /// Keeps a server's member list in place of the one before: `members`
@@ -1023,6 +1055,9 @@ impl Store for SqliteStore {
             params![account_id],
         )
         .map_err(backend)?;
+        // The emoji names the skipped events told are not told now (an account snapshot has
+        // no removed emoji): what the log told before may be older than the channels'.
+        tx.execute("DELETE FROM emoji_names", []).map_err(backend)?;
         tx.execute(
             "INSERT INTO cursors (kind, log_id, seq) VALUES (1, ?1, ?2)
              ON CONFLICT (kind, log_id) DO UPDATE SET seq = excluded.seq",
@@ -1040,7 +1075,7 @@ impl Store for SqliteStore {
         self.conn
             .execute_batch(
                 "DELETE FROM cursors; DELETE FROM events; DELETE FROM messages; DELETE FROM reactions;
-                 DELETE FROM meta WHERE key LIKE 'dm:processed:%';",
+                 DELETE FROM emoji_names; DELETE FROM meta WHERE key LIKE 'dm:processed:%';",
             )
             .map_err(backend)
     }
@@ -1352,8 +1387,15 @@ fn add_missing_columns(conn: &Connection) -> Result<(), StoreError> {
                 .map_err(backend)?;
         }
     }
+    // A custom emoji's reactions, found by it when it is renamed or removed (specs/emoji.md
+    // 7); after the column, which an older store has only from the line above.
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS reactions_emoji ON reactions (emoji_id);")
+        .map_err(backend)?;
     Ok(())
 }
+
+/// Names a custom emoji's kept reactions (`?1` its id) as `?2`, its `:name:`.
+const RELABEL: &str = "UPDATE reactions SET label = ?2 WHERE emoji_id = ?1 AND label != ?2";
 
 /// What a server channel's rows keep of its events, as a number raised whenever
 /// `materialize` learns to keep something an older store let go: 1 is quotes, mentions,
@@ -1534,7 +1576,7 @@ fn materialize(tx: &rusqlite::Transaction<'_>, ev: &StoredEvent) -> Result<(), S
                     added.account_id,
                     to_i64(event.seq),
                     added.emoji_id,
-                    added.reaction
+                    told_label(tx, &added.emoji_id, &added.reaction)?
                 ],
             )
             .map_err(backend)?;
@@ -1622,10 +1664,32 @@ fn relabel(
     }
     tx.execute(
         "UPDATE reactions SET label = ?3 WHERE message_id = ?1 AND reaction = ?2",
-        params![message_id, StoredReaction::key(label, emoji_id), label],
+        params![
+            message_id,
+            StoredReaction::key(label, emoji_id),
+            told_label(tx, emoji_id, label)?
+        ],
     )
     .map(|_| ())
     .map_err(backend)
+}
+
+/// What a reaction with the custom emoji `emoji_id` is named: as the account log last told
+/// the emoji's name ([`SqliteStore::relabel_emoji`]), or `label`, what the reaction came
+/// with, when the log has told none. The channel logs are read after the account log, so a
+/// reaction made before a rename can arrive after the log told it.
+fn told_label(conn: &Connection, emoji_id: &[u8], label: &str) -> Result<String, StoreError> {
+    if emoji_id.is_empty() {
+        return Ok(label.to_owned());
+    }
+    let told: Option<String> = conn
+        .prepare_cached("SELECT label FROM emoji_names WHERE emoji_id = ?1")
+        .and_then(|mut stmt| {
+            stmt.query_row(params![emoji_id], |row| row.get(0))
+                .optional()
+        })
+        .map_err(backend)?;
+    Ok(told.unwrap_or_else(|| label.to_owned()))
 }
 
 fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(), StoreError> {
@@ -1663,7 +1727,7 @@ fn insert_message(tx: &rusqlite::Transaction<'_>, m: &StoredMessage) -> Result<(
                     account,
                     i64::try_from(position).unwrap_or(0) - 1_000_000,
                     reaction.emoji_id,
-                    reaction.reaction
+                    told_label(tx, &reaction.emoji_id, &reaction.reaction)?
                 ],
             )
             .map_err(backend)?;
@@ -1865,11 +1929,93 @@ mod tests {
         store
             .apply(LogKind::Channel, &ch, &[created(&ch, 1, "hi"), reacted])
             .unwrap();
-        store.relabel_emoji(&parrot, "parrot").unwrap();
-        // Another emoji's reactions are not touched.
-        store.relabel_emoji(&[8u8; 16], "cat").unwrap();
+        assert_eq!(store.relabel_emoji([(&parrot[..], "parrot")]).unwrap(), 1);
+        // Another emoji's reactions are not touched, and a name told again is passed over.
+        store.relabel_emoji([(&[8u8; 16][..], "cat")]).unwrap();
+        assert_eq!(store.relabel_emoji([(&parrot[..], "parrot")]).unwrap(), 0);
         let kept = store.messages(&ch, 10).unwrap();
         assert_eq!(kept[0].reactions[0].reaction, ":parrot:");
+    }
+
+    /// The account log is read before the channels at a welcome, so a reaction made before a
+    /// rename can be applied after the log has told the new name. It is named as the log said,
+    /// not as the reaction was made, or a removal later would leave it under the old name.
+    #[test]
+    fn a_name_the_log_told_outlasts_an_older_reaction_applied_after_it() {
+        use lumia_core::proto::{ReactionAdded, ReactionRemoved};
+        let mut store = SqliteStore::in_memory().unwrap();
+        let ch = vec![1u8; 16];
+        let parrot = vec![9u8; 16];
+        let reaction = |by: u8| ReactionAdded {
+            message_id: vec![1; 16],
+            reaction: ":party_parrot:".into(),
+            account_id: vec![by; 16],
+            emoji_id: parrot.clone(),
+        };
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[
+                    created(&ch, 1, "hi"),
+                    stored(&ch, 2, event::Payload::ReactionAdded(reaction(5))),
+                ],
+            )
+            .unwrap();
+        store.relabel_emoji([(&parrot[..], "parrot")]).unwrap();
+        let label = |store: &SqliteStore| {
+            store.messages(&ch, 10).unwrap()[0].reactions[0]
+                .reaction
+                .clone()
+        };
+        assert_eq!(label(&store), ":parrot:");
+        // Then the channel catches up with what was done before the rename.
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[stored(&ch, 3, event::Payload::ReactionAdded(reaction(6)))],
+            )
+            .unwrap();
+        assert_eq!(label(&store), ":parrot:");
+        let removed = reaction(6);
+        store
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[stored(
+                    &ch,
+                    4,
+                    event::Payload::ReactionRemoved(ReactionRemoved {
+                        message_id: removed.message_id,
+                        reaction: removed.reaction,
+                        account_id: removed.account_id,
+                        emoji_id: removed.emoji_id,
+                    }),
+                )],
+            )
+            .unwrap();
+        assert_eq!(label(&store), ":parrot:");
+    }
+
+    /// A relabel is told every emoji of a server at each change; without the index each was a
+    /// scan of every kept reaction.
+    #[test]
+    fn a_relabel_finds_an_emojis_reactions_by_index() {
+        let store = SqliteStore::in_memory().unwrap();
+        let plan: Vec<String> = store
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {RELABEL}"))
+            .unwrap()
+            .query_map(params![vec![9u8; 16], ":parrot:"], |row| row.get(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("USING INDEX reactions_emoji")),
+            "{plan:?}"
+        );
     }
 
     #[test]

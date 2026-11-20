@@ -71,6 +71,17 @@ fn candidates<T: Clone>(body: &str, names: &[(String, T)]) -> Vec<(Range<usize>,
         .and_then(|rest| rest.iter().position(|&b| b == b':'))
     {
         let open = at + offset;
+        // `\:` is a colon as typed (an odd run of backslashes escapes it, an even one is
+        // backslashes): Markdown's way to say the text and not a picture.
+        let backslashes = bytes[..open]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count();
+        if backslashes % 2 == 1 {
+            at = open + 1;
+            continue;
+        }
         let name_start = open + 1;
         let name_len = bytes
             .get(name_start..)
@@ -211,6 +222,17 @@ mod tests {
         // The colon that ends a miss may open the next.
         assert_eq!(found(":nope:ok:"), vec![(":ok:", 3)]);
         assert_eq!(found("time 10:30:parrot:"), vec![(":parrot:", 1)]);
+    }
+
+    #[test]
+    fn an_escaped_colon_opens_no_ref() {
+        // `\:parrot:` is how Markdown says the text as typed: no picture is sent for it.
+        assert_eq!(found("\\:parrot: and :ok:"), vec![(":ok:", 3)]);
+        // An escaped backslash escapes nothing after it.
+        assert_eq!(found("\\\\:parrot:"), vec![(":parrot:", 1)]);
+        assert_eq!(find_refs("\\\\:parrot:", &names())[0].0, 2..10);
+        // The colon that closes an escaped name may open the next.
+        assert_eq!(found("\\:nope:ok:"), vec![(":ok:", 3)]);
     }
 
     #[test]

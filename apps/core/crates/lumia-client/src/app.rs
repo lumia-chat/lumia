@@ -3529,13 +3529,17 @@ impl App {
                     server.emoji = emoji;
                     true
                 });
-                // Reactions with each are named as it is now called; a removal later leaves
-                // them so (specs/emoji.md 7). A failed write leaves the older name, no worse.
+                // Reactions with each are named as it is now called, and those with one
+                // removed as it was called then: a rename and a removal told in one event
+                // name it only among `removed` (specs/emoji.md 7 and 8). Names told before
+                // are passed over. A failed write leaves the older name, no worse.
                 let _ = self.write(|inner| {
-                    for e in &u.emoji {
-                        inner.reader.relabel_emoji(&e.emoji_id, &e.name)?;
-                    }
-                    Ok(())
+                    let named = u
+                        .emoji
+                        .iter()
+                        .chain(&u.removed)
+                        .map(|e| (e.emoji_id.as_slice(), e.name.as_str()));
+                    Ok(inner.reader.relabel_emoji(named)?)
                 });
                 if !touched.contains(&server_id) {
                     touched.push(server_id);
@@ -8838,6 +8842,22 @@ mod kept_tests {
         Some((label.to_string(), color.to_string()))
     }
 
+    /// A server's limit of zero is a limit, and stays zero to the shells (specs/emoji.md 5):
+    /// an instance with emoji always sends it, so nothing here reads zero as "unlimited".
+    #[test]
+    fn an_emoji_limit_of_zero_is_kept_as_zero() {
+        let server = lumia_core::proto::Server {
+            server_id: vec![1; 16],
+            emoji_limit: 0,
+            ..Default::default()
+        };
+        let summary = ServerSummary::of(&server, &[], &[], &[]);
+        assert_eq!(summary.emoji_limit, 0);
+        let kept: ServerSummary =
+            serde_json::from_str(&serde_json::to_string(&summary).unwrap()).unwrap();
+        assert_eq!(kept.emoji_limit, 0);
+    }
+
     #[test]
     fn a_servers_emoji_are_kept_from_its_log_and_a_send_finds_them() {
         let app = app_with_roles();
@@ -8895,6 +8915,71 @@ mod kept_tests {
         );
         // Somewhere the snapshot does not place, such as a personal conversation: none.
         assert!(app.emoji_refs(&[6; 16], ":parrot:").is_empty());
+    }
+
+    /// Reactions with an emoji renamed and then removed in one burst: the log's one event lists
+    /// it only among `removed`, under the name it had at the removal, and that is what the
+    /// kept reactions are named by.
+    #[test]
+    fn a_removed_emoji_names_its_kept_reactions_by_its_name_at_the_removal() {
+        use lumia_core::proto::{event, Event, MessageCreated, ReactionAdded};
+        let app = app_with_roles();
+        let ch = vec![5u8; 16];
+        let event = |seq: u64, payload: event::Payload| {
+            let bytes = Event {
+                channel_id: ch.clone(),
+                seq,
+                payload: Some(payload),
+                ..Default::default()
+            }
+            .encode_to_vec();
+            StoredEvent { seq, bytes }
+        };
+        let created = event::Payload::MessageCreated(MessageCreated {
+            message: Some(lumia_core::proto::Message {
+                message_id: vec![1; 16],
+                channel_id: ch.clone(),
+                seq: 1,
+                author_account_id: vec![3; 16],
+                body: "hi".into(),
+                ..Default::default()
+            }),
+        });
+        let reacted = event::Payload::ReactionAdded(ReactionAdded {
+            message_id: vec![1; 16],
+            reaction: ":party_parrot:".into(),
+            account_id: vec![3; 16],
+            emoji_id: vec![20; 16],
+        });
+        app.lock()
+            .reader
+            .apply(
+                LogKind::Channel,
+                &ch,
+                &[event(1, created), event(2, reacted)],
+            )
+            .unwrap();
+        let said = app.keep_emoji(&account_events(vec![account_event::Payload::EmojiUpdated(
+            lumia_core::proto::EmojiUpdated {
+                server_id: vec![1; 16],
+                emoji: Vec::new(),
+                removed: vec![lumia_core::proto::CustomEmoji {
+                    emoji_id: vec![20; 16],
+                    server_id: vec![1; 16],
+                    name: "parrot".into(),
+                    ..Default::default()
+                }],
+            },
+        )]));
+        assert_eq!(said.len(), 1);
+        assert!(app.server_emoji(&uid(1)).is_empty());
+        let kept = app.messages(&wire::display(&ch), 10).unwrap();
+        let labels: Vec<&str> = kept[0]
+            .reactions
+            .iter()
+            .map(|r| r.reaction.as_str())
+            .collect();
+        assert_eq!(labels, [":parrot:"]);
     }
 
     #[test]

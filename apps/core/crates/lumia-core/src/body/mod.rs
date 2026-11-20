@@ -162,6 +162,21 @@ pub enum DisplayStyle {
 const STAND_IN: u32 = 0x10_0000;
 /// How many mentions can stand in (the area's size, less its two noncharacters).
 const STAND_INS: usize = 0xFFFE;
+/// The punctuation a span may begin or end with that means nothing to the grammar beside a
+/// stand-in: a mention's `@`, an emoji's colons. It stays in the source either side of the
+/// stand-in, so the Markdown around a span reads it as it reads the span typed: the `_` of
+/// `_hello_:cat:` closes before the colon, and the backslash of `\:cat:` escapes it. A
+/// stand-in alone reads as a letter.
+const EDGES: [char; 2] = [':', '@'];
+
+/// What a stand-in stood for: its index among the spans, and the text typed, as the edges
+/// kept in the source either side of it ([`EDGES`]) and the rest, which it replaced.
+struct Typed {
+    index: u32,
+    lead: Option<char>,
+    middle: String,
+    trail: Option<char>,
+}
 
 /// Parses `src` with the message's mentions: `mentions` are their ranges, in bytes of `src`
 /// as the protocol gives them, and each comes out in its paragraph's [`Inline::mentions`]
@@ -243,9 +258,10 @@ pub fn display(src: &str, mentions: &[Range<usize>]) -> Vec<DisplayBlock> {
         .collect()
 }
 
-/// `src` with each usable mention replaced by its stand-in, and what each stood for by its
-/// index; `None` when nothing stands in.
-fn stand_ins(src: &str, mentions: &[Range<usize>]) -> Option<(String, Vec<(u32, String)>)> {
+/// `src` with each usable mention replaced by its stand-in (between the [`EDGES`] it begins
+/// and ends with, which stay), and what each stood for, sorted by index; `None` when
+/// nothing stands in.
+fn stand_ins(src: &str, mentions: &[Range<usize>]) -> Option<(String, Vec<Typed>)> {
     // A body that already holds stand-in characters would be misread: draw its mentions as
     // the text they are.
     if src.chars().any(|c| u32::from(c) >= STAND_IN) {
@@ -271,40 +287,52 @@ fn stand_ins(src: &str, mentions: &[Range<usize>]) -> Option<(String, Vec<(u32, 
         let Some(c) = char::from_u32(STAND_IN + index) else {
             continue;
         };
+        let words = &src[range.clone()];
+        let lead = words.chars().next().filter(|e| EDGES.contains(e));
+        let rest = &words[lead.map_or(0, char::len_utf8)..];
+        let trail = rest.chars().next_back().filter(|e| EDGES.contains(e));
+        let middle = &rest[..rest.len() - trail.map_or(0, char::len_utf8)];
         out.push_str(&src[at..range.start]);
+        out.extend(lead);
         out.push(c);
-        typed.push((index, src[range.clone()].to_owned()));
+        out.extend(trail);
+        typed.push(Typed {
+            index,
+            lead,
+            middle: middle.to_owned(),
+            trail,
+        });
         at = range.end;
     }
     if typed.is_empty() {
         return None;
     }
     out.push_str(&src[at..]);
-    typed.sort_by_key(|(index, _)| *index);
+    typed.sort_by_key(|t| t.index);
     Some((out, typed))
 }
 
 /// What the stand-in `c` stood for, if it is one. `typed` is sorted by index.
-fn stood_for(c: char, typed: &[(u32, String)]) -> Option<(u32, &str)> {
+fn stood_for(c: char, typed: &[Typed]) -> Option<&Typed> {
     let index = u32::from(c).checked_sub(STAND_IN)?;
-    let at = typed.binary_search_by_key(&index, |(i, _)| *i).ok()?;
-    typed.get(at).map(|(i, text)| (*i, text.as_str()))
+    let at = typed.binary_search_by_key(&index, |t| t.index).ok()?;
+    typed.get(at)
 }
 
 /// `text` with each stand-in put back as what it stood for: in code, and in a link's
-/// address, a mention is the text it was typed as.
-fn put_back(text: &str, typed: &[(u32, String)]) -> String {
+/// address, a mention is the text it was typed as. Its edges are there already.
+fn put_back(text: &str, typed: &[Typed]) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         match stood_for(c, typed) {
-            Some((_, words)) => out.push_str(words),
+            Some(t) => out.push_str(&t.middle),
             None => out.push(c),
         }
     }
     out
 }
 
-fn put_back_block(block: Block, typed: &[(u32, String)]) -> Block {
+fn put_back_block(block: Block, typed: &[Typed]) -> Block {
     match block {
         Block::Para(inline) => Block::Para(put_back_inline(&inline, typed)),
         Block::Code { lang, text } => Block::Code {
@@ -340,7 +368,7 @@ fn covered<'a>(len: usize, ranges: impl Iterator<Item = &'a Range<usize>>) -> Ve
 
 /// A paragraph with its stand-ins put back: their words in the text, every range moved to
 /// match, and each one outside code and links in [`Inline::mentions`].
-fn put_back_inline(inline: &Inline, typed: &[(u32, String)]) -> Inline {
+fn put_back_inline(inline: &Inline, typed: &[Typed]) -> Inline {
     let src = &inline.text;
     let len = src.len();
     let code = covered(
@@ -359,13 +387,19 @@ fn put_back_inline(inline: &Inline, typed: &[(u32, String)]) -> Inline {
     for (i, c) in src.char_indices() {
         at[i] = text.len();
         match stood_for(c, typed) {
-            Some((index, words)) => {
-                let start = text.len();
-                text.push_str(words);
+            Some(t) => {
+                let lead = t.lead.map_or(0, char::len_utf8);
+                let trail = t.trail.map_or(0, char::len_utf8);
+                // Its edges are the characters either side, unless the grammar took one.
+                let whole = t.lead.is_none_or(|e| src[..i].ends_with(e))
+                    && t.trail
+                        .is_none_or(|e| src[i + c.len_utf8()..].starts_with(e));
+                let start = text.len().saturating_sub(lead);
+                text.push_str(&t.middle);
                 let quoted = code.get(i).copied().unwrap_or(false)
                     || linked.get(i).copied().unwrap_or(false);
-                if !quoted {
-                    mentions.push((start..text.len(), index));
+                if whole && !quoted {
+                    mentions.push((start..text.len() + trail, t.index));
                 }
             }
             None => text.push(c),
@@ -724,6 +758,83 @@ mod tests {
                 end: 6,
                 style: DisplayStyle::Mention { index: 3 }
             }]
+        );
+    }
+
+    /// `src` read with its marks is `src` read without them, apart from the marks: the
+    /// same text, runs and links. Answers the marked paragraph.
+    fn reads_as_unmarked(src: &str, mentions: &[Range<usize>], emoji: &[Range<usize>]) -> Inline {
+        let mut marked = parse_marked(src, mentions, emoji);
+        let Some(Block::Para(inline)) = marked.first().cloned() else {
+            panic!("{marked:?}");
+        };
+        for block in &mut marked {
+            if let Block::Para(inline) = block {
+                inline.mentions.clear();
+                inline.emoji.clear();
+            }
+        }
+        assert_eq!(marked, parse(src), "{src:?}");
+        inline
+    }
+
+    fn emphasised(inline: &Inline) -> Vec<&str> {
+        inline
+            .runs
+            .iter()
+            .filter(|(_, style)| *style == Style::Emphasis)
+            .map(|(r, _)| &inline.text[r.clone()])
+            .collect()
+    }
+
+    #[test]
+    fn a_marked_span_leaves_the_markdown_around_it_as_it_reads_unmarked() {
+        // The `_` before an emoji's `:` closes, as it does before any colon.
+        let one = |r: Range<usize>| vec![r.clone(); 1];
+        let inline = reads_as_unmarked("_hello_:cat:", &[], &one(7..12));
+        assert_eq!(emphasised(&inline), ["hello"]);
+        assert_eq!(inline.emoji, [(5..10, 0)]);
+        // And the one after its closing `:` opens.
+        let inline = reads_as_unmarked(":cat:_hi_", &[], &one(0..5));
+        assert_eq!(emphasised(&inline), ["hi"]);
+        assert_eq!(inline.emoji, [(0..5, 0)]);
+        // A mention's `@` likewise.
+        let inline = reads_as_unmarked("_hello_@ada", &one(7..11), &[]);
+        assert_eq!(emphasised(&inline), ["hello"]);
+        assert_eq!(inline.mentions, [(5..9, 0)]);
+        // As the whole of a run, and where a closing `**` after a colon closes nothing.
+        let inline =
+            reads_as_unmarked("**:cat:**x _:cat:_ **@ada**", &one(21..25), &[2..7, 12..17]);
+        assert_eq!(emphasised(&inline), [":cat:"]);
+        let marked: Vec<&str> = inline
+            .emoji
+            .iter()
+            .chain(&inline.mentions)
+            .map(|(r, _)| &inline.text[r.clone()])
+            .collect();
+        assert_eq!(marked, [":cat:", ":cat:", "@ada"]);
+    }
+
+    #[test]
+    fn a_backslash_before_a_marked_span_escapes_its_first_character() {
+        // `\:` is a colon, marked or not: no backslash is drawn before the picture.
+        let one = |r: Range<usize>| vec![r.clone(); 1];
+        let inline = reads_as_unmarked("\\:cat: and \\@ada", &one(12..16), &one(1..6));
+        assert_eq!(inline.text, ":cat: and @ada");
+        assert_eq!(inline.emoji, [(0..5, 0)]);
+        assert_eq!(inline.mentions, [(10..14, 0)]);
+        // An escaped backslash is one, and the span after it is as it was.
+        let inline = reads_as_unmarked("\\\\:cat:", &[], &one(2..7));
+        assert_eq!(inline.text, "\\:cat:");
+        assert_eq!(inline.emoji, [(1..6, 0)]);
+    }
+
+    #[test]
+    fn marked_spans_in_code_and_addresses_read_as_typed() {
+        reads_as_unmarked(
+            "`:cat:` see https://lumia.chat/:cat: or https://lumia.chat/@ada",
+            std::slice::from_ref(&(59..63)),
+            &[1..6, 31..36],
         );
     }
 
