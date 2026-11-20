@@ -377,7 +377,8 @@ defmodule LumiaWeb.CustomEmojiTest do
             {"é:ok:", [ref(e, 1, 6)]},
             {":ok::ok:", [ref(e, 0, 4), ref(e, 3, 8)]},
             {"hello", [ref(e, 0, 5)]},
-            {":o k:", [ref(e, 0, 5)]}
+            {":o k:", [ref(e, 0, 5)]},
+            {":ok::", [ref(e, 0, 5)]}
           ] do
         assert {_, {:error, {:invalid_argument, "emoji"}}} =
                  say(ctx.general, ctx.member, body, refs),

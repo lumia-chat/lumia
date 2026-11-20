@@ -1518,10 +1518,8 @@ async fn a_quote_a_mention_a_reaction_and_a_read() {
 /// with one; a rename keeps the reaction; a removal leaves names and refuses new reactions.
 #[tokio::test(flavor = "multi_thread")]
 async fn custom_emoji_reach_every_member() {
-    const STILL: &[u8] =
-        include_bytes!("../../../../instance/test/support/fixtures/media/logo.png");
-    const ANIMATED: &[u8] =
-        include_bytes!("../../../../instance/test/support/fixtures/media/animated.gif");
+    const STILL: &[u8] = include_bytes!("fixtures/logo.png");
+    const ANIMATED: &[u8] = include_bytes!("fixtures/animated.gif");
 
     let Some(base) = instance() else { return };
     let (owner, member, server_id, _member_id) = owner_and_member(&base).await;

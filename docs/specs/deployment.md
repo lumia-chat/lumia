@@ -46,6 +46,7 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `AWS_REGION`, `AWS_ENDPOINT_URL_S3` | no | The region (default `us-east-1`) and, for anything that is not AWS, the service's URL (Tigris, R2, MinIO); requests are path-style, `<endpoint>/<bucket>/<name>`. Clients upload and download attachments **straight to and from this URL** through presigned requests ([media.md](media.md) 4), so it must be reachable from the internet, and the bucket needs a CORS rule allowing `PUT`, `GET` and `HEAD` from the web client's origins (the instance's own and `LUMIA_WEB_ORIGINS`) with the `content-type` and `content-length` request headers |
 | `LUMIA_UPLOAD_IMAGE_MAX_BYTES`, `LUMIA_UPLOAD_FILE_MAX_BYTES` | no | The largest processed picture and the largest of anything else a client may upload; default 2 MiB and 10 MiB ([media.md](media.md) 2) |
 | `LUMIA_SERVER_STORAGE_MAX_BYTES` | no | The most each server's attachments may take in all, in bytes of ciphertext ([media.md](media.md) 4.5). Unset, no limit; the instance still counts each server's files and shows its managers the total. Each server's own settings say whether a full server refuses uploads or lets its oldest attachments go |
+| `LUMIA_SERVER_EMOJI_MAX` | no | How many custom emoji a server may have unless the operator gave it a number of its own ([emoji.md](emoji.md) 5). Unset, 50. Lowering it deletes no emoji; a server above it is refused new ones |
 | `LUMIA_LINK_CARDS` | no | `true` lets the instance fetch the pages its members link in server channels, to build link cards ([media.md](media.md) 6.4); the requests go to whatever sites members link, from the instance's address, through the fetcher's rules (no private addresses, 5 s, 1 MiB). Unset, the instance makes no such request and links have no cards. A card's picture also needs the blob store |
 | `DNS_CLUSTER_QUERY` | multi-node | The DNS name that resolves to every node |
 | `RELEASE_COOKIE` | multi-node | The Erlang distribution cookie, the same on every node. Each image build generates its own, so without this a rolling upgrade's new nodes cannot join the old ones (section 6) |
@@ -57,7 +58,7 @@ All configuration is environment variables read at boot (`config/runtime.exs`); 
 | `LUMIA_PUSH_RELAY_URL` | for APNs and FCM | The push relay (architecture 15.5); without it, relay subscriptions are kept and skipped |
 | `LUMIA_PUSH_CONTACT` | no | The address the Web Push VAPID token names (`mailto:`); default `ops@` the host |
 
-The store is laid out in a folder per kind: `att/` for attachments (client ciphertext, named by the upload's id), `avatars/` for accounts' pictures, `icons/` for servers', and `cards/` for link cards' pictures (the instance's own, sealed under the master key, named by their address in hex). A directory store keeps each as `<folder>/<first two of the name>/<name>`. The instance removes what it no longer needs itself; a bucket lifecycle rule that expires objects would leave messages and profiles naming ones that are gone, with the one exception that `cards/` holds only a cache and may be expired after a day as a backstop.
+The store is laid out in a folder per kind: `att/` for attachments (client ciphertext, named by the upload's id), `avatars/` for accounts' pictures, `icons/` for servers', `emoji/` for servers' custom emoji, and `cards/` for link cards' pictures (the instance's own, sealed under the master key, named by their address in hex). A directory store keeps each as `<folder>/<first two of the name>/<name>`. The instance removes what it no longer needs itself; a bucket lifecycle rule that expires objects would leave messages and profiles naming ones that are gone, with the one exception that `cards/` holds only a cache and may be expired after a day as a backstop.
 
 ## 4. Backups and restore
 
@@ -88,6 +89,15 @@ The image includes the Postgres client tools of the Postgres major it supports, 
 4. **bumps the recovery generation** (architecture 8.4): every client that connects afterwards sees a generation it does not know, discards its cursors and takes the snapshot path, which is what makes a restore behind a client's cursor safe ([delivery.md](delivery.md) section 12, "restore behind a cursor").
 
 Restoring onto a running cluster is not supported: stop every node, restore on one, start them all.
+
+### 4.3 A server's emoji limit
+
+```
+bin/lumia-admin emoji-limit <server_id> <n>
+bin/lumia-admin emoji-limit <server_id> default
+```
+
+Sets how many custom emoji one server may have, over `LUMIA_SERVER_EMOJI_MAX`, or puts it back to that default ([emoji.md](emoji.md) 5): what a hosted plan will set once plans exist. It runs beside a running instance (it writes the server's row, an audit row with no actor, and the job that tells the server's members, which the running nodes pick up), prints the limit that now applies, and deletes no emoji when it lowers one.
 
 ### 4.3 What the operator is told
 

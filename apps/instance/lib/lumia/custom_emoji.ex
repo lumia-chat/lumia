@@ -24,6 +24,7 @@ defmodule Lumia.CustomEmoji do
   alias Lumia.Workers.ServerUpdated
 
   @name ~r/\A[a-z0-9_]{2,32}\z/
+  @written ~r/\A:[a-z0-9_]{2,32}:\z/
 
   @doc """
   The limit of a server without a number of its own:
@@ -47,15 +48,7 @@ defmodule Lumia.CustomEmoji do
   def name(_), do: {:error, {:invalid_argument, "name"}}
 
   @doc "Whether `text` has the shape of a name between colons, `:name:`."
-  def written?(text) when is_binary(text) do
-    case text do
-      ":" <> rest ->
-        String.ends_with?(rest, ":") and Regex.match?(@name, String.trim_trailing(rest, ":"))
-
-      _ ->
-        false
-    end
-  end
+  def written?(text) when is_binary(text), do: Regex.match?(@written, text)
 
   @doc "The server's live emoji, oldest first."
   def list(server_id) do
