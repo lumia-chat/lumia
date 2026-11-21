@@ -234,6 +234,46 @@ defmodule LumiaWeb.ServerSettingsTest do
       assert get(build_conn(), second).status == 404
     end
 
+    test "a replaced picture is not served even when the store keeps it, and the sweep lets it go",
+         ctx do
+      put = put_icon(ctx.conn, ctx.owner, ctx.server, @photo)
+      %V1.Server{icon_url: first} = V1.Server.decode(put.resp_body)
+      address = Accounts.avatar_address(first)
+      {:local, dir} = Application.fetch_env!(:lumia, :blob_store)
+
+      folder =
+        Path.dirname(Lumia.Blobs.Store.Local.path(dir, Lumia.Blobs.object_name("icon", address)))
+
+      File.chmod!(folder, 0o555)
+      on_exit(fn -> File.chmod(folder, 0o755) end)
+      # Root ignores the mode; the store then deletes, and what is served is
+      # still what is checked.
+      kept? = File.touch(Path.join(folder, "probe")) == {:error, :eacces}
+      File.rm(Path.join(folder, "probe"))
+
+      again = put_icon(ctx.conn, ctx.owner, ctx.server, @photo)
+      assert again.status == 200
+      %V1.Server{icon_url: second} = V1.Server.decode(again.resp_body)
+      assert second != first
+
+      if kept?,
+        do: assert({:ok, _} = Lumia.Blobs.Store.get(Lumia.Blobs.object_name("icon", address)))
+
+      assert get(build_conn(), first).status == 404
+      assert get(build_conn(), second).status == 200
+
+      # The hourly sweep lets it go once the store will.
+      File.chmod!(folder, 0o755)
+      hour_ago = DateTime.add(DateTime.utc_now(), -2, :hour)
+      Lumia.Repo.update_all(Lumia.Blobs.Blob, set: [inserted_at: hour_ago])
+      Lumia.Blobs.sweep_pictures()
+
+      assert {:error, :not_found} =
+               Lumia.Blobs.Store.get(Lumia.Blobs.object_name("icon", address))
+
+      assert get(build_conn(), second).status == 200
+    end
+
     test "needs MANAGE_SERVER, and what is not a picture is refused in words", ctx do
       refused = put_icon(ctx.conn, ctx.member, ctx.server, @photo)
       assert refused.status == 403

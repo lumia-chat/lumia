@@ -182,6 +182,20 @@ defmodule Lumia.AccountsTest do
       assert {:ok, ^none} = Accounts.remove_avatar(none)
     end
 
+    test "a picture is named only while an account names it, whatever its blob's removal did", %{
+      account: account
+    } do
+      {:ok, first} = Accounts.set_avatar(account, @photo)
+      old = Accounts.avatar_address(first.avatar_url)
+      assert Lumia.Blobs.named?("avatar", old)
+      # As if the store had refused to let the old blob go: its row and
+      # object are still there, and nothing names it.
+      Lumia.Repo.update_all(Lumia.Accounts.Account, set: [avatar_url: nil])
+      assert {:ok, _} = Lumia.Blobs.fetch(old, "avatar")
+      refute Lumia.Blobs.named?("avatar", old)
+      refute Lumia.Blobs.named?("icon", old)
+    end
+
     test "replacing a picture named by an imported profile never deletes another's", %{
       account: account
     } do

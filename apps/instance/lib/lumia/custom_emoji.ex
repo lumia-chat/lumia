@@ -78,15 +78,6 @@ defmodule Lumia.CustomEmoji do
     )
   end
 
-  @doc """
-  Whether a live emoji's picture is the blob at `address`: an emoji's
-  picture is served only then (specs/emoji.md 7).
-  """
-  def live_picture?(address) when is_binary(address) do
-    path = Accounts.picture_path(%Lumia.Blobs.Blob{address: address})
-    Repo.exists?(from e in Emoji, where: e.image_url == ^path and is_nil(e.deleted_at))
-  end
-
   @doc "The server's live emoji, oldest first."
   def list(server_id) do
     Repo.all(

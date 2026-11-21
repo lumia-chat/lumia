@@ -9,22 +9,22 @@ defmodule LumiaWeb.AvatarController do
   encoded by this instance (`Lumia.Media`) and never change under an
   address, so they are cacheable for good.
 
-  An emoji's picture is served only while a live emoji names it: removing
-  one stops its picture at once, even when the blob store has not let the
-  blob go yet and the hourly sweep is still to try again (specs/emoji.md 7).
+  A picture is served only while something names it (`Lumia.Blobs.named?/2`):
+  replacing or removing one stops it at once, even when the blob store has
+  not let the blob go yet and the hourly sweep is still to try again
+  (architecture 12, specs/emoji.md 7).
   """
 
   use Phoenix.Controller, formats: []
 
   alias Lumia.Blobs
-  alias Lumia.CustomEmoji
   alias LumiaWeb.ProtoConn
 
   def show(conn, %{"address" => name}) do
     with address when is_binary(address) <- Blobs.address(name),
          {:ok, %{kind: kind, media_type: media_type, bytes: bytes}} <-
            Blobs.fetch(address, ["avatar", "icon", "emoji"]),
-         true <- kind != "emoji" or CustomEmoji.live_picture?(address) do
+         true <- Blobs.named?(kind, address) do
       conn
       |> put_resp_header("content-type", media_type)
       |> put_resp_header("cache-control", "public, max-age=31536000, immutable")

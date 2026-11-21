@@ -127,6 +127,38 @@ defmodule Lumia.Blobs do
   end
 
   @doc """
+  Whether the picture of `kind` at `address` is one something names now:
+  an account's `avatar_url`, a server's `icon_url`, a live emoji's
+  `image_url`. A picture is served only then (architecture 12), so one
+  replaced or removed stops at once, however its blob's removal went: the
+  store may have refused it, or a node may have stopped between naming the
+  new picture and deleting the old. Each is an indexed lookup.
+  """
+  def named?(kind, address) when is_binary(address) do
+    path = Lumia.Accounts.picture_path(%Blob{address: address})
+
+    query =
+      case kind do
+        "avatar" ->
+          from(a in "accounts", where: a.avatar_url == ^path, select: 1)
+
+        "icon" ->
+          from(s in "servers", where: s.icon_url == ^path, select: 1)
+
+        "emoji" ->
+          from(e in "custom_emoji",
+            where: e.image_url == ^path and is_nil(e.deleted_at),
+            select: 1
+          )
+
+        _ ->
+          nil
+      end
+
+    query != nil and Repo.exists?(query)
+  end
+
+  @doc """
   Removes account and server pictures and custom emoji more than an hour
   old that no account's `avatar_url`, no server's `icon_url` and no live
   emoji's `image_url` names: one whose
