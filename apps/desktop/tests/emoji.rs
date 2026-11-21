@@ -287,9 +287,9 @@ fn a_limit_of_none_offers_no_upload() {
     state.choose_section(lumia_shell::app::roles::Section::Emoji);
     let rt = runtime(state);
     assert!(words(&rt).contains("0 of 0"));
-    assert!(
-        words(&rt).contains("Acme has as many emoji as it may (0). Remove one to upload another.")
-    );
+    assert!(words(&rt).contains("Acme has as many emoji as it may (0)."));
+    // Removing one would let none in, so nothing says to.
+    assert!(!words(&rt).contains("Remove one to upload another"));
     let tree = rt.accessibility_json().to_string();
     let at = tree.find("\"Upload emoji\"").expect("the button");
     let near = &tree[at.saturating_sub(300)..(at + 300).min(tree.len())];
