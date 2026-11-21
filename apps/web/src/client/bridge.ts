@@ -537,10 +537,15 @@ export interface UploadLimits {
   fileMaxBytes: number;
   thumbnailMaxBytes: number;
 }
+/** One applied channel event: its kind (`message_created`, `message_edited`, `message_cards_set`, `message_deleted`, `reaction_added`, `reaction_removed`, `message_pinned`, `message_unpinned`, `thread_updated`, `attachments_expired`, `payloads_purged`, `redacted`, `member_joined`, `member_left`, `channel_updated`, `acl_changed`, `encrypted`, `empty`). */
 export interface EventSummary {
   seq: number;
   kind: string;
   message?: MessageSummary;
+  /** The message it creates or changes (a thread's root for `thread_updated`); empty for none. */
+  messageId: string;
+  /** For `attachments_expired` and `payloads_purged`, said of every message below this seq; 0 otherwise. */
+  beforeSeq: number;
 }
 export interface DeviceSummary {
   deviceId: string;

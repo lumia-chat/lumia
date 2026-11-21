@@ -2390,7 +2390,10 @@ async function membershipStep(which: string, stamp: number) {
 // History from before this browser's store begins: a channel more than
 // 1,000 events long is read from its snapshot (the newest 50), so scrolling
 // up reads the store's few and then the instance's scrollback, a page at a
-// time, back to the channel's first message.
+// time, back to the channel's first message. A message there then follows a
+// reaction from the CLI and an edit and a delete by its author in another
+// browser, with no reload, and the Mentions page an edit of a message it
+// lists.
 async function historyStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-history-owner-${which}`);
   const readerDir = resolve(work, `cli-history-reader-${which}`);
@@ -2430,10 +2433,94 @@ async function historyStep(which: string, stamp: number) {
     }
     await first.waitFor({ timeout: 5_000 });
     await page.screenshot({ path: `${out}/${which}-history.png` });
+
+    phase("following the instance's history");
+    // A message the page read from the instance's history, which the core does not keep, follows
+    // what is done to it after: a reaction from the CLI, then an edit and a delete by its author in
+    // a browser of their own (Chromium for both engines: two WebKits share one origin-private file
+    // system), each seen in the reader's page with no reload.
+    const target = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: /^history 3$/ }) });
+    await target.waitFor({ timeout: 5_000 });
+    const id = await target.getAttribute("data-message-id");
+    if (!id) throw new Error("the message in the instance's history has no id");
+    const row = page.locator(`.lu-msglist [data-message-id="${id}"]`);
+    const missed: string[] = [];
+    const sees = async (what: string, seen: Locator, state: "visible" | "detached" = "visible") => {
+      try {
+        await seen.waitFor({ state, timeout: 15_000 });
+      } catch {
+        missed.push(what);
+      }
+    };
+    lumia(ownerDir, "react", general, id, "👍");
+    await sees("the reaction added", row.getByRole("button", { name: /reacted with 👍/ }));
+    const author = await open("chromium", `history-author-${which}`);
+    try {
+      const ap = author.page;
+      await trustCard(ap);
+      await ap.getByLabel("Email or handle").fill(owner);
+      await ap.getByRole("textbox", { name: "Password" }).fill(password);
+      await ap.getByRole("button", { name: "Sign in", exact: true }).click();
+      await later(ap);
+      await ap.getByPlaceholder("Message #general").waitFor();
+      const theirs = ap.locator(`.lu-msglist .lu-msg__part[data-message-id="${id}"]`);
+      const theirList = ap.locator(".lu-msglist").first();
+      for (let i = 0; i < 120 && (await theirs.count()) === 0; i++) {
+        await theirList.evaluate((el) => el.scrollTo({ top: -el.scrollHeight }));
+        await ap.waitForTimeout(250);
+      }
+      const more = async () => {
+        await theirs.scrollIntoViewIfNeeded();
+        await theirs.hover();
+        await theirs.getByRole("button", { name: "More actions" }).click();
+      };
+      await more();
+      await ap.getByRole("menuitem", { name: "Edit message" }).click();
+      const field = ap.getByRole("textbox", { name: "Edit message" });
+      await field.fill("history 3, edited");
+      await field.press("Enter");
+      await field.waitFor({ state: "detached" });
+      live.page = page;
+      await sees("the edit", row.locator(".lu-msg__body", { hasText: "history 3, edited" }));
+      await sees("its (edited)", row.locator(".lu-msg__edited"));
+      live.page = ap;
+      await more();
+      await ap.getByRole("menuitem", { name: "Delete message" }).click({ modifiers: ["Shift"] });
+      live.page = page;
+      // The server shows no deleted messages: the row goes.
+      await sees("the delete", row, "detached");
+
+      phase("following on the Mentions page");
+      // The Mentions page, read from the instance too, follows an edit of a message it lists.
+      lumia(ownerDir, "send", general, `Over to you, @${reader}.`, "--mention", lumia(readerDir, "whoami").trim());
+      await page.locator(".lu-shell__sidebar").getByRole("link", { name: /^Mentions/ }).click();
+      const entry = page.locator(".lu-mentionentry", { hasText: "Over to you" });
+      await entry.waitFor();
+      live.page = ap;
+      const mention = ap.locator(".lu-msglist .lu-msg__part", { has: ap.locator(".lu-msg__body", { hasText: "Over to you" }) });
+      for (let i = 0; i < 40 && (await mention.count()) === 0; i++) {
+        await theirList.evaluate((el) => el.scrollTo({ top: 0 }));
+        await ap.waitForTimeout(250);
+      }
+      await mention.scrollIntoViewIfNeeded();
+      await mention.hover();
+      await mention.getByRole("button", { name: "More actions" }).click();
+      await ap.getByRole("menuitem", { name: "Edit message" }).click();
+      await field.fill(`Over to you again, @${reader}.`);
+      await field.press("Enter");
+      await field.waitFor({ state: "detached" });
+      live.page = page;
+      await sees("the edit on the Mentions page", page.locator(".lu-mentionentry", { hasText: "Over to you again" }));
+    } finally {
+      await author.ctx.close();
+      live.page = page;
+    }
+    await page.screenshot({ path: `${out}/${which}-history-followed.png` });
+    if (missed.length) throw new Error(`a message in the instance's history did not follow ${missed.join(", ")} within 15 s each`);
   } finally {
     await ctx.close();
   }
-  console.log(`  ${which}: scrolled a channel of ${SENT} messages back to its first, past the store into the instance's history, in ${Date.now() - t0} ms`);
+  console.log(`  ${which}: scrolled a channel of ${SENT} messages back to its first, past the store into the instance's history, and followed a reaction, an edit and a delete there with no reload, and an edit on the Mentions page, in ${Date.now() - t0} ms`);
 }
 
 // What is typed and not sent (#23): a reply half written in #general stays

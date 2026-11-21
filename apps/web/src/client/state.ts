@@ -3,12 +3,12 @@
 // that the gateway's events invalidate. Screens read these and call the
 // bridge; nothing here renders.
 import { blobUrls } from "./media";
-import { QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
+import { type InfiniteData, QueryClient, createInfiniteQuery, createQuery, useQueryClient } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
-import { Bridge, ClientError, claimOwnership, type ClientEvent, type MemberSummary, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
+import { Bridge, ClientError, claimOwnership, type ClientEvent, type EventSummary, type MemberSummary, type MentionsPage, type MessageSummary, type Opened, type ReadStateSummary, type SnapshotSummary, type StatusSummary } from "./bridge";
 import type { DraftStore } from "./drafts";
 import { type Ended, endedNotice } from "./ended";
-import { type History, historyAgain, namesLeft } from "./history";
+import { type Ask, type History, Rereads, ask, followed, namesLeft, oneAgain, touched, withMessage } from "./history";
 import { type ProfileUpdate, membersWithProfile, peopleWithProfile, profileLog, snapshotWithProfile, withProfile } from "./profiles";
 import { redressed } from "./roles";
 
@@ -406,6 +406,8 @@ function forgetPage(): void {
   history.clear();
   historySettled.clear();
   historyTurns.clear();
+  rereads.forget();
+  mentionReads.forget();
   storedCount.clear();
   setMessagePages(new Map());
   profiles.clear();
@@ -448,11 +450,16 @@ function onGatewayEvent(e: ClientEvent): void {
     case "applied":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
       void queryClient.invalidateQueries({ queryKey: ["readStates"] });
-      // A message that names this account lands on the Mentions pages.
+      // A message that names this account lands on the Mentions pages, which are read again whole;
+      // otherwise a message they hold that an event changed is read again on its own (`mentionsAfter`).
       if (e.events.some((event) => event.kind === "message_created")) void queryClient.invalidateQueries({ queryKey: ["mentions"] });
+      else mentionsAfter(e.channelId, e.events);
       // Someone came or went (architecture 6.8): who is in the channel is asked again.
       if (e.events.some((event) => event.message?.notice)) void queryClient.invalidateQueries({ queryKey: ["channelMembers", e.channelId] });
       for (const event of e.events) if (event.message) stopTyping(e.channelId, event.message.authorAccountId);
+      // What the instance gave of the history before the store begins the core does not keep: a
+      // message held there that an event changed is read again from the instance (`touched`).
+      historyAsk(e.channelId, (held) => touched(e.events, held));
       break;
     case "typing":
       startTyping(e.channelId, e.accountId, e.untilMicros / 1000);
@@ -493,6 +500,9 @@ function onGatewayEvent(e: ClientEvent): void {
       break;
     case "snapshotTaken":
       void queryClient.invalidateQueries({ queryKey: ["messages", e.channelId] });
+      // The events it stood for were never applied, and may have changed any message held.
+      historyAsk(e.channelId, () => ask({ whole: true }));
+      void queryClient.invalidateQueries({ queryKey: ["mentions"] });
       break;
     case "reconnecting":
       setConnection(`reconnecting (attempt ${e.attempt})`);
@@ -844,27 +854,79 @@ function inHistoryTurn<T>(channelId: string, f: () => Promise<T>): Promise<T> {
  * name it had when it went (specs/emoji.md 7). An emoji still listed is
  * drawn by its present name and needs nothing.
  */
-async function historyAfterEmoji(serverId: string): Promise<void> {
+function historyAfterEmoji(serverId: string): void {
   const snapshot = queryClient.getQueryData<SnapshotSummary>(["snapshot"]);
   const live = new Set((snapshot?.servers ?? []).flatMap((s) => s.emoji.map((x) => x.emojiId)));
-  for (const channelId of [...history.keys()]) {
+  for (const [channelId, kept] of history) {
     // A channel not in the snapshot (one read from Browse) may be this server's.
     const where = snapshot?.channels.find((c) => c.channelId === channelId)?.serverId;
     if (where && where !== serverId) continue;
-    await inHistoryTurn(channelId, async () => {
+    const left = namesLeft(kept.messages, live, historySettled.get(channelId) ?? new Set<string>());
+    if (left.length) rereads.ask(channelId, ask({ whole: true, names: new Set(left) }));
+  }
+}
+
+/** What of a channel's history held is to be read again, worked out from what is held, where anything is. */
+function historyAsk(channelId: string, what: (held: MessageSummary[]) => Ask): void {
+  const held = history.get(channelId)?.messages;
+  if (held?.length) rereads.ask(channelId, what(held));
+}
+
+/**
+ * Reads of a channel's history held again from the instance, one at a time
+ * and coalesced (`Rereads`), each begun while the channel is on screen (its
+ * messages query observed) or, asked while it is not, when it next is (from
+ * `messagesQuery`): each message an event named read again on its own, the
+ * span below an expiry's or a purge's seq, or, after events skipped or an
+ * emoji removed, the whole span held (`followed`); then the channel's
+ * messages read again. A whole read settles the removed emoji whose names
+ * it reads (`historyAfterEmoji`).
+ */
+const rereads = new Rereads(
+  (channelId, a) =>
+    inHistoryTurn(channelId, async () => {
       const kept = history.get(channelId);
-      const settled = historySettled.get(channelId) ?? new Set<string>();
-      const left = kept ? namesLeft(kept.messages, live, settled) : [];
-      if (!kept || !left.length) return;
-      const again = await historyAgain(kept, (before, limit) => client().olderMessages(channelId, before, limit), MESSAGE_PAGE);
+      if (!kept?.messages.length) return;
+      const again = await followed(kept, a, (before, limit) => client().olderMessages(channelId, before, limit), MESSAGE_PAGE);
       // Let go of meanwhile (signed out).
       if (history.get(channelId) !== kept) return;
       history.set(channelId, again);
-      historySettled.set(channelId, new Set([...settled, ...left]));
+      if (a.names.size) historySettled.set(channelId, new Set([...(historySettled.get(channelId) ?? []), ...a.names]));
       await queryClient.refetchQueries({ queryKey: ["messages", channelId] });
-    }).catch((err) => console.warn("history read again:", err));
-  }
+    }).catch((err) => console.warn("history read again:", err)),
+  (channelId) => !!queryClient.getQueryCache().find({ queryKey: ["messages", channelId], exact: true })?.isActive(),
+);
+
+type MentionsData = InfiniteData<MentionsPage, string | null>;
+
+/** Every message of `channelId` the Mentions pages hold. */
+function mentionsHeld(channelId: string): MessageSummary[] {
+  return queryClient.getQueriesData<MentionsData>({ queryKey: ["mentions"] }).flatMap(([, data]) => (data?.pages ?? []).flatMap((p) => p.messages.filter((m) => m.channelId === channelId)));
 }
+
+/**
+ * After a channel's events with no new message: a message the Mentions
+ * pages hold (read from the instance, as they are) that an event changed
+ * is read again on its own and written in where it is held; an expiry or a
+ * purge, said of every message below a seq, reads the pages again whole.
+ */
+function mentionsAfter(channelId: string, events: EventSummary[]): void {
+  const a = touched(events, mentionsHeld(channelId));
+  if (a.below) void queryClient.invalidateQueries({ queryKey: ["mentions"] });
+  else mentionReads.ask(channelId, a);
+}
+
+/** Reads of the Mentions pages' messages again, a channel's one read at a time and coalesced, as the history's are. */
+const mentionReads = new Rereads((channelId, a) =>
+  (async () => {
+    for (const id of a.ids) {
+      const m = mentionsHeld(channelId).find((x) => x.messageId === id);
+      if (!m) continue;
+      const now = await oneAgain(id, m.seq, (before, limit) => client().olderMessages(channelId, before, limit));
+      queryClient.setQueriesData<MentionsData>({ queryKey: ["mentions"] }, (data) => data && { ...data, pages: data.pages.map((p) => ({ ...p, messages: withMessage(p.messages, id, now) })) });
+    }
+  })().catch((err) => console.warn("mentions read again:", err)),
+);
 
 /** What the instance takes of attachments (specs/media.md 2), asked once a session; null where it keeps none, and nothing can be attached. */
 export function uploadLimitsQuery() {
@@ -893,6 +955,8 @@ export function messagesQuery(channelId: () => string | undefined) {
       queryFn: async () => {
         // Read when it runs: a page more is asked for by setting this, then refetching.
         const pages = messagePages().get(id as string) ?? 1;
+        // A read of its history again, asked while it was not on screen, begins now it is.
+        rereads.run(id as string);
         const stored = await client().messages(id as string, MESSAGE_PAGE * pages);
         storedCount.set(id as string, stored.length);
         const first = stored[0]?.seq ?? Infinity;
