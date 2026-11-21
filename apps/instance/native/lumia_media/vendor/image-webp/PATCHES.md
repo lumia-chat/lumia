@@ -32,9 +32,11 @@ budget is left and image-webp refuses when the codes would pass it.
 
 ## When to drop it
 
-When an image-webp release counts prefix codes against its memory limit. The same change has
-been prepared against image-webp's `main` branch, where the Huffman tables were rewritten, but
-it has not been sent upstream. To drop the patch:
+When an image-webp release counts prefix codes against its memory limit. Upstream knows the
+bug as [image-webp#197](https://github.com/image-rs/image-webp/issues/197), and
+[#211](https://github.com/image-rs/image-webp/pull/211) fixes it (unreleased when this was
+written, 2026-11-21); that fix also drops unused groups' tables and holds every buffer to one
+limit. To drop the patch:
 - delete this directory, and the `[patch.crates-io]` entry and the `exclude` in `lumia_media`'s
   `Cargo.toml`;
 - raise `image-webp` to that release;
