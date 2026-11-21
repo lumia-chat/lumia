@@ -4,6 +4,7 @@
 // with their roles, their title and Kick. And what a profile card's two
 // Edits open. The core says what this account may do and the instance
 // decides; `client/roles.ts` holds the rules and the words.
+import { oneAtATime } from "../client/serial";
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, type JSX } from "solid-js";
 import {
   Avatar,
@@ -137,6 +138,11 @@ export function RolesSection(props: { server: ServerSummary; members: MemberSumm
   const [said, setSaid] = createSignal("");
   // The order as a move left it, drawn before the instance answers.
   const [moved, setMoved] = createSignal<string[] | null>(null);
+  // Moves reach the instance in the order they were made: two at once could be applied the other
+  // way round, the second undone by the first. The order drawn is the newest move's until the last
+  // one queued has been answered.
+  const inTurn = oneAtATime();
+  let moves = 0;
   const roles = createMemo(() => {
     const order = moved();
     if (!order) return props.server.roles;
@@ -176,13 +182,15 @@ export function RolesSection(props: { server: ServerSummary; members: MemberSumm
     setError("");
     setMoved(order);
     setSaid(movedWords(name, order.indexOf(roleId) + 1));
+    const mine = ++moves;
+    const serverId = props.server.serverId;
     try {
-      tookRoles(await client().reorderRoles(props.server.serverId, order), props.server.serverId);
+      tookRoles(await inTurn(() => client().reorderRoles(serverId, order)), serverId);
     } catch (err) {
       setSaid("");
       setError(roleRefusal(err, props.server.name));
     } finally {
-      setMoved(null);
+      if (mine === moves) setMoved(null);
     }
   };
   const remove = async (roleId: string) => {
