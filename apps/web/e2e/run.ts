@@ -2391,9 +2391,8 @@ async function membershipStep(which: string, stamp: number) {
 // 1,000 events long is read from its snapshot (the newest 50), so scrolling
 // up reads the store's few and then the instance's scrollback, a page at a
 // time, back to the channel's first message. A message there then follows a
-// reaction from the CLI and an edit and a delete by its author in another
-// browser, with no reload, and the Mentions page an edit of a message it
-// lists.
+// reaction, an edit and a delete by its author from the CLI with no
+// reload, and the Mentions page an edit of a message it lists.
 async function historyStep(which: string, stamp: number) {
   const ownerDir = resolve(work, `cli-history-owner-${which}`);
   const readerDir = resolve(work, `cli-history-reader-${which}`);
@@ -2436,9 +2435,9 @@ async function historyStep(which: string, stamp: number) {
 
     phase("following the instance's history");
     // A message the page read from the instance's history, which the core does not keep, follows
-    // what is done to it after: a reaction from the CLI, then an edit and a delete by its author in
-    // a browser of their own (Chromium for both engines: two WebKits share one origin-private file
-    // system), each seen in the reader's page with no reload.
+    // what is done to it after: a reaction, an edit and a delete by its author from the CLI (no
+    // second browser, so the WebKit-only run has it whole), each seen in the reader's page with no
+    // reload.
     const target = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: /^history 3$/ }) });
     await target.waitFor({ timeout: 5_000 });
     const id = await target.getAttribute("data-message-id");
@@ -2454,67 +2453,25 @@ async function historyStep(which: string, stamp: number) {
     };
     lumia(ownerDir, "react", general, id, "👍");
     await sees("the reaction added", row.getByRole("button", { name: /reacted with 👍/ }));
-    const author = await open("chromium", `history-author-${which}`);
-    try {
-      const ap = author.page;
-      await trustCard(ap);
-      await ap.getByLabel("Email or handle").fill(owner);
-      await ap.getByRole("textbox", { name: "Password" }).fill(password);
-      await ap.getByRole("button", { name: "Sign in", exact: true }).click();
-      await later(ap);
-      await ap.getByPlaceholder("Message #general").waitFor();
-      const theirs = ap.locator(`.lu-msglist .lu-msg__part[data-message-id="${id}"]`);
-      const theirList = ap.locator(".lu-msglist").first();
-      for (let i = 0; i < 120 && (await theirs.count()) === 0; i++) {
-        await theirList.evaluate((el) => el.scrollTo({ top: -el.scrollHeight }));
-        await ap.waitForTimeout(250);
-      }
-      const more = async () => {
-        await theirs.scrollIntoViewIfNeeded();
-        await theirs.hover();
-        await theirs.getByRole("button", { name: "More actions" }).click();
-      };
-      await more();
-      await ap.getByRole("menuitem", { name: "Edit message" }).click();
-      const field = ap.getByRole("textbox", { name: "Edit message" });
-      await field.fill("history 3, edited");
-      await field.press("Enter");
-      await field.waitFor({ state: "detached" });
-      live.page = page;
-      await sees("the edit", row.locator(".lu-msg__body", { hasText: "history 3, edited" }));
-      await sees("its (edited)", row.locator(".lu-msg__edited"));
-      live.page = ap;
-      await more();
-      await ap.getByRole("menuitem", { name: "Delete message" }).click({ modifiers: ["Shift"] });
-      live.page = page;
-      // The server shows no deleted messages: the row goes.
-      await sees("the delete", row, "detached");
+    lumia(ownerDir, "edit", general, id, "history 3, edited");
+    await sees("the edit", row.locator(".lu-msg__body", { hasText: "history 3, edited" }));
+    await sees("its (edited)", row.locator(".lu-msg__edited"));
+    lumia(ownerDir, "delete", general, id);
+    // The server shows no deleted messages: the row goes.
+    await sees("the delete", row, "detached");
 
-      phase("following on the Mentions page");
-      // The Mentions page, read from the instance too, follows an edit of a message it lists.
-      lumia(ownerDir, "send", general, `Over to you, @${reader}.`, "--mention", lumia(readerDir, "whoami").trim());
-      await page.locator(".lu-shell__sidebar").getByRole("link", { name: /^Mentions/ }).click();
-      const entry = page.locator(".lu-mentionentry", { hasText: "Over to you" });
-      await entry.waitFor();
-      live.page = ap;
-      const mention = ap.locator(".lu-msglist .lu-msg__part", { has: ap.locator(".lu-msg__body", { hasText: "Over to you" }) });
-      for (let i = 0; i < 40 && (await mention.count()) === 0; i++) {
-        await theirList.evaluate((el) => el.scrollTo({ top: 0 }));
-        await ap.waitForTimeout(250);
-      }
-      await mention.scrollIntoViewIfNeeded();
-      await mention.hover();
-      await mention.getByRole("button", { name: "More actions" }).click();
-      await ap.getByRole("menuitem", { name: "Edit message" }).click();
-      await field.fill(`Over to you again, @${reader}.`);
-      await field.press("Enter");
-      await field.waitFor({ state: "detached" });
-      live.page = page;
-      await sees("the edit on the Mentions page", page.locator(".lu-mentionentry", { hasText: "Over to you again" }));
-    } finally {
-      await author.ctx.close();
-      live.page = page;
-    }
+    phase("following on the Mentions page");
+    // The Mentions page, read from the instance too, follows an edit of a message it lists.
+    const readerId = lumia(readerDir, "whoami").trim();
+    lumia(ownerDir, "send", general, `Over to you, @${reader}.`, "--mention", readerId);
+    const over = page.locator(".lu-msglist .lu-msg__part", { has: page.locator(".lu-msg__body", { hasText: "Over to you" }) });
+    await over.waitFor();
+    const overId = await over.getAttribute("data-message-id");
+    if (!overId) throw new Error("the message that mentions the reader has no id");
+    await page.locator(".lu-shell__sidebar").getByRole("link", { name: /^Mentions/ }).click();
+    await page.locator(".lu-mentionentry", { hasText: "Over to you" }).waitFor();
+    lumia(ownerDir, "edit", general, overId, `Over to you again, @${reader}.`, "--mention", readerId);
+    await sees("the edit on the Mentions page", page.locator(".lu-mentionentry", { hasText: "Over to you again" }));
     await page.screenshot({ path: `${out}/${which}-history-followed.png` });
     if (missed.length) throw new Error(`a message in the instance's history did not follow ${missed.join(", ")} within 15 s each`);
   } finally {

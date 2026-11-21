@@ -236,6 +236,22 @@ enum Cmd {
         #[arg(long, default_value = ".")]
         out: PathBuf,
     },
+    /// Edit one of this account's messages in a server channel: its new body, with
+    /// `--mention <account-id>` (repeatable) as on a send, and the server's emoji it names
+    /// found as a send finds them.
+    Edit {
+        channel_id: String,
+        message_id: String,
+        body: String,
+        #[arg(long)]
+        mention: Vec<String>,
+    },
+    /// Delete a message of a server channel: this account's own, or another's with
+    /// `MANAGE_MESSAGES` there.
+    Delete {
+        channel_id: String,
+        message_id: String,
+    },
     /// React to a message with one emoji, or take the reaction away (`--remove`).
     React {
         channel_id: String,
@@ -912,6 +928,55 @@ async fn run(cli: Cli) -> Result<(), ClientError> {
                 })
                 .collect();
             send_commands(api, ctx, channel, ops).await
+        }
+        Cmd::Edit {
+            channel_id,
+            message_id,
+            body,
+            mention,
+        } => {
+            let channel = parse_uuid(&channel_id)?;
+            let mut mentions = Vec::with_capacity(mention.len());
+            for id in &mention {
+                mentions.push(Mention {
+                    target: Some(mention::Target::AccountId(parse_uuid(id)?)),
+                    start: 0,
+                    end: 0,
+                });
+            }
+            let emoji_names = if body.contains(':') {
+                server_emoji_names(&api, &channel).await?
+            } else {
+                Vec::new()
+            };
+            let emoji = lumia_core::emoji::find_refs(&body, &emoji_names)
+                .into_iter()
+                .filter_map(|(range, id)| {
+                    Some(lumia_core::proto::EmojiRef {
+                        emoji_id: id,
+                        start: u32::try_from(range.start).ok()?,
+                        end: u32::try_from(range.end).ok()?,
+                    })
+                })
+                .collect();
+            let op = command::Op::EditMessage(lumia_core::proto::EditMessage {
+                message_id: parse_uuid(&message_id)?,
+                body,
+                mentions,
+                emoji,
+                ..Default::default()
+            });
+            send_commands(api, ctx, channel, vec![op]).await
+        }
+        Cmd::Delete {
+            channel_id,
+            message_id,
+        } => {
+            let channel = parse_uuid(&channel_id)?;
+            let op = command::Op::DeleteMessage(lumia_core::proto::DeleteMessage {
+                message_id: parse_uuid(&message_id)?,
+            });
+            send_commands(api, ctx, channel, vec![op]).await
         }
         Cmd::React {
             channel_id,
