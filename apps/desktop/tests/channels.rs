@@ -418,6 +418,7 @@ fn joined(channel: &str, seq: u64) -> Update {
                 cards: Vec::new(),
                 emoji: Vec::new(),
             }),
+            ..Default::default()
         }],
     })
 }

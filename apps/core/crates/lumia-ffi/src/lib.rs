@@ -1364,6 +1364,13 @@ pub struct EventSummary {
     pub seq: u64,
     pub kind: String,
     pub message: Option<MessageSummary>,
+    /// The message it creates or changes; empty for none.
+    #[uniffi(default)]
+    pub message_id: String,
+    /// For `attachments_expired` and `payloads_purged`: every message below
+    /// this seq; 0 otherwise.
+    #[uniffi(default)]
+    pub before_seq: u64,
 }
 
 impl From<app::EventSummary> for EventSummary {
@@ -1372,6 +1379,8 @@ impl From<app::EventSummary> for EventSummary {
             seq: e.seq,
             kind: e.kind,
             message: e.message.map(Into::into),
+            message_id: e.message_id,
+            before_seq: e.before_seq,
         }
     }
 }

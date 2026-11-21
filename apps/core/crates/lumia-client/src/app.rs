@@ -1205,13 +1205,28 @@ pub struct ReadStateSummary {
     pub mentions: u32,
 }
 
-/// One applied channel event.
-#[derive(Debug, Clone, Serialize)]
+/// One applied channel event: its kind (`message_created`,
+/// `message_edited`, `message_cards_set`, `message_deleted`,
+/// `reaction_added`, `reaction_removed`, `message_pinned`,
+/// `message_unpinned`, `thread_updated`, `attachments_expired`,
+/// `payloads_purged`, `redacted`, `member_joined`, `member_left`,
+/// `channel_updated`, `acl_changed`, `encrypted`, or `empty` with no
+/// payload; each of these was `other` before it had a kind of its own), the
+/// message a new one carries, and which message it
+/// concerns, so a shell holding that message outside the store (history
+/// read from the instance, a Mentions page) can read it again.
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventSummary {
     pub seq: u64,
     pub kind: String,
     pub message: Option<MessageSummary>,
+    /// The message it creates or changes (for `thread_updated`, the
+    /// thread's root); empty for an event about no one message.
+    pub message_id: String,
+    /// For `attachments_expired` and `payloads_purged`, which say it of
+    /// every message below a seq rather than of one: that seq; 0 otherwise.
+    pub before_seq: u64,
 }
 
 /// A device of the identity's roster.
@@ -1678,24 +1693,50 @@ fn message_summary(m: &lumia_core::proto::Message, me: &[u8]) -> MessageSummary 
 }
 
 fn event_summary(e: &Event) -> EventSummary {
-    let (kind, message) = match &e.payload {
-        Some(event::Payload::MessageCreated(c)) => (
+    use event::Payload;
+    let about = |id: &[u8]| {
+        if id.is_empty() {
+            String::new()
+        } else {
+            wire::display(id)
+        }
+    };
+    let (kind, message, message_id, before_seq) = match &e.payload {
+        Some(Payload::MessageCreated(c)) => (
             "message_created",
             c.message.as_ref().map(|m| message_summary(m, &[])),
+            c.message
+                .as_ref()
+                .map(|m| about(&m.message_id))
+                .unwrap_or_default(),
+            0,
         ),
-        Some(event::Payload::MessageEdited(_)) => ("message_edited", None),
-        Some(event::Payload::MessageCardsSet(_)) => ("message_cards_set", None),
-        Some(event::Payload::MessageDeleted(_)) => ("message_deleted", None),
-        Some(event::Payload::Encrypted(_)) => ("encrypted", None),
-        Some(event::Payload::Redacted(_)) => ("redacted", None),
-        Some(event::Payload::PayloadsPurged(_)) => ("payloads_purged", None),
-        Some(_) => ("other", None),
-        None => ("empty", None),
+        Some(Payload::MessageEdited(m)) => ("message_edited", None, about(&m.message_id), 0),
+        Some(Payload::MessageCardsSet(m)) => ("message_cards_set", None, about(&m.message_id), 0),
+        Some(Payload::MessageDeleted(m)) => ("message_deleted", None, about(&m.message_id), 0),
+        Some(Payload::ReactionAdded(r)) => ("reaction_added", None, about(&r.message_id), 0),
+        Some(Payload::ReactionRemoved(r)) => ("reaction_removed", None, about(&r.message_id), 0),
+        Some(Payload::MessagePinned(p)) => ("message_pinned", None, about(&p.message_id), 0),
+        Some(Payload::MessageUnpinned(p)) => ("message_unpinned", None, about(&p.message_id), 0),
+        Some(Payload::ThreadUpdated(t)) => ("thread_updated", None, about(&t.message_id), 0),
+        Some(Payload::AttachmentsExpired(a)) => {
+            ("attachments_expired", None, String::new(), a.before_seq)
+        }
+        Some(Payload::PayloadsPurged(p)) => ("payloads_purged", None, String::new(), p.before_seq),
+        Some(Payload::Encrypted(_)) => ("encrypted", None, String::new(), 0),
+        Some(Payload::Redacted(_)) => ("redacted", None, String::new(), 0),
+        Some(Payload::MemberJoined(_)) => ("member_joined", None, String::new(), 0),
+        Some(Payload::MemberLeft(_)) => ("member_left", None, String::new(), 0),
+        Some(Payload::ChannelUpdated(_)) => ("channel_updated", None, String::new(), 0),
+        Some(Payload::AclChanged(_)) => ("acl_changed", None, String::new(), 0),
+        None => ("empty", None, String::new(), 0),
     };
     EventSummary {
         seq: e.seq,
         kind: kind.into(),
         message,
+        message_id,
+        before_seq,
     }
 }
 
@@ -8536,6 +8577,145 @@ mod dm_read_tests {
         let rows = [row(3, send(1)), row(4, send(2)), row(5, delete)];
         assert_eq!(dm_read_through(&rows, 3), 5);
         assert_eq!(dm_read_through(&[], 3), 3);
+    }
+}
+
+#[cfg(test)]
+mod event_summary_tests {
+    use super::event_summary;
+    use lumia_core::proto::{
+        event, AclChanged, AttachmentsExpired, Event, MemberJoined, Message, MessageCardsSet,
+        MessageCreated, MessageDeleted, MessageEdited, MessagePinned, MessageUnpinned,
+        PayloadsPurged, ReactionAdded, ReactionRemoved, Redacted, ThreadUpdated,
+    };
+
+    const MESSAGE: [u8; 16] = [0x11; 16];
+    const ID: &str = "11111111-1111-1111-1111-111111111111";
+
+    fn of(seq: u64, payload: event::Payload) -> super::EventSummary {
+        event_summary(&Event {
+            seq,
+            payload: Some(payload),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn each_event_about_a_message_names_it_by_a_kind_of_its_own() {
+        use event::Payload as P;
+        let m = || MESSAGE.to_vec();
+        let cases = [
+            (
+                P::MessageEdited(MessageEdited {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "message_edited",
+            ),
+            (
+                P::MessageCardsSet(MessageCardsSet {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "message_cards_set",
+            ),
+            (
+                P::MessageDeleted(MessageDeleted {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "message_deleted",
+            ),
+            (
+                P::ReactionAdded(ReactionAdded {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "reaction_added",
+            ),
+            (
+                P::ReactionRemoved(ReactionRemoved {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "reaction_removed",
+            ),
+            (
+                P::MessagePinned(MessagePinned { message_id: m() }),
+                "message_pinned",
+            ),
+            (
+                P::MessageUnpinned(MessageUnpinned { message_id: m() }),
+                "message_unpinned",
+            ),
+            (
+                P::ThreadUpdated(ThreadUpdated {
+                    message_id: m(),
+                    ..Default::default()
+                }),
+                "thread_updated",
+            ),
+        ];
+        for (payload, kind) in cases {
+            let e = of(9, payload);
+            assert_eq!(
+                (e.seq, e.kind.as_str(), e.message_id.as_str(), e.before_seq),
+                (9, kind, ID, 0)
+            );
+            assert!(e.message.is_none());
+        }
+    }
+
+    #[test]
+    fn a_new_message_carries_it_and_its_id() {
+        let e = of(
+            4,
+            event::Payload::MessageCreated(MessageCreated {
+                message: Some(Message {
+                    message_id: MESSAGE.to_vec(),
+                    seq: 4,
+                    ..Default::default()
+                }),
+            }),
+        );
+        assert_eq!(e.kind, "message_created");
+        assert_eq!(e.message_id, ID);
+        assert_eq!(e.message.map(|m| m.message_id).as_deref(), Some(ID));
+    }
+
+    #[test]
+    fn what_is_said_of_every_message_below_a_seq_says_that_seq() {
+        let e = of(
+            30,
+            event::Payload::AttachmentsExpired(AttachmentsExpired { before_seq: 12 }),
+        );
+        assert_eq!(
+            (e.kind.as_str(), e.message_id.as_str(), e.before_seq),
+            ("attachments_expired", "", 12)
+        );
+        let e = of(
+            31,
+            event::Payload::PayloadsPurged(PayloadsPurged { before_seq: 20 }),
+        );
+        assert_eq!(
+            (e.kind.as_str(), e.message_id.as_str(), e.before_seq),
+            ("payloads_purged", "", 20)
+        );
+    }
+
+    #[test]
+    fn an_event_about_no_one_message_names_none() {
+        let e = of(5, event::Payload::MemberJoined(MemberJoined::default()));
+        assert_eq!(
+            (e.kind.as_str(), e.message_id.as_str(), e.before_seq),
+            ("member_joined", "", 0)
+        );
+        let e = of(6, event::Payload::AclChanged(AclChanged::default()));
+        assert_eq!(e.kind, "acl_changed");
+        let e = of(7, event::Payload::Redacted(Redacted::default()));
+        assert_eq!((e.kind.as_str(), e.message_id.as_str()), ("redacted", ""));
+        let e = event_summary(&Event::default());
+        assert_eq!((e.kind.as_str(), e.message_id.as_str()), ("empty", ""));
     }
 }
 
