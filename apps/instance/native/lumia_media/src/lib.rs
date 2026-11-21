@@ -13,11 +13,11 @@ use std::io::Cursor;
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngDecoder;
-use image::codecs::webp::WebPDecoder;
+use image::error::{ImageError, ImageResult, LimitError, LimitErrorKind};
 use image::imageops::FilterType;
 use image::{
-    metadata::Orientation, AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder,
-    ImageFormat, ImageReader, Limits, RgbaImage,
+    metadata::Orientation, AnimationDecoder, ColorType, Delay, DynamicImage, Frame, Frames,
+    ImageDecoder, ImageFormat, ImageReader, Limits, RgbImage, RgbaImage,
 };
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, ParsingOptions, TransformExecutor, TransformOptions,
@@ -184,11 +184,11 @@ fn vp8_peak(size: (u32, u32), len: usize) -> u64 {
 /// each at most four bytes a 4 by 4 block, the entropy image again as a `u16` a block while
 /// it is read, and two colour caches of 8 KiB.
 ///
-/// Its prefix-code tables are not counted: how many there are is told by the entropy image's
-/// values, not the picture's size, and a stream can be made with tens of thousands. An
-/// encoder's transforms are coarser than the finest counted here, and what that leaves has
-/// held an ordinary stream's tables (a photograph of 4,000 a side from cwebp: under 1 MB);
-/// a stream made to have more is not bounded by this.
+/// Its prefix-code tables are not counted here: how many there are is told by the entropy
+/// image's values, not the picture's size, and a stream can be made with tens of thousands.
+/// image-webp counts them itself, as it reads them, against what the decode has left once
+/// this is reserved ([`Webp`]); an ordinary stream's are small (a photograph of 4,000 a side
+/// from cwebp: under 1 MB).
 fn lossless_working((width, height): (u32, u32)) -> u64 {
     pixels(width.div_ceil(4), height.div_ceil(4)) * 14 + 2 * 8192
 }
@@ -411,6 +411,109 @@ fn vp8l_header(payload: &[u8]) -> Option<((u32, u32), bool)> {
     Some(((width, height), (bits >> 28) & 1 != 0))
 }
 
+/// image-webp's decoder as `image` reads it, but with the allocation limit left over handed on
+/// to image-webp's own memory limit, which `image`'s wrapper does not do. That limit covers
+/// what the chunk walk cannot know before decoding: a lossless stream's prefix codes, whose
+/// number its entropy image sets (patched in; vendor/image-webp/PATCHES.md).
+struct Webp<'a>(image_webp::WebPDecoder<Cursor<&'a [u8]>>);
+
+impl<'a> Webp<'a> {
+    fn new(bytes: &'a [u8]) -> Result<Self, Refusal> {
+        image_webp::WebPDecoder::new(Cursor::new(bytes))
+            .map(Self)
+            .map_err(|_| Refusal::Invalid)
+    }
+}
+
+/// An image-webp error as `image` has it, its memory limit as a limit.
+fn webp_error(error: image_webp::DecodingError) -> ImageError {
+    match error {
+        image_webp::DecodingError::MemoryLimitExceeded => {
+            ImageError::Limits(LimitError::from_kind(LimitErrorKind::InsufficientMemory))
+        }
+        error => ImageError::Decoding(image::error::DecodingError::new(
+            ImageFormat::WebP.into(),
+            error,
+        )),
+    }
+}
+
+/// A decoder's error as a refusal: past a limit is too large, anything else will not decode.
+fn refusal(error: ImageError) -> Refusal {
+    match error {
+        ImageError::Limits(_) => Refusal::TooLarge,
+        _ => Refusal::Invalid,
+    }
+}
+
+impl ImageDecoder for Webp<'_> {
+    fn dimensions(&self) -> (u32, u32) {
+        self.0.dimensions()
+    }
+
+    fn color_type(&self) -> ColorType {
+        if self.0.has_alpha() {
+            ColorType::Rgba8
+        } else {
+            ColorType::Rgb8
+        }
+    }
+
+    fn icc_profile(&mut self) -> ImageResult<Option<Vec<u8>>> {
+        self.0.icc_profile().map_err(webp_error)
+    }
+
+    fn exif_metadata(&mut self) -> ImageResult<Option<Vec<u8>>> {
+        self.0.exif_metadata().map_err(webp_error)
+    }
+
+    fn set_limits(&mut self, limits: Limits) -> ImageResult<()> {
+        let (width, height) = self.dimensions();
+        limits.check_dimensions(width, height)?;
+        let left = limits.max_alloc.map_or(usize::MAX, |left| {
+            usize::try_from(left).unwrap_or(usize::MAX)
+        });
+        self.0.set_memory_limit(left);
+        Ok(())
+    }
+
+    fn read_image(mut self, buf: &mut [u8]) -> ImageResult<()> {
+        self.0.read_image(buf).map_err(webp_error)
+    }
+
+    fn read_image_boxed(self: Box<Self>, buf: &mut [u8]) -> ImageResult<()> {
+        (*self).read_image(buf)
+    }
+}
+
+impl<'a> AnimationDecoder<'a> for Webp<'a> {
+    /// Each frame as `image`'s wrapper reads them: in a buffer of its own, RGBA, or RGB and
+    /// then a copy of it as RGBA.
+    fn into_frames(mut self) -> Frames<'a> {
+        let (width, height) = self.0.dimensions();
+        let alpha = self.0.has_alpha();
+        let mut left = self.0.num_frames();
+        Frames::new(Box::new(std::iter::from_fn(move || {
+            left = left.checked_sub(1)?;
+            let read = if alpha {
+                let mut pixels = RgbaImage::new(width, height);
+                self.0.read_frame(&mut pixels).map(|delay| (pixels, delay))
+            } else {
+                let mut pixels = RgbImage::new(width, height);
+                self.0
+                    .read_frame(&mut pixels)
+                    .map(|delay| (DynamicImage::ImageRgb8(pixels).to_rgba8(), delay))
+            };
+            match read {
+                Err(image_webp::DecodingError::NoMoreFrames) => None,
+                read => Some(read.map_err(webp_error).map(|(pixels, delay)| {
+                    Frame::from_parts(pixels, 0, 0, Delay::from_numer_denom_ms(delay, 1))
+                })),
+            }
+        })))
+    }
+}
+
 /// The frames a PNG's `acTL` chunk says it has, read before its image data; 0 for a PNG
 /// without one.
 fn apng_frames(bytes: &[u8]) -> u32 {
@@ -507,13 +610,17 @@ fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<(DynamicImage, u64), Re
     {
         return Err(Refusal::TooLarge);
     }
-    let (mut reader, _) = reader(bytes)?;
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_SIDE);
     limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some(max_alloc);
-    reader.limits(limits.clone());
-    let mut decoder = reader.into_decoder().map_err(|_| Refusal::Invalid)?;
+    let mut decoder: Box<dyn ImageDecoder> = if format == ImageFormat::WebP {
+        Box::new(Webp::new(bytes)?)
+    } else {
+        let (mut reader, _) = reader(bytes)?;
+        reader.limits(limits.clone());
+        Box::new(reader.into_decoder().map_err(|_| Refusal::Invalid)?)
+    };
     let orientation = decoder.orientation().map_err(|_| Refusal::Invalid)?;
     // A profile that will not read is taken for none: the picture is sRGB, as most are.
     let icc = decoder.icc_profile().ok().flatten();
@@ -534,8 +641,10 @@ fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<(DynamicImage, u64), Re
         .saturating_add(working.max(turned))
         .saturating_add(icc.as_ref().map_or(0, |icc| icc.len() as u64));
     limits.reserve(need).map_err(|_| Refusal::TooLarge)?;
+    // What is left goes to the decoder, for what is not known before decoding (a lossless
+    // WebP's prefix codes).
     decoder.set_limits(limits).map_err(|_| Refusal::TooLarge)?;
-    let mut image = DynamicImage::from_decoder(decoder).map_err(|_| Refusal::Invalid)?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(refusal)?;
     if let Some(icc) = icc {
         to_srgb(&mut image, &icc);
     }
@@ -683,8 +792,7 @@ fn emoji_picture(bytes: &[u8]) -> Result<(&'static str, Vec<u8>, u32, u32, bool)
         }
         ImageFormat::WebP => match webp_cost(bytes)? {
             cost if cost.frames > 1 => {
-                let mut decoder =
-                    WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Refusal::Invalid)?;
+                let mut decoder = Webp::new(bytes)?;
                 check_canvas(decoder.dimensions())?;
                 let mut limits = animated_limits();
                 limits
@@ -749,10 +857,7 @@ fn still_emoji(image: &DynamicImage) -> Result<(&'static str, Vec<u8>, u32, u32,
 /// The most an animated WebP's frames hold at once as `into_frames` reads them: each in a
 /// buffer of its own, RGBA, or RGB and then a copy of it as RGBA, and beside it what decoding
 /// it takes.
-fn animated_need<R: std::io::BufRead + std::io::Seek>(
-    decoder: &WebPDecoder<R>,
-    cost: &WebpCost,
-) -> u64 {
+fn animated_need(decoder: &Webp<'_>, cost: &WebpCost) -> u64 {
     let (width, height) = decoder.dimensions();
     let n = pixels(width, height);
     let buffer = if decoder.color_type().has_alpha() {
@@ -814,7 +919,7 @@ fn collect_frames(
         if decoded > ANIMATED_PIXELS {
             return Err(Refusal::TooLarge);
         }
-        let frame = frame.map_err(|_| Refusal::Invalid)?;
+        let frame = frame.map_err(refusal)?;
         let (numer, denom) = frame.delay().numer_denom_ms();
         let ms = numer.checked_div(denom).unwrap_or(0);
         let ms = if ms < MIN_DELAY_MS {
@@ -1552,6 +1657,34 @@ mod tests {
     }
 
     #[test]
+    fn a_lossless_webp_with_more_prefix_codes_than_fit_is_refused_as_they_pass_the_limit() {
+        // 4 by 4 pixels in 42 KB, but its entropy image names the last of 4,096 prefix-code
+        // groups, each with a code of 2,048 symbols: about 286 MB of tables, which image-webp
+        // 0.2.4 allocated whatever its memory limit said. Their number is known only from the
+        // entropy image and each one's size only as it is read, so they are counted as they
+        // are read, and refused at the first that would pass what the decode has left.
+        let upload = fixture!("prefix-codes.webp");
+        let limited = |max_alloc: u64| {
+            let mut refused = None;
+            let held = peak(|| refused = Some(decode_within(upload, max_alloc).map(|_| ())));
+            assert!(
+                matches!(refused, Some(Err(Refusal::TooLarge))),
+                "refused under {max_alloc}"
+            );
+            held
+        };
+        let held = limited(4 << 20);
+        assert!(held <= 4 << 20, "held {held} bytes under 4 MiB");
+        let held = limited(MAX_ALLOC);
+        assert!(held <= MAX_ALLOC, "held {held} bytes");
+        assert!(matches!(emoji_picture(upload), Err(Refusal::TooLarge)));
+
+        // Without a limit it is a picture.
+        let (image, _) = decode_within(upload, u64::MAX).unwrap_or_else(|_| panic!("decodes"));
+        assert_eq!((image.width(), image.height()), (4, 4));
+    }
+
+    #[test]
     fn a_quarter_turn_counts_its_copy() {
         // An EXIF chunk saying the picture is on its side (orientation 6).
         let mut exif = b"MM\0\x2a\0\0\0\x08\0\x01".to_vec();
@@ -1602,7 +1735,7 @@ mod tests {
             ("lossy, the canvas without alpha", opaque),
         ] {
             let cost = webp_cost(&upload).unwrap_or_else(|_| panic!("a WebP"));
-            let decoder = WebPDecoder::new(Cursor::new(upload.as_slice())).expect("a WebP");
+            let decoder = Webp::new(&upload).unwrap_or_else(|_| panic!("a WebP"));
             let need = animated_need(&decoder, &cost);
             let held = peak(|| {
                 for frame in decoder.into_frames() {

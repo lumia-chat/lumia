@@ -19,6 +19,9 @@ image = { version = "0.25.6", default-features = false, features = ["png", "jpeg
 # A picture's embedded colour profile converted to sRGB; already in the tree
 # under `image`, and Rust only.
 moxcms = { version = "0.8.1", default-features = false }
+# `image`'s WebP decoder, used directly for WebP so that its memory limit can be set: `image`
+# does not pass its own limit on. Patched, below.
+image-webp = "0.2.4"
 
 [dev-dependencies]
 # To write an APNG in the tests; `image` reads them through this crate but cannot write one.
@@ -31,3 +34,10 @@ allocation-counter = "0.8"
 unsafe_code = "forbid"
 
 [workspace]
+# The vendored crate keeps its published manifest and dev-dependencies, so it is no member.
+exclude = ["vendor/image-webp"]
+
+# image-webp 0.2.4 with its memory limit covering a lossless stream's prefix codes, until a
+# release has it: vendor/image-webp/PATCHES.md says what is changed and when to drop it.
+[patch.crates-io]
+image-webp = { path = "vendor/image-webp" }
