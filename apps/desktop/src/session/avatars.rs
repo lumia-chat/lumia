@@ -11,11 +11,18 @@
 //! instance and served by address, and are fetched and kept the same way. One the server no
 //! longer lists (removed) is dropped, from memory and from what is kept (spec 7).
 //!
+//! A picture that could not be fetched (the network down a moment, the instance busy) is
+//! asked for again after a while, longer each time ([`retry_after`]); one the instance says
+//! it does not have is not. One whose bytes would not decode is let go, file and all, and
+//! fetched again the same way ([`Session::picture_failed`]): a file half written when the
+//! computer stopped is the likely cause, not the instance.
+//!
 //! The bytes are held as bytes. Decoding them is the toolkit's, in `app`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use lumia_client::app::{SnapshotSummary, is_own_avatar};
 
@@ -26,6 +33,12 @@ const AT_ONCE: usize = 4;
 
 /// The most a chosen file may be: the instance's own limit, checked before sending.
 const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How long after its `tries`-th failure a picture is asked for again: 2 s, doubling, at
+/// most five minutes.
+pub fn retry_after(tries: u32) -> Duration {
+    Duration::from_secs((2u64 << tries.min(8)).min(300))
+}
 
 /// What an avatar call reports.
 #[derive(Debug, Clone)]
@@ -45,8 +58,11 @@ enum Picture {
     /// Asked for, or waiting its turn.
     Wanted,
     Held(Arc<[u8]>),
-    /// The instance has none there, or would not say: not asked again this launch.
-    Missing,
+    /// Could not be had: asked for again at `retry`, or never (`None`) when the instance
+    /// said it has none there.
+    Missing {
+        retry: Option<Instant>,
+    },
 }
 
 /// The pictures held, by avatar URL.
@@ -59,6 +75,10 @@ pub struct Avatars {
     emoji: HashSet<String>,
     /// Emoji pictures dropped: one arriving after is not kept.
     gone: HashSet<String>,
+    /// How many times in a row each picture could not be had, for how long to wait.
+    tries: HashMap<String, u32>,
+    /// When the first picture waiting to be asked for again is due.
+    next_retry: Option<Instant>,
     /// Bumped whenever a picture is gained or dropped, for whoever decodes them.
     pub revision: u64,
 }
@@ -70,6 +90,37 @@ impl Avatars {
             Some(Picture::Held(bytes)) => Some(bytes),
             _ => None,
         }
+    }
+
+    /// Whether the picture at a URL could not be had (it may be asked for again later).
+    pub fn failed(&self, url: &str) -> bool {
+        matches!(self.known.get(url), Some(Picture::Missing { .. }))
+    }
+
+    /// Whether a URL is one of the servers' emoji (as opposed to a person's or a server's
+    /// picture).
+    pub fn is_emoji(&self, url: &str) -> bool {
+        self.emoji.contains(url)
+    }
+
+    /// When a picture that could not be had is next to be asked for, if one is.
+    pub fn next_retry(&self) -> Option<Instant> {
+        self.next_retry
+    }
+
+    /// Notes that the picture at `url` could not be had: asked for again after a while,
+    /// unless `for_good`.
+    fn missed(&mut self, url: &str, for_good: bool) {
+        let retry = (!for_good).then(|| {
+            let tries = self.tries.entry(url.to_string()).or_default();
+            *tries += 1;
+            Instant::now() + retry_after(*tries - 1)
+        });
+        if let Some(at) = retry {
+            self.next_retry = Some(self.next_retry.map_or(at, |next| next.min(at)));
+        }
+        self.known
+            .insert(url.to_string(), Picture::Missing { retry });
     }
 
     /// Every picture held: its URL and its bytes.
@@ -213,6 +264,45 @@ impl Session {
         self.fetch_pictures();
     }
 
+    /// Asks again for the pictures that could not be had and whose wait is over. Cheap when
+    /// none is due: called before every frame (`State::tick`).
+    pub fn retry_pictures(&mut self) {
+        let now = Instant::now();
+        if self.avatars.next_retry.is_none_or(|at| at > now) {
+            return;
+        }
+        let mut next: Option<Instant> = None;
+        let mut due = Vec::new();
+        for (url, picture) in &self.avatars.known {
+            if let Picture::Missing { retry: Some(at) } = picture {
+                if *at <= now {
+                    due.push(url.clone());
+                } else {
+                    next = Some(next.map_or(*at, |n| n.min(*at)));
+                }
+            }
+        }
+        self.avatars.next_retry = next;
+        for url in due {
+            self.avatars.known.insert(url.clone(), Picture::Wanted);
+            self.avatars.queue.push_back(url);
+        }
+        self.fetch_pictures();
+    }
+
+    /// The bytes held for `url` would not decode: they are let go, with the file they were
+    /// kept in, and fetched again after a while, as a failed fetch is.
+    pub fn picture_failed(&mut self, url: &str) {
+        if !matches!(self.avatars.known.get(url), Some(Picture::Held(_))) {
+            return;
+        }
+        if let Some(file) = kept_at(&self.avatars_dir(), url) {
+            let _ = std::fs::remove_file(file);
+        }
+        self.avatars.missed(url, false);
+        self.avatars.revision += 1;
+    }
+
     fn fetch_pictures(&mut self) {
         let Some(app) = self.client() else { return };
         while self.avatars.in_flight < AT_ONCE {
@@ -276,10 +366,14 @@ impl Session {
                         self.avatars
                             .known
                             .insert(url.clone(), Picture::Held(Arc::clone(bytes)));
+                        self.avatars.tries.remove(url);
                         self.avatars.revision += 1;
                     }
-                    Err(_) => {
-                        self.avatars.known.insert(url.clone(), Picture::Missing);
+                    // The instance has nothing there: not asked again. Anything else (no
+                    // answer, a busy instance) is asked again after a while.
+                    Err(failure) => {
+                        self.avatars.missed(url, failure.code == "NOT_FOUND");
+                        self.avatars.revision += 1;
                     }
                 }
                 self.fetch_pictures();

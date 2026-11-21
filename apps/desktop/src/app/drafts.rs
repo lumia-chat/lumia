@@ -101,8 +101,16 @@ impl State {
         self.draft_seen.clear();
         self.forget_typed();
         self.replies.replying = None;
-        self.replies.mention = None;
+        self.draft_replaced();
         self.keep_draft();
+    }
+
+    /// The draft's words were replaced by something other than typing (a send, a kept draft
+    /// read in, the field emptied): the @ and `:` lists close, so no row drawn for the words
+    /// before is left to complete against these. The next key opens them again.
+    pub(super) fn draft_replaced(&mut self) {
+        self.replies.mention = None;
+        self.replies.colon = None;
     }
 
     /// The composer's words were handed to a send that answers later, under `ticket`: they
@@ -155,6 +163,7 @@ impl State {
                 self.draft.replace_text(after.clone());
                 self.draft.set_caret(after.len());
                 self.replies.replying = None;
+                self.draft_replaced();
                 self.keep_draft();
             }
             self.sent_now = true;
@@ -211,6 +220,7 @@ impl State {
         self.drafts = Drafts::default();
         self.draft.clear();
         self.draft_seen.clear();
+        self.draft_replaced();
     }
 
     /// Looks at the composer: puts a conversation's kept draft in it when another comes
@@ -235,6 +245,7 @@ impl State {
                 if self.draft.text != kept.0 {
                     self.draft.replace_text(kept.0.clone());
                     self.draft.set_caret(kept.0.len());
+                    self.draft_replaced();
                 }
                 self.replies.replying.clone_from(&kept.1);
             }

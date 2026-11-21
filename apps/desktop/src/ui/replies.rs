@@ -243,16 +243,22 @@ pub fn reactions(s: &State, entry: &Entry, ty: &t::MessageType, look: Look) -> E
             Some(held) => reacted_words(s, reaction, &format!(":{}:", held.name)),
             None => reacted_words(s, reaction, &reaction.reaction),
         };
-        let face = match (custom, held) {
-            (false, _) => text(reaction.reaction.clone()).font(ty.reaction),
-            (true, Some(held)) => super::emoji::picture_tall(s, held, t::REACTION_EMOJI, look),
-            (true, None) => text(reaction.reaction.clone())
+        // A held emoji whose picture could not be had says its name now, as a removed one
+        // says the name it was left with.
+        let name_face = |name: String| {
+            text(name)
                 .font(t::TEXT_REACTION_NAME)
                 .color(if reaction.me {
                     c.accent_ink
                 } else {
                     c.ink_body
-                }),
+                })
+        };
+        let face = match (custom, held) {
+            (false, _) => text(reaction.reaction.clone()).font(ty.reaction),
+            (true, Some(held)) => super::emoji::picture_tall(s, held, t::REACTION_EMOJI, look)
+                .unwrap_or_else(|| name_face(format!(":{}:", held.name))),
+            (true, None) => name_face(reaction.reaction.clone()),
         };
         let mut chip = chip_with(face, reaction.count, reaction.me, ty, look)
             .key(format!("reaction-{n}"))

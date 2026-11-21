@@ -133,6 +133,12 @@ pub enum Update {
         channel_id: String,
         page: Result<(Vec<Entry>, bool), Failure>,
     },
+    /// The pages of a channel's history held from the instance, read again from it
+    /// ([`Session::read_history_again`]): what they hold now, oldest first.
+    HistoryRead {
+        channel_id: String,
+        page: Result<Vec<Entry>, Failure>,
+    },
     Gateway(AppEvent),
     SignedOut,
     Dm(dms::DmUpdate),
@@ -256,6 +262,8 @@ struct Reach {
     remote_done: bool,
     /// A page from the instance is on its way.
     loading: bool,
+    /// The pages already held are being read again from the instance.
+    rereading: bool,
     /// The pages the instance gave, oldest first: what lies above the local store.
     history: Vec<Entry>,
 }
@@ -334,16 +342,17 @@ impl MemberFetches {
     }
 }
 
-/// Where finished work is posted from runtime threads.
+/// Where finished work is posted from runtime threads, each update under the
+/// [`Session::generation`] its work was started in.
 #[derive(Clone)]
 struct Mailbox {
-    sender: Sender<Update>,
+    sender: Sender<(u64, Update)>,
     wake: Arc<Mutex<Option<Wake>>>,
 }
 
 impl Mailbox {
-    fn post(&self, update: Update) {
-        if self.sender.send(update).is_ok() {
+    fn post(&self, generation: u64, update: Update) {
+        if self.sender.send((generation, update)).is_ok() {
             let wake = self
                 .wake
                 .lock()
@@ -359,7 +368,14 @@ impl Mailbox {
 pub struct Session {
     runtime: tokio::runtime::Runtime,
     mailbox: Mailbox,
-    updates: Receiver<Update>,
+    updates: Receiver<(u64, Update)>,
+    /// Which account this session is for, as a count: bumped whenever what it holds of one
+    /// is forgotten (signing out, another instance opened, this computer removed), each of
+    /// which stops the gateway loop, whose events are stamped as any work's. Work
+    /// started for an account is applied only while it is still this one's, so an answer
+    /// that arrives after a sign-out or an instance switch (a mutation's whole snapshot, a
+    /// page, a picture) changes nothing ([`Session::next_update`]).
+    generation: u64,
     data_dir: PathBuf,
     app: Option<Arc<App>>,
     /// Channels the gateway loop has been asked for.
@@ -467,6 +483,7 @@ impl Session {
                 wake: Arc::default(),
             },
             updates,
+            generation: 0,
             data_dir: data_dir.to_path_buf(),
             app: None,
             subscribed: HashSet::new(),
@@ -519,8 +536,9 @@ impl Session {
 
     /// Runs `work` on the session's runtime and queues what it returns.
     pub(crate) fn task(&self, work: impl Future<Output = Update> + Send + 'static) {
-        let mailbox = self.mailbox.clone();
-        self.runtime.spawn(async move { mailbox.post(work.await) });
+        let (mailbox, generation) = (self.mailbox.clone(), self.generation);
+        self.runtime
+            .spawn(async move { mailbox.post(generation, work.await) });
     }
 
     /// [`Session::task`] for a call whose future is not `Send`: the core's identity and
@@ -530,10 +548,10 @@ impl Session {
         &self,
         make: impl FnOnce() -> F + Send + 'static,
     ) {
-        let mailbox = self.mailbox.clone();
+        let (mailbox, generation) = (self.mailbox.clone(), self.generation);
         let runtime = self.runtime.handle().clone();
         self.runtime
-            .spawn_blocking(move || mailbox.post(runtime.block_on(make())));
+            .spawn_blocking(move || mailbox.post(generation, runtime.block_on(make())));
     }
 
     /// The open instance's client, for a call a submodule makes.
@@ -642,6 +660,8 @@ impl Session {
     }
 
     fn forget_account(&mut self) {
+        // What is still on its way was asked for by the account being forgotten.
+        self.generation += 1;
         self.snapshot = None;
         self.connection = Connection::Idle;
         self.people.clear();
@@ -768,8 +788,9 @@ impl Session {
             }
             return;
         }
-        let mailbox = self.mailbox.clone();
-        let sink: app::EventSink = Arc::new(move |event| mailbox.post(Update::Gateway(event)));
+        let (mailbox, generation) = (self.mailbox.clone(), self.generation);
+        let sink: app::EventSink =
+            Arc::new(move |event| mailbox.post(generation, Update::Gateway(event)));
         // `App::start` spawns the loop on the runtime it is called from.
         let _inside = self.runtime.enter();
         match app.start(channels, sink) {
@@ -1014,6 +1035,58 @@ impl Session {
     /// Whether a page of older messages is being fetched from the instance.
     pub fn loading_older(&self) -> bool {
         self.reach.loading
+    }
+
+    /// The pages of the open channel's history the instance gave, oldest first: what lies
+    /// above what the core keeps.
+    pub fn held_history(&self) -> &[Entry] {
+        &self.reach.history
+    }
+
+    /// Whether the pages of history held from the instance are being read again from it.
+    pub fn rereading_history(&self) -> bool {
+        self.reach.rereading
+    }
+
+    /// Reads again from the instance every page of the open channel's history it gave,
+    /// back to the oldest held ([`Update::HistoryRead`]). The core keeps none of them
+    /// (`App::older_messages`), so it cannot rename their reactions when a server's emoji
+    /// change: the instance names a reaction from its emoji as it is now, and a page read
+    /// again says so. Nothing when none is held.
+    pub(crate) fn read_history_again(&mut self) {
+        let (Some(Conversation::Channel(channel)), Some(app)) =
+            (self.conversation.clone(), self.client())
+        else {
+            return;
+        };
+        let (Some(oldest), Some(newest)) = (self.reach.history.first(), self.reach.history.last())
+        else {
+            return;
+        };
+        let (oldest, mut below) = (oldest.seq, newest.seq + 1);
+        self.reach.rereading = true;
+        self.task(async move {
+            let mut found: Vec<Entry> = Vec::new();
+            let page = loop {
+                match app.older_messages(&channel, below, MESSAGE_PAGE).await {
+                    Ok((rows, more)) => {
+                        let first = rows.first().map(|m| m.seq);
+                        let mut these: Vec<Entry> = rows.into_iter().map(Entry::from).collect();
+                        these.append(&mut found);
+                        found = these;
+                        match first {
+                            Some(seq) if seq > oldest && more => below = seq,
+                            _ => break Ok(found),
+                        }
+                    }
+                    Err(error) => break Err(Failure::from(error)),
+                }
+            };
+            Update::HistoryRead {
+                channel_id: channel,
+                page,
+            }
+        });
     }
 
     /// Whether the open conversation is known to begin at its first message on screen.
@@ -1374,11 +1447,36 @@ impl Session {
 
     /// Applies everything that finished since the last call and returns it in order.
     pub fn poll(&mut self) -> Vec<Update> {
-        let updates: Vec<Update> = self.updates.try_iter().collect();
-        for update in &updates {
-            self.apply(update);
+        std::iter::from_fn(|| self.next_update()).collect()
+    }
+
+    /// Applies the next update that finished, and returns it; none when nothing is waiting.
+    /// One started for an account this session no longer holds is passed over
+    /// ([`Session::generation`]). One at a time, so an update that makes the window forget
+    /// the account (this computer removed) is acted on before the next is looked at.
+    pub fn next_update(&mut self) -> Option<Update> {
+        loop {
+            let (generation, update) = self.updates.try_recv().ok()?;
+            if self.apply_from(generation, &update) {
+                return Some(update);
+            }
         }
-        updates
+    }
+
+    /// Which account the work started now is for ([`Session::generation`]).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Applies an update that work started under `generation` returned, when that is this
+    /// session's still; true when it was applied. Public so a test can stand in for the
+    /// instance as the queue does.
+    pub fn apply_from(&mut self, generation: u64, update: &Update) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.apply(update);
+        true
     }
 
     /// Applies one update. Public so a test can stand in for the instance.
@@ -1486,6 +1584,25 @@ impl Session {
                         self.last_error = Some(failure.message.clone());
                         self.seek();
                     }
+                }
+            }
+            Update::HistoryRead { channel_id, page } => {
+                if self.channel() != Some(channel_id.as_str()) {
+                    return;
+                }
+                self.reach.rereading = false;
+                // Each held message as it is now; one the instance no longer gives (deleted
+                // since, with deleted messages hidden) stays as it was until the channel is
+                // opened again. A page that could not be read leaves them as they were.
+                if let Ok(fresh) = page {
+                    let fresh: HashMap<&str, &Entry> =
+                        fresh.iter().map(|e| (e.id.as_str(), e)).collect();
+                    for held in &mut self.reach.history {
+                        if let Some(now) = fresh.get(held.id.as_str()) {
+                            held.clone_from(now);
+                        }
+                    }
+                    self.read_entries();
                 }
             }
             Update::Gateway(event) => self.on_gateway(event),

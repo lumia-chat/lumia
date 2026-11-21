@@ -305,11 +305,11 @@ impl Session {
         &self,
         make: impl FnOnce() -> F + Send + 'static,
     ) {
-        let mailbox = self.mailbox.clone();
+        let (mailbox, generation) = (self.mailbox.clone(), self.generation);
         let runtime = self.runtime.handle().clone();
         self.runtime.spawn_blocking(move || {
             for update in runtime.block_on(make()) {
-                mailbox.post(update);
+                mailbox.post(generation, update);
             }
         });
     }

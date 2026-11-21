@@ -489,12 +489,19 @@ impl State {
             .collect()
     }
 
-    /// Picks row `index` of the @ list: the `@word` becomes the handle and a space.
+    /// Picks row `index` of the @ list: the `@word` becomes the handle and a space. As the `:`
+    /// list's pick (`pick_colon`), the `@word` is found again in the draft as it is now, and
+    /// a row drawn for other words completes nothing.
     pub fn pick_mention(&mut self, index: usize) {
-        let choices = self.mention_choices();
-        let (Some(query), Some(choice)) =
-            (self.replies.mention.take(), choices.into_iter().nth(index))
-        else {
+        let drawn = self.replies.mention.as_ref().map(|q| q.query.clone());
+        self.follow_mention();
+        let Some(query) = self.replies.mention.clone() else {
+            return;
+        };
+        if drawn.as_deref() != Some(query.query.as_str()) {
+            return;
+        }
+        let Some(choice) = self.mention_choices().into_iter().nth(index) else {
             return;
         };
         let handle = match choice {
@@ -503,6 +510,10 @@ impl State {
         };
         let mut text = self.draft.text.clone();
         let words = format!("@{handle} ");
+        if text.get(query.start..query.end).is_none() {
+            return;
+        }
+        self.replies.mention = None;
         text.replace_range(query.start..query.end, &words);
         self.draft.replace_text(text);
         self.draft.set_caret(query.start + words.len());

@@ -17,16 +17,18 @@
 //! plays an animated GIF wherever it draws one as an element's pixels (the picker, the `:`
 //! list, a chip, settings), and draws the first frame of one set in text (a body; see
 //! `ui::body`). Under the system's Reduce Motion the window draws an animated one's first
-//! frame everywhere, which Rune does not hand an app: the decoded first frame is made here
-//! from the GIF itself, once ([`Stills`]).
+//! frame everywhere, which Rune does not hand an app: the first frame is decoded from the
+//! GIF itself (`pictures::first_frame`), and the animation is then never decoded. Nothing is
+//! decoded until something draws it ([`State::emoji_face`]), and a picture that could not be
+//! fetched or would not decode is drawn as its `:name:` until it is fetched again.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lumia_client::app::{EmojiRefSummary, EmojiSummary, ServerSummary};
-use rune::{FileDialogOptions, Image, Key, KeyEvent, TextEdit, Tx};
+use rune::{FileDialogOptions, Image, Key, KeyEvent, Pixels, TextEdit, Tx};
 
+use super::pictures::EmojiFace;
 use super::{Popover, State};
 use crate::session::Failure;
 use crate::session::emoji::EmojiUpdate;
@@ -43,7 +45,10 @@ const LIST_ROWS: usize = 8;
 /// The words a name is refused with before it is sent, and when the instance refuses it.
 pub const NAME_RULE: &str = "A name is 2 to 32 of a to z, 0 to 9 and _, with no spaces.";
 
-/// Server settings' Emoji section, its forms and its question.
+/// Server settings' Emoji section, its forms and its question. Each is the server's whose
+/// settings it was opened in, and goes when they close (`close_server_settings`): a picture
+/// chosen in one server's settings is never uploaded to another's, and an answer is taken
+/// only by the form whose call it answers (its `request`).
 #[derive(Debug, Default)]
 pub struct EmojiForms {
     /// The upload form, once a picture is chosen.
@@ -56,14 +61,19 @@ pub struct EmojiForms {
     /// Why the system's file dialog did not open, or a file could not be read before a form
     /// was there to say so.
     pub error: String,
-    /// The file asked to be read for the form, until it is: an answer for another is not
-    /// taken.
-    reading: Option<PathBuf>,
+    /// The file asked to be read for the form, and the server whose settings asked, until it
+    /// is read: an answer for another file, or read once another server's settings are open,
+    /// is not taken.
+    reading: Option<(String, PathBuf)>,
+    /// The calls this section has made, counted: each form keeps the number of its own.
+    asked: u64,
 }
 
 /// Upload emoji's form: the picture chosen, its name to change, and why either was refused.
 #[derive(Debug)]
 pub struct Upload {
+    /// The server whose settings the picture was chosen in: the one it is uploaded to.
+    pub server_id: String,
     pub file: String,
     pub size: u64,
     pub bytes: Arc<[u8]>,
@@ -75,6 +85,8 @@ pub struct Upload {
     pub name_error: String,
     pub picture_error: String,
     pub busy: bool,
+    /// The number of the upload on its way, whose answer this form takes.
+    pub request: u64,
 }
 
 /// A row renamed in place.
@@ -86,6 +98,7 @@ pub struct Rename {
     pub name: TextEdit,
     pub error: String,
     pub busy: bool,
+    pub request: u64,
 }
 
 #[derive(Debug)]
@@ -95,6 +108,7 @@ pub struct Removing {
     pub anchor: String,
     pub error: String,
     pub busy: bool,
+    pub request: u64,
 }
 
 /// A `:name` being typed at the caret, which the `:` list completes.
@@ -196,9 +210,10 @@ pub fn count_words(server: &ServerSummary) -> String {
     format!("{} of {}", server.emoji.len(), server.emoji_limit)
 }
 
-/// Whether the server has as many as it may (or more, where its limit was lowered).
+/// Whether the server has as many as it may (or more, where its limit was lowered). A limit
+/// of 0 is one an operator may set (specs/emoji.md 5): no room, never "unlimited".
 pub fn at_limit(server: &ServerSummary) -> bool {
-    server.emoji_limit > 0 && server.emoji.len() >= server.emoji_limit as usize
+    server.emoji.len() >= server.emoji_limit as usize
 }
 
 /// "Remove :name:?" and its line.
@@ -216,85 +231,84 @@ pub fn aspect(e: &EmojiSummary) -> f32 {
     }
 }
 
-/// The first frames of animated emoji, for Reduce Motion: decoded from the GIF itself, once
-/// a picture, and handed to Rune as a still.
-#[derive(Default)]
-pub struct Stills {
-    images: HashMap<String, Option<Image>>,
-}
-
-impl std::fmt::Debug for Stills {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Stills")
-            .field("images", &self.images.len())
-            .finish()
-    }
-}
-
-/// The first frame of a GIF as straight RGBA, or none when it is not one that decodes.
-fn first_frame(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    use image::AnimationDecoder;
-    let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).ok()?;
-    let frame = decoder.into_frames().next()?.ok()?;
-    let buffer = frame.into_buffer();
-    Some((buffer.width(), buffer.height(), buffer.into_raw()))
-}
-
 impl State {
     // ---- Drawing ---------------------------------------------------------------------
 
-    /// The picture to draw for one of a server's emoji, when its bytes are held and decoded
-    /// enough to draw: under Reduce Motion an animated one's first frame.
-    pub fn emoji_image(&self, emoji: &EmojiSummary, still: bool) -> Option<&Image> {
-        if still && emoji.animated {
-            return self.stills.images.get(&emoji.image_url)?.as_ref();
+    /// What to draw for one of a server's emoji: its picture (an animated one's first frame
+    /// when `still`), nothing yet while its bytes are on their way, or its `:name:` when the
+    /// picture could not be fetched or would not decode. Asking is what decodes it
+    /// (`pictures`): one nothing draws is never decoded.
+    pub fn emoji_face(&self, emoji: &EmojiSummary, still: bool) -> EmojiFace {
+        let url = &emoji.image_url;
+        if self.session.avatars.failed(url) {
+            return EmojiFace::Name;
         }
-        self.picture_at(&emoji.image_url)
+        let bytes = self.session.avatars.bytes_of(url);
+        match self
+            .pictures
+            .emoji(url, still && emoji.animated, emoji.animated, bytes)
+        {
+            Some(Some(image)) if image.error().is_none() => EmojiFace::Picture(image),
+            Some(_) => EmojiFace::Name,
+            None => EmojiFace::Waiting,
+        }
     }
 
-    /// Makes the first frames Reduce Motion draws of the animated emoji whose pictures are
-    /// held, once each. Called before a frame, never in a view.
-    pub(super) fn sync_stills(&mut self) -> bool {
-        // One no server lists any more (removed) is let go, as its picture is.
-        let listed: std::collections::HashSet<&str> = self
-            .session
-            .servers()
-            .iter()
-            .flat_map(|s| s.emoji.iter())
-            .map(|e| e.image_url.as_str())
-            .collect();
-        self.stills
-            .images
-            .retain(|url, _| listed.contains(url.as_str()));
-        let wanted: Vec<(String, Arc<[u8]>)> = self
-            .session
-            .servers()
-            .iter()
-            .flat_map(|s| s.emoji.iter())
-            .filter(|e| e.animated && !self.stills.images.contains_key(&e.image_url))
-            .filter_map(|e| {
-                let bytes = self.session.avatars.bytes_of(&e.image_url)?;
-                Some((e.image_url.clone(), Arc::clone(bytes)))
-            })
-            .collect();
-        let made = !wanted.is_empty();
-        for (url, bytes) in wanted {
-            let image = first_frame(&bytes).map(|(w, h, rgba)| self.pictures.rgba(w, h, rgba));
-            self.stills.images.insert(url, image);
+    /// The picture to draw for one of a server's emoji, when there is one to draw (decoding,
+    /// or decoded): under Reduce Motion an animated one's first frame.
+    pub fn emoji_image(&self, emoji: &EmojiSummary, still: bool) -> Option<Image> {
+        match self.emoji_face(emoji, still) {
+            EmojiFace::Picture(image) => Some(image),
+            EmojiFace::Waiting | EmojiFace::Name => None,
         }
-        made
+    }
+
+    /// Before a frame: the first frames views asked for are made, decoded emoji nothing has
+    /// drawn lately let go, and a picture that would not decode handed back to the session to
+    /// fetch again. True when that changed what is drawn; the rows a list keeps are drawn
+    /// again for a first frame made, since they hold the room they kept for it.
+    pub(super) fn sync_emoji(&mut self) -> bool {
+        let (made, failed) = self.pictures.sync_emoji(&self.session.avatars);
+        for url in &failed {
+            self.session.picture_failed(url);
+        }
+        if made || !failed.is_empty() {
+            self.session.revision += 1;
+        }
+        made || !failed.is_empty()
+    }
+
+    /// Every emoji held decoded now, whole and as its first frame, and waited for: for a
+    /// scene drawn in one frame, which no view has asked for yet.
+    pub fn decode_emoji_now(&mut self) {
+        let emoji: Vec<EmojiSummary> = self
+            .session
+            .servers()
+            .iter()
+            .flat_map(|s| s.emoji.iter().cloned())
+            .collect();
+        for e in &emoji {
+            let _ = self.emoji_face(e, false);
+            let _ = self.emoji_face(e, true);
+        }
+        self.sync_emoji();
+        self.pictures.wait();
     }
 
     /// How a body draws a ref to `emoji_id` in `server_id`'s conversation: its picture
-    /// when this computer holds the emoji, none (its text) when it does not.
+    /// when this computer holds the emoji, none (its text) when it does not or its picture
+    /// could not be had. A picture in text is drawn as its first frame (`ui::body`), so only
+    /// that is decoded of an animated one.
     pub fn body_picture(&self, server_id: &str, emoji_id: &str) -> Option<EmojiPicture> {
         let e = self.session.emoji_in(server_id, emoji_id)?;
-        Some(EmojiPicture {
+        let pixels = match self.emoji_face(e, true) {
+            EmojiFace::Picture(image) => image.pixels().clone(),
             // Its room is kept until it has decoded.
-            pixels: self
-                .picture_at(&e.image_url)
-                .map(|image| image.pixels().clone())
-                .unwrap_or_default(),
+            EmojiFace::Waiting => Pixels::default(),
+            EmojiFace::Name => return None,
+        };
+        Some(EmojiPicture {
+            pixels,
             aspect: aspect(e),
             name: e.name.clone(),
         })
@@ -454,17 +468,29 @@ impl State {
         };
     }
 
-    /// Picks row `index` of the `:` list: `:name` becomes `:name: `.
+    /// Picks row `index` of the `:` list: `:name` becomes `:name: `. The `:name` is found
+    /// again in the draft as it is now, at its caret, so a row drawn for words a send or a
+    /// kept draft has since replaced completes nothing; it is the row drawn only while what
+    /// follows the `:` is what it was drawn for.
     pub fn pick_colon(&mut self, index: usize) {
-        let choices = self.colon_choices();
-        let (Some(query), Some(choice)) =
-            (self.replies.colon.take(), choices.into_iter().nth(index))
-        else {
+        let drawn = self.replies.colon.as_ref().map(|q| q.query.clone());
+        self.follow_colon();
+        let Some(query) = self.replies.colon.clone() else {
+            return;
+        };
+        if drawn.as_deref() != Some(query.query.as_str()) {
+            return;
+        }
+        let Some(choice) = self.colon_choices().into_iter().nth(index) else {
             return;
         };
         let mut text = self.draft.text.clone();
         let words = format!(":{}: ", choice.name);
+        if text.get(query.start..query.end).is_none() {
+            return;
+        }
         text.replace_range(query.start..query.end, &words);
+        self.replies.colon = None;
         self.draft.replace_text(text);
         self.draft.set_caret(query.start + words.len());
     }
@@ -508,22 +534,35 @@ impl State {
         if self.emoji.upload.as_ref().is_some_and(|u| u.busy) {
             return;
         }
+        let Some(server_id) = self.emoji_settings_server().map(|s| s.server_id) else {
+            return;
+        };
         let options = FileDialogOptions {
             title: "Choose a picture".into(),
             ..FileDialogOptions::default()
         }
         .filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif"]);
-        tx.open_file(options, |s: &mut State, answer, _| match answer {
-            Ok(Some(path)) => s.read_emoji_file(&path),
-            Ok(None) => {}
-            Err(error) => s.emoji.error = format!("The file dialog could not open: {error}"),
+        // Chosen while the dialog was up for this server's settings: once the person is
+        // elsewhere, the choice is nobody's.
+        tx.open_file(options, move |s: &mut State, answer, _| {
+            if s.emoji_settings_server().map(|s| s.server_id) != Some(server_id) {
+                return;
+            }
+            match answer {
+                Ok(Some(path)) => s.read_emoji_file(&path),
+                Ok(None) => {}
+                Err(error) => s.emoji.error = format!("The file dialog could not open: {error}"),
+            }
         });
     }
 
-    /// Reads the file at `path` for the upload form.
+    /// Reads the file at `path` for the upload form of the server whose settings are open.
     pub fn read_emoji_file(&mut self, path: &Path) {
+        let Some(server_id) = self.emoji_settings_server().map(|s| s.server_id) else {
+            return;
+        };
         self.emoji.error.clear();
-        self.emoji.reading = Some(path.to_path_buf());
+        self.emoji.reading = Some((server_id, path.to_path_buf()));
         self.session.read_emoji_file(path);
     }
 
@@ -534,18 +573,24 @@ impl State {
         path: &Path,
         result: &Result<(Arc<[u8]>, &'static str), Failure>,
     ) {
-        if self.emoji.reading.as_deref() != Some(path) {
+        let Some((server_id, asked)) = self.emoji.reading.take() else {
+            return;
+        };
+        if asked != path {
+            // Another file's answer is not this one's.
+            self.emoji.reading = Some((server_id, asked));
             return;
         }
-        self.emoji.reading = None;
+        // Read once another server's settings are open: nobody's.
+        let here = self.emoji_settings_server();
+        if here.as_ref().map(|s| s.server_id.as_str()) != Some(server_id.as_str()) {
+            return;
+        }
         let file = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let server = self
-            .emoji_settings_server()
-            .map(|s| s.name)
-            .unwrap_or_default();
+        let server = here.map(|s| s.name).unwrap_or_default();
         let (bytes, media_type, picture_error) = match result {
             Ok((bytes, media_type)) => (Arc::clone(bytes), *media_type, String::new()),
             Err(failure) => (Arc::from(&[][..]), "", refusal(&server, "", failure).1),
@@ -555,6 +600,7 @@ impl State {
         let mut field = TextEdit::new(&name);
         field.set_caret(name.len());
         self.emoji.upload = Some(Upload {
+            server_id,
             file,
             size: bytes.len() as u64,
             bytes,
@@ -564,6 +610,7 @@ impl State {
             name_error: String::new(),
             picture_error,
             busy: false,
+            request: 0,
         });
     }
 
@@ -577,10 +624,12 @@ impl State {
         let Some(server) = self.emoji_settings_server() else {
             return;
         };
+        self.emoji.asked += 1;
+        let request = self.emoji.asked;
         let Some(upload) = &mut self.emoji.upload else {
             return;
         };
-        if upload.busy || upload.bytes.is_empty() {
+        if upload.busy || upload.bytes.is_empty() || upload.server_id != server.server_id {
             return;
         }
         let name = upload.name.text.trim().to_lowercase();
@@ -589,11 +638,12 @@ impl State {
             return;
         }
         upload.busy = true;
+        upload.request = request;
         upload.name_error.clear();
         upload.picture_error.clear();
         let (bytes, media_type) = (Arc::clone(&upload.bytes), upload.media_type);
         self.session
-            .upload_emoji(&server.server_id, &name, bytes, media_type);
+            .upload_emoji(&server.server_id, &name, bytes, media_type, request);
     }
 
     pub fn cancel_upload(&mut self) {
@@ -617,6 +667,7 @@ impl State {
             name,
             error: String::new(),
             busy: false,
+            request: 0,
         });
     }
 
@@ -624,6 +675,8 @@ impl State {
         let Some(server) = self.emoji_settings_server() else {
             return;
         };
+        self.emoji.asked += 1;
+        let request = self.emoji.asked;
         let Some(form) = &mut self.emoji.renaming else {
             return;
         };
@@ -640,10 +693,11 @@ impl State {
             return;
         }
         form.busy = true;
+        form.request = request;
         form.error.clear();
         let emoji_id = form.emoji_id.clone();
         self.session
-            .rename_emoji(&server.server_id, &emoji_id, &name);
+            .rename_emoji(&server.server_id, &emoji_id, &name, request);
     }
 
     pub fn cancel_rename(&mut self) {
@@ -683,6 +737,7 @@ impl State {
             anchor: anchor.to_string(),
             error: String::new(),
             busy: false,
+            request: 0,
         });
         self.open_popover(Popover::RemoveEmoji);
     }
@@ -691,6 +746,8 @@ impl State {
         let Some(server) = self.emoji_settings_server() else {
             return;
         };
+        self.emoji.asked += 1;
+        let request = self.emoji.asked;
         let Some(form) = &mut self.emoji.removing else {
             return;
         };
@@ -698,9 +755,11 @@ impl State {
             return;
         }
         form.busy = true;
+        form.request = request;
         form.error.clear();
         let emoji_id = form.emoji_id.clone();
-        self.session.remove_emoji(&server.server_id, &emoji_id);
+        self.session
+            .remove_emoji(&server.server_id, &emoji_id, request);
     }
 
     /// What an emoji call came to, for the form that asked.
@@ -713,9 +772,18 @@ impl State {
         };
         match update {
             EmojiUpdate::Read { path, result } => self.emoji_file_read(path, result),
-            EmojiUpdate::Uploaded { server_id, result } => {
+            EmojiUpdate::Uploaded {
+                server_id,
+                request,
+                result,
+            } => {
                 let name = server_name(self, server_id);
-                let Some(upload) = &mut self.emoji.upload else {
+                let Some(upload) = self
+                    .emoji
+                    .upload
+                    .as_mut()
+                    .filter(|u| u.request == *request && u.server_id == *server_id)
+                else {
                     return;
                 };
                 upload.busy = false;
@@ -735,6 +803,7 @@ impl State {
             EmojiUpdate::Renamed {
                 server_id,
                 emoji_id,
+                request,
                 result,
             } => {
                 let name = server_name(self, server_id);
@@ -742,7 +811,7 @@ impl State {
                     .emoji
                     .renaming
                     .as_mut()
-                    .filter(|f| f.emoji_id == *emoji_id)
+                    .filter(|f| f.emoji_id == *emoji_id && f.request == *request)
                 else {
                     return;
                 };
@@ -758,6 +827,7 @@ impl State {
             EmojiUpdate::Removed {
                 server_id,
                 emoji_id,
+                request,
                 result,
             } => {
                 let name = server_name(self, server_id);
@@ -765,7 +835,7 @@ impl State {
                     .emoji
                     .removing
                     .as_mut()
-                    .filter(|f| f.emoji_id == *emoji_id)
+                    .filter(|f| f.emoji_id == *emoji_id && f.request == *request)
                 else {
                     return;
                 };
@@ -783,6 +853,19 @@ impl State {
         }
     }
 
+    /// The Emoji section's forms and question go: its server's settings closed or opened
+    /// afresh, or the account left. What is on its way for them is taken by no form.
+    pub(crate) fn forget_emoji_forms(&mut self) {
+        let asked = self.emoji.asked;
+        self.emoji = EmojiForms {
+            asked,
+            ..EmojiForms::default()
+        };
+        if self.popover == Some(Popover::RemoveEmoji) {
+            self.close_popover();
+        }
+    }
+
     /// After anything arrived: a rename or a question about an emoji removed elsewhere goes,
     /// and the forms go when the section is no longer this account's.
     pub(super) fn follow_emoji(&mut self) {
@@ -791,10 +874,7 @@ impl State {
                 || self.emoji.renaming.is_some()
                 || self.emoji.removing.is_some()
             {
-                self.emoji = EmojiForms::default();
-                if self.popover == Some(Popover::RemoveEmoji) {
-                    self.close_popover();
-                }
+                self.forget_emoji_forms();
             }
             return;
         };
@@ -905,8 +985,86 @@ mod tests {
         );
     }
 
+    /// Acme's morning in #general (`scenes::emoji`), over an instance nothing answers for.
+    fn morning() -> State {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("lumia-emoji-unit-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut state = State::new(dir);
+        state.sign_in.instance.replace_text("http://127.0.0.1:9");
+        state.connect();
+        crate::scenes::emoji::messages(&mut state);
+        state
+    }
+
+    fn typed_in(state: &mut State, text: &str) {
+        state.draft.replace_text(text);
+        state.draft.set_caret(text.len());
+        state.follow_mention();
+        state.follow_colon();
+    }
+
+    #[test]
+    fn a_send_leaves_no_list_to_complete_against_the_emptied_draft() {
+        // Typed, the `:` list shows; Send (not Return) empties the draft as a send does.
+        let mut state = morning();
+        typed_in(&mut state, "Shipped the importer :par");
+        assert!(!state.colon_choices().is_empty());
+        state.words_sent();
+        assert!(
+            state.colon_choices().is_empty(),
+            "the list goes with the words"
+        );
+        // A press on a row drawn before the send changes nothing.
+        state.pick_colon(0);
+        assert_eq!(state.draft.text, "");
+        // The @ list is held to the same.
+        let mut state = morning();
+        typed_in(&mut state, "Thanks @ma");
+        assert!(!state.mention_choices().is_empty());
+        state.words_sent();
+        state.pick_mention(0);
+        assert_eq!(state.draft.text, "");
+    }
+
+    #[test]
+    fn a_pick_completes_what_the_draft_holds_now() {
+        // The draft changed under a list drawn for what it held before (a kept draft read
+        // in, a send that answered): a pick completes the word at the caret now, or nothing.
+        let mut state = morning();
+        typed_in(&mut state, "Shipped the importer :par");
+        state.draft.replace_text(":par");
+        state.draft.set_caret(4);
+        state.pick_colon(0);
+        assert_eq!(state.draft.text, ":parrotwave: ");
+        let mut state = morning();
+        typed_in(&mut state, "Shipped the importer :par");
+        state.draft.replace_text("hi");
+        state.draft.set_caret(2);
+        state.pick_colon(0);
+        assert_eq!(state.draft.text, "hi");
+        let mut state = morning();
+        typed_in(&mut state, "a long line to thank @ma");
+        state.draft.replace_text("@ma");
+        state.draft.set_caret(3);
+        state.pick_mention(0);
+        assert!(state.draft.text.starts_with('@') && state.draft.text.ends_with(' '));
+    }
+
+    #[test]
+    fn a_limit_of_none_is_full() {
+        let mut state = morning();
+        crate::scenes::emoji::with_emoji(&mut state, 0, 0);
+        let acme = state.session.server(crate::scenes::roles::ACME).cloned();
+        let acme = acme.unwrap_or_default();
+        assert_eq!(count_words(&acme), "0 of 0");
+        assert!(at_limit(&acme), "no room is no room, not unlimited");
+    }
+
     #[test]
     fn the_still_of_an_animated_emoji_is_its_first_frame() {
+        use super::super::pictures::first_frame;
         let gif = include_bytes!("../scenes/emoji/partyparrot.gif");
         let (w, h, rgba) = first_frame(gif).unwrap_or_default();
         assert_eq!((w, h, rgba.len()), (128, 128, 128 * 128 * 4));

@@ -129,8 +129,20 @@ pub fn acme_emoji(n: usize) -> Vec<EmojiSummary> {
 }
 
 /// Acme, seen by Ryan, with its first `n` emoji and their pictures held, `limit` its
-/// limit.
+/// limit, and every one decoded, as a scene drawn in one frame needs.
 pub fn with_emoji(state: &mut State, n: usize, limit: u32) {
+    hold(state, n, limit);
+    // Decoded when drawn, and a scene is drawn in one frame: decoded now.
+    state.decode_emoji_now();
+}
+
+/// Acme's twelve held, their pictures fetched, and none of them drawn yet: what decodes
+/// them is something drawing them (`app::pictures`).
+pub fn held_not_drawn(state: &mut State) {
+    hold(state, 12, 50);
+}
+
+fn hold(state: &mut State, n: usize, limit: u32) {
     acme(state, &Acme::seen_by("ryan"));
     if let Some(server) = state
         .session
@@ -148,6 +160,9 @@ pub fn with_emoji(state: &mut State, n: usize, limit: u32) {
             bytes: Ok(Arc::from(e.bytes)),
         }));
     }
+    // Listed as emoji now that their bytes are held, so they are fetched no more and decoded
+    // only as drawn, as the snapshot's emoji are.
+    state.session.want_pictures();
     state.tick(chrono::Utc::now().timestamp_micros());
     state.pictures.wait();
 }
@@ -360,9 +375,11 @@ pub fn upload_taken(state: &mut State) {
     if let Some(upload) = &mut state.emoji.upload {
         upload.name.replace_text("partyparrot");
         upload.busy = true;
+        upload.request = 1;
     }
     state.receive(&Update::Emoji(EmojiUpdate::Uploaded {
         server_id: ACME.into(),
+        request: 1,
         result: Err(Failure {
             code: "ALREADY_EXISTS".into(),
             message: "taken".into(),
@@ -378,9 +395,11 @@ pub fn upload_too_large(state: &mut State) {
     upload(state);
     if let Some(upload) = &mut state.emoji.upload {
         upload.busy = true;
+        upload.request = 1;
     }
     state.receive(&Update::Emoji(EmojiUpdate::Uploaded {
         server_id: ACME.into(),
+        request: 1,
         result: Err(Failure {
             code: "INVALID_ARGUMENT".into(),
             message: "too large".into(),
@@ -414,10 +433,12 @@ pub fn rename_taken(state: &mut State) {
     rename_wave(state, "partyparrot");
     if let Some(form) = &mut state.emoji.renaming {
         form.busy = true;
+        form.request = 1;
     }
     state.receive(&Update::Emoji(EmojiUpdate::Renamed {
         server_id: ACME.into(),
         emoji_id: emoji_id("e9"),
+        request: 1,
         result: Err(Failure {
             code: "ALREADY_EXISTS".into(),
             message: "taken".into(),

@@ -24,7 +24,7 @@ use lumia_client::app::EmojiSummary;
 use lumia_shell::app::roles::{self, Section};
 use lumia_shell::app::{HomeView, Place, Popover, Route, State};
 use lumia_shell::session::Connection;
-use rune::TextEdit;
+use rune::{Env, Runtime, TextEdit};
 
 const PASSWORD: &str = "correct-horse-battery-staple";
 
@@ -46,6 +46,16 @@ fn wait(state: &mut State, what: &str, done: impl Fn(&State) -> bool) {
         state.drain();
         state.tick(chrono::Utc::now().timestamp_micros());
         std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A few frames of a runtime, with what the session finished drained between them.
+fn frames(rt: &mut Runtime<State>) {
+    for _ in 0..10 {
+        rt.update(|s, _| {
+            s.drain();
+        });
+        rt.frame(1.0 / 60.0);
     }
 }
 
@@ -226,10 +236,8 @@ fn a_servers_emoji_are_managed_and_used_on_two_shells() {
     });
     let held = named(&member, &server_id, "party").unwrap();
     wait(&mut member, "the pictures decoded", |s| {
-        s.emoji_image(&held, false)
-            .is_some_and(rune::Image::is_ready)
-            && s.emoji_image(&held, true)
-                .is_some_and(rune::Image::is_ready)
+        s.emoji_image(&held, false).is_some_and(|i| i.is_ready())
+            && s.emoji_image(&held, true).is_some_and(|i| i.is_ready())
     });
 
     // ---- A message with one in its words and one in code, and a reaction -------------------
@@ -297,6 +305,43 @@ fn a_servers_emoji_are_managed_and_used_on_two_shells() {
     assert!(owner.composer_picker_open(), "it stays open for more");
     owner.close_popover();
     owner.draft.clear();
+
+    // ---- Send pressed with the `:` list open: the list goes with the words -----------------
+    // Through the window's own Send, which a windowless state cannot press: the owner's
+    // state in a runtime for it, and back.
+    let spare = State::new(dir.join("spare"));
+    let mut rt = Runtime::new(
+        std::mem::replace(&mut owner, spare),
+        lumia_shell::ui::view,
+        (1180.0, 760.0),
+        Env::new(false, 2.0),
+    );
+    rt.update(|s, _| {
+        s.draft.replace_text("Sent with :lo");
+        s.draft.set_caret(s.draft.text.len());
+        s.follow_colon();
+    });
+    frames(&mut rt);
+    assert!(rt.find("emoji-colon-list").is_some(), "the list is open");
+    let (x, y) = rt.find("send").expect("Send");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    frames(&mut rt);
+    assert_eq!(rt.state.draft.text, "", "sent");
+    assert!(
+        rt.find("emoji-colon-list").is_none(),
+        "and the list with it"
+    );
+    // A row pressed as it was drawn before the send completes nothing (it took the app
+    // down: its range was the sent words').
+    rt.update(|s, _| s.pick_colon(0));
+    assert_eq!(rt.state.draft.text, "");
+    owner = std::mem::replace(&mut rt.state, State::new(dir.join("spare2")));
+    drop(rt);
+    wait(&mut owner, "the message sent with the list open", |s| {
+        s.session.entries.iter().any(|e| e.body == "Sent with :lo")
+    });
 
     // ---- Renamed: both draw the message and the reaction by the new name -------------------
     owner.open_server_settings();
@@ -381,6 +426,163 @@ fn a_servers_emoji_are_managed_and_used_on_two_shells() {
                 .is_some_and(|e| e.reactions.iter().all(|r| r.emoji_id != taken.1))
         },
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// History older than a member's store comes from the instance and is not kept by the core,
+/// which cannot rename its reactions: when the server's emoji change, the shell reads those
+/// pages again. An emoji renamed and removed in one burst leaves a reaction in a page the
+/// member read before, named as it was last called. Sends more than a replay's worth of
+/// messages, so it takes a while.
+#[test]
+fn history_read_from_the_instance_follows_a_removed_emoji() {
+    let Ok(instance) = std::env::var("LUMIA_DEV_INSTANCE") else {
+        eprintln!("skipped: no LUMIA_DEV_INSTANCE");
+        return;
+    };
+    const AFTER: usize = 1100;
+    let dir = std::env::temp_dir().join(format!("lumia-shell-emoji-h-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        % 100_000_000;
+
+    // ---- A server, an emoji, a message reacted to with it, and a long day after --------------
+    let mut owner = new_account(&instance, &dir.join("owner"), &format!("emohown{stamp}"));
+    owner.go_home(HomeView::AddServer);
+    owner
+        .server_forms
+        .add
+        .name
+        .replace_text(format!("Shell emoji history {stamp}"));
+    owner.create_server();
+    wait(&mut owner, "the new server on screen", |s| {
+        matches!(s.place, Place::Server(_))
+    });
+    let server_id = owner.server_id().unwrap().to_string();
+    owner.open_new_channel();
+    owner.server_forms.channel.name.replace_text("general");
+    owner.create_channel();
+    wait(&mut owner, "the new channel on screen", |s| {
+        s.session.channel().is_some()
+    });
+    let channel_id = owner.session.channel().unwrap().to_string();
+    owner.open_server_settings();
+    owner.choose_section(Section::Emoji);
+    upload(&mut owner, &fixture("logo.png"), "logo", "party");
+    wait(&mut owner, "the emoji kept", |s| {
+        s.emoji.upload.is_none() && named(s, &server_id, "party").is_some()
+    });
+    let party = named(&owner, &server_id, "party").unwrap();
+    owner.close_server_settings();
+    owner.select_channel(&channel_id);
+    let first = format!("The first word, {stamp}");
+    assert!(
+        owner
+            .session
+            .send(&first, chrono::Utc::now().timestamp_micros())
+    );
+    wait(&mut owner, "the first message", |s| {
+        s.session.entries.iter().any(|e| e.body == first)
+    });
+    let message = owner
+        .session
+        .entries
+        .iter()
+        .find(|e| e.body == first)
+        .cloned()
+        .unwrap();
+    owner.react_custom(&message.id, &party.emoji_id);
+    wait(&mut owner, "the reaction", |s| {
+        s.session
+            .entries
+            .iter()
+            .any(|e| e.id == message.id && !e.reactions.is_empty())
+    });
+    for i in 0..AFTER {
+        assert!(owner.session.send(&format!("after {i}"), 0), "send {i}");
+        if i % 50 == 49 {
+            wait(&mut owner, "a batch to land", |s| {
+                s.session.pending.is_empty()
+            });
+        }
+    }
+    wait(&mut owner, "the last batch to land", |s| {
+        s.session.pending.is_empty()
+    });
+    owner.open_invites();
+    owner.make_invite();
+    wait(&mut owner, "the invite link", |s| {
+        s.server_forms.invite.made.is_some()
+    });
+    let link = owner.server_forms.invite.made.clone().unwrap().url;
+    owner.close_popover();
+
+    // ---- A member who joins after it all reads back to it from the instance -----------------
+    let mut member = new_account(&instance, &dir.join("member"), &format!("emohmem{stamp}"));
+    member.go_home(HomeView::AddServer);
+    member.server_forms.add.invite.replace_text(&link);
+    member.look_up_invite();
+    wait(&mut member, "the invite's preview", |s| {
+        s.server_forms.add.preview.is_some()
+    });
+    member.join_invite();
+    wait(&mut member, "the joined channel's newest messages", |s| {
+        s.session.channel() == Some(channel_id.as_str()) && !s.session.entries.is_empty()
+    });
+    assert!(
+        !member.session.entries.iter().any(|e| e.id == message.id),
+        "the member's store does not reach back to the first message"
+    );
+    let mut steps = 0;
+    while !member
+        .session
+        .held_history()
+        .iter()
+        .any(|e| e.id == message.id)
+    {
+        assert!(
+            steps < 40 && !member.session.at_beginning(),
+            "the first message never came"
+        );
+        let before = member.session.entries.len();
+        member.load_older();
+        wait(&mut member, "a page of older messages", |s| {
+            !s.session.loading_older()
+                && (s.session.entries.len() > before || s.session.at_beginning())
+        });
+        steps += 1;
+    }
+    let label = |s: &State| {
+        s.session
+            .held_history()
+            .iter()
+            .find(|e| e.id == message.id)
+            .and_then(|e| e.reactions.iter().find(|r| r.emoji_id == party.emoji_id))
+            .map(|r| r.reaction.clone())
+    };
+    assert_eq!(label(&member).as_deref(), Some(":party:"));
+
+    // ---- Renamed and removed in one burst: the page says the name it was left with ----------
+    owner.open_server_settings();
+    owner.choose_section(Section::Emoji);
+    owner.begin_rename(&party.emoji_id);
+    owner.rename_field().replace_text("party_time");
+    owner.save_rename();
+    wait(&mut owner, "the rename kept", |s| {
+        s.emoji.renaming.is_none() && named(s, &server_id, "party_time").is_some()
+    });
+    owner.ask_remove_emoji(&party.emoji_id, &format!("remove-emoji-{}", party.emoji_id));
+    owner.confirm_remove_emoji();
+    wait(&mut owner, "the removal", |s| {
+        emoji_of(s, &server_id).is_empty()
+    });
+    wait(&mut member, "the page read again", |s| {
+        emoji_of(s, &server_id).is_empty() && label(s).as_deref() == Some(":party_time:")
+    });
 
     let _ = std::fs::remove_dir_all(&dir);
 }

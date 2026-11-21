@@ -175,6 +175,7 @@ impl State {
         self.close_popover();
         self.close_page();
         self.roles = super::role_settings::RoleForms::default();
+        self.forget_emoji_forms();
         self.server_forms.settings = ServerSettings {
             server_id: Some(server.server_id.clone()),
             section,
@@ -200,6 +201,7 @@ impl State {
             let card = self.roles.card.take();
             self.roles = super::role_settings::RoleForms::default();
             self.roles.card = card;
+            self.forget_emoji_forms();
         }
     }
 

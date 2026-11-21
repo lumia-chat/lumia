@@ -210,8 +210,6 @@ pub struct State {
     pub roles: role_settings::RoleForms,
     /// Server settings' Emoji section: the upload form, a rename, the question (`emoji`).
     pub emoji: emoji::EmojiForms,
-    /// The first frames of animated emoji that Reduce Motion draws (`emoji`).
-    pub stills: emoji::Stills,
     /// Whether the system shows times on a 24-hour clock, which the timeline's times
     /// follow. A real launch reads it from the system whenever the window comes in front
     /// (`platform`); a test and a headless picture keep the 12-hour clock.
@@ -268,7 +266,6 @@ impl State {
             context: context::Context::default(),
             roles: role_settings::RoleForms::default(),
             emoji: emoji::EmojiForms::default(),
-            stills: emoji::Stills::default(),
             clock_24: false,
             updater: None,
         };
@@ -555,7 +552,9 @@ impl State {
         }
         let expired = self.session.expire_typing(now_micros);
         let pictured = self.pictures.sync(&self.session.avatars);
-        let pictured = self.sync_stills() || pictured;
+        let pictured = self.sync_emoji() || pictured;
+        // Pictures that could not be had are asked for again once their wait is over.
+        self.session.retry_pictures();
         let replied = self.tick_replies();
         let prompted = self.tick_prompts(now_micros);
         let media = self.tick_media(now_micros);
@@ -594,6 +593,7 @@ impl State {
         self.home = home::Home::default();
         self.server_forms = server::ServerForms::default();
         self.roles = role_settings::RoleForms::default();
+        self.forget_emoji_forms();
         self.channel_forms = channels::ChannelForms::default();
         self.account = account::Account::default();
         self.setup = setup::SetupForms::default();
@@ -712,6 +712,7 @@ impl State {
             | Update::Members { .. }
             | Update::MembersUnread { .. }
             | Update::Older { .. }
+            | Update::HistoryRead { .. }
             | Update::Profile { .. }
             | Update::SignedOut => {}
         }
@@ -720,19 +721,31 @@ impl State {
         self.follow_emoji();
     }
 
-    /// Applies what the session finished and reacts to it; true when anything changed.
+    /// Applies what the session finished and reacts to it, one at a time (each reaction may
+    /// leave the account, after which what was started for it is passed over); true when
+    /// anything changed.
     pub fn drain(&mut self) -> bool {
-        let updates = self.session.poll();
-        for update in &updates {
-            self.react(update);
+        let mut changed = false;
+        while let Some(update) = self.session.next_update() {
+            self.react(&update);
+            changed = true;
         }
-        !updates.is_empty()
+        changed
     }
 
     /// Applies one update as if the instance had sent it. For tests and scenes.
     pub fn receive(&mut self, update: &Update) {
         self.session.apply(update);
         self.react(update);
+    }
+
+    /// Applies one update as the queue does, as an answer to work started under
+    /// `generation` (`Session::generation`): passed over when the account it was started
+    /// for has gone since. For tests.
+    pub fn receive_from(&mut self, generation: u64, update: &Update) {
+        if self.session.apply_from(generation, update) {
+            self.react(update);
+        }
     }
 }
 
@@ -842,6 +855,10 @@ pub fn poll(state: &mut State, now: f64, tx: &mut Tx) -> bool {
     // window for that.
     if let Some(left) = state.preview_wake(now) {
         tx.wake_after(std::time::Duration::from_micros(left.unsigned_abs()));
+    }
+    // Nor to ask again for a picture that could not be had (`session::avatars`).
+    if let Some(at) = state.session.avatars.next_retry() {
+        tx.wake_after(at.saturating_duration_since(std::time::Instant::now()));
     }
     // Nor to keep what was typed once the keys stop (`drafts`).
     if let Some(left) = state.draft_wake(now) {

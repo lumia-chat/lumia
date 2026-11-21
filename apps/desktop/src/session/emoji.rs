@@ -27,19 +27,23 @@ pub enum EmojiUpdate {
         path: std::path::PathBuf,
         result: Result<(Arc<[u8]>, &'static str), Failure>,
     },
-    /// An emoji uploaded: the snapshot as it then is.
+    /// An emoji uploaded: the snapshot as it then is. `request` is the number the window gave
+    /// the call, which names the form that made it.
     Uploaded {
         server_id: String,
+        request: u64,
         result: Result<SnapshotSummary, Failure>,
     },
     Renamed {
         server_id: String,
         emoji_id: String,
+        request: u64,
         result: Result<SnapshotSummary, Failure>,
     },
     Removed {
         server_id: String,
         emoji_id: String,
+        request: u64,
         result: Result<SnapshotSummary, Failure>,
     },
 }
@@ -83,6 +87,7 @@ impl Session {
         name: &str,
         picture: Arc<[u8]>,
         media_type: &'static str,
+        request: u64,
     ) {
         let Some(app) = self.client() else { return };
         let (server_id, name) = (server_id.to_string(), name.to_string());
@@ -92,13 +97,14 @@ impl Session {
                 .await;
             Update::Emoji(EmojiUpdate::Uploaded {
                 server_id,
+                request,
                 result: result.map_err(Failure::from),
             })
         });
     }
 
     /// Renames one of a server's emoji ([`EmojiUpdate::Renamed`]).
-    pub fn rename_emoji(&self, server_id: &str, emoji_id: &str, name: &str) {
+    pub fn rename_emoji(&self, server_id: &str, emoji_id: &str, name: &str, request: u64) {
         let Some(app) = self.client() else { return };
         let (server_id, emoji_id, name) = (
             server_id.to_string(),
@@ -110,13 +116,14 @@ impl Session {
             Update::Emoji(EmojiUpdate::Renamed {
                 server_id,
                 emoji_id,
+                request,
                 result: result.map_err(Failure::from),
             })
         });
     }
 
     /// Removes one of a server's emoji ([`EmojiUpdate::Removed`]).
-    pub fn remove_emoji(&self, server_id: &str, emoji_id: &str) {
+    pub fn remove_emoji(&self, server_id: &str, emoji_id: &str, request: u64) {
         let Some(app) = self.client() else { return };
         let (server_id, emoji_id) = (server_id.to_string(), emoji_id.to_string());
         self.task(async move {
@@ -124,6 +131,7 @@ impl Session {
             Update::Emoji(EmojiUpdate::Removed {
                 server_id,
                 emoji_id,
+                request,
                 result: result.map_err(Failure::from),
             })
         });
@@ -170,9 +178,17 @@ impl Session {
             }
         }
         // The core renames what it keeps of the reactions with them (a removed one's chip
-        // reads as it was last called): the open conversation is read again from it.
-        if matches!(self.conversation, Some(Conversation::Channel(_))) {
+        // reads as it was last called): the open conversation is read again from it, and
+        // the pages of its history the instance gave, which the core does not keep, are read
+        // again from the instance.
+        if let Some(Conversation::Channel(channel_id)) = &self.conversation {
+            let here = self
+                .channel_summary(channel_id)
+                .is_some_and(|c| c.server_id == server_id);
             self.read_entries();
+            if here {
+                self.read_history_again();
+            }
         }
         self.want_pictures();
         self.revision += 1;

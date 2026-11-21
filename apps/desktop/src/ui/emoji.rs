@@ -26,13 +26,15 @@ use super::components::{Look, shadowed};
 use super::scroll::WithScrollBar;
 use crate::app::State;
 use crate::app::emoji::{COMPOSER_EMOJI, aspect};
+use crate::app::pictures::EmojiFace;
 use crate::tokens::{self as t, icons};
 
 /// A server's emoji in a picker's cell: the board's 28 points.
 const CUSTOM_SIZE: f32 = t::SPACE_28;
 
 /// One of a server's emoji fitted in a square of `size` points, at its shape: its picture
-/// when held and decoded (its first frame under Reduce Motion), nothing until then. Named by
+/// when held and decoded (its first frame under Reduce Motion), nothing while it is on its
+/// way, and its `:name:`, cut to the square, when the picture could not be had. Named by
 /// what holds it, so hidden here.
 pub fn picture(s: &State, emoji: &EmojiSummary, size: f32, look: Look) -> El {
     let shape = aspect(emoji);
@@ -41,22 +43,32 @@ pub fn picture(s: &State, emoji: &EmojiSummary, size: f32, look: Look) -> El {
     } else {
         (size * shape, size)
     };
-    let mut drawn = el().size(w, h).a11y_hidden();
-    if let Some(image) = s.emoji_image(emoji, look.still) {
-        drawn = drawn.pixels_fit(image.pixels(), SurfaceFit::Fit);
-    }
+    let drawn = match s.emoji_face(emoji, look.still) {
+        EmojiFace::Picture(image) => el()
+            .size(w, h)
+            .a11y_hidden()
+            .pixels_fit(image.pixels(), SurfaceFit::Fit),
+        EmojiFace::Waiting => el().size(w, h).a11y_hidden(),
+        EmojiFace::Name => text(format!(":{}:", emoji.name))
+            .font(t::TEXT_TAG_SMALL)
+            .color(look.c.ink_muted)
+            .truncate()
+            .max_w(size)
+            .a11y_hidden(),
+    };
     el().size(size, size).center().a11y_hidden().child(drawn)
 }
 
 /// One of a server's emoji drawn at a height of `height` points and as wide as its shape: a
-/// reaction chip's.
-pub fn picture_tall(s: &State, emoji: &EmojiSummary, height: f32, look: Look) -> El {
+/// reaction chip's. None when its picture could not be had: the chip says its `:name:`.
+pub fn picture_tall(s: &State, emoji: &EmojiSummary, height: f32, look: Look) -> Option<El> {
     let w = height * aspect(emoji);
-    let mut drawn = el().size(w, height).a11y_hidden();
-    if let Some(image) = s.emoji_image(emoji, look.still) {
-        drawn = drawn.pixels_fit(image.pixels(), SurfaceFit::Fit);
+    let drawn = el().size(w, height).a11y_hidden();
+    match s.emoji_face(emoji, look.still) {
+        EmojiFace::Picture(image) => Some(drawn.pixels_fit(image.pixels(), SurfaceFit::Fit)),
+        EmojiFace::Waiting => Some(drawn),
+        EmojiFace::Name => None,
     }
-    drawn
 }
 
 /// The picker's width: eight emoji across with the room around them.
