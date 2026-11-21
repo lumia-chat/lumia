@@ -1,0 +1,354 @@
+diff --color -ru a/decoder.rs b/decoder.rs
+--- a/src/decoder.rs	2026-11-20 21:24:39.036838148 -0400
++++ b/src/decoder.rs	2026-11-20 21:24:39.048202014 -0400
+@@ -550,6 +550,10 @@
+ 
+     /// Sets the maximum amount of memory that the decoder is allowed to allocate at once.
+     ///
++    /// The prefix codes of each lossless image stream, whose number and size are set by the
++    /// bitstream rather than the image dimensions, are counted against this limit before they
++    /// are allocated.
++    ///
+     /// TODO: Some allocations currently ignore this limit.
+     pub fn set_memory_limit(&mut self, limit: usize) {
+         self.memory_limit = limit;
+@@ -680,6 +684,7 @@
+             result?;
+         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
+             let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
++            decoder.set_memory_limit(self.memory_limit);
+ 
+             if self.has_alpha {
+                 decoder.decode_frame(self.width, self.height, false, buf)?;
+@@ -713,6 +718,7 @@
+                     &mut range_reader(&mut self.r, range)?,
+                     self.width as u16,
+                     self.height as u16,
++                    self.memory_limit,
+                 )?;
+ 
+                 for y in 0..frame.height {
+@@ -807,6 +813,7 @@
+             WebPRiffChunk::VP8L => {
+                 let reader = (&mut self.r).take(chunk_size);
+                 let mut lossless_decoder = LosslessDecoder::new(reader);
++                lossless_decoder.set_memory_limit(self.memory_limit);
+                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                 lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
+                 (rgba_frame, true)
+@@ -819,8 +826,12 @@
+                 // read alpha
+                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded;
+                 let mut reader = (&mut self.r).take(chunk_size);
+-                let alpha_chunk =
+-                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
++                let alpha_chunk = read_alpha_chunk(
++                    &mut reader,
++                    frame_width as u16,
++                    frame_height as u16,
++                    self.memory_limit,
++                )?;
+ 
+                 // read opaque
+                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
+@@ -1031,4 +1042,93 @@
+         let first_pixel = &data[..RGB_BPP];
+         assert!(data.chunks_exact(3).all(|ch| ch.iter().eq(first_pixel)));
+     }
++
++    /// A 4x4 black lossless image whose entropy image selects the last of `groups` prefix code
++    /// groups, each with a green code of 2048 symbols of length 11 (a 1024 entry table and a
++    /// 4096 node tree) that takes 66 bits to write.
++    fn lossless_with_groups(groups: u32) -> Vec<u8> {
++        struct Bits(Vec<u8>, u64, u32);
++        impl Bits {
++            fn put(&mut self, value: u32, bits: u32) {
++                self.1 |= u64::from(value) << self.2;
++                self.2 += bits;
++                while self.2 >= 8 {
++                    self.0.push(self.1 as u8);
++                    self.1 >>= 8;
++                    self.2 -= 8;
++                }
++            }
++            fn single(&mut self, symbol: u32) {
++                self.put(0b01, 2);
++                if symbol < 2 {
++                    self.put(0, 1);
++                    self.put(symbol, 1);
++                } else {
++                    self.put(1, 1);
++                    self.put(symbol, 8);
++                }
++            }
++        }
++        let mut b = Bits(vec![0x2f], 0, 0);
++        b.put(3, 14); // width - 1
++        b.put(3, 14); // height - 1
++        b.put(0, 4); // no alpha, version 0
++        b.put(0, 1); // no transforms
++        b.put(1, 1); // color cache
++        b.put(11, 4); // of 2048 entries
++        b.put(1, 1); // meta prefix codes
++        b.put(0, 3); // 4x4 blocks, so a 1x1 entropy image
++        b.put(0, 1); // the entropy image has no color cache
++        b.single((groups - 1) & 0xff); // green
++        b.single((groups - 1) >> 8); // red
++        for _ in 0..3 {
++            b.single(0); // blue, alpha, distance
++        }
++        for _ in 0..groups {
++            b.put(0, 1); // normal code
++            b.put(11, 4); // 15 code length code lengths
++            for i in 0..15 {
++                b.put(u32::from(i == 14), 3); // only the code length 11
++            }
++            b.put(1, 1); // max_symbol is given
++            b.put(5, 3); // in 12 bits
++            b.put(2046, 12); // 2048 symbols
++            for _ in 0..4 {
++                b.single(0);
++            }
++        }
++        b.put(0, 7);
++        // The pixels: 16 green codes of 11 zero bits, symbol 0.
++        b.0.extend_from_slice(&[0; 32]);
++        let vp8l = b.0;
++
++        let mut webp = b"RIFF".to_vec();
++        webp.extend_from_slice(&(vp8l.len() as u32 + 12).to_le_bytes());
++        webp.extend_from_slice(b"WEBPVP8L");
++        webp.extend_from_slice(&(vp8l.len() as u32).to_le_bytes());
++        webp.extend_from_slice(&vp8l);
++        webp
++    }
++
++    #[test]
++    fn lossless_prefix_codes_count_against_memory_limit() {
++        let decode = |groups: u32, limit: usize| {
++            let mut decoder =
++                WebPDecoder::new(std::io::Cursor::new(lossless_with_groups(groups))).unwrap();
++            decoder.set_memory_limit(limit);
++            let mut data = [0xff; 4 * 4 * RGB_BPP];
++            decoder.read_image(&mut data).map(|()| data)
++        };
++
++        // Two groups' codes fit in 256 KiB.
++        let data = decode(2, 256 << 10).unwrap();
++        assert!(data.iter().all(|&b| b == 0));
++
++        // 64 do not, and are refused before they are allocated.
++        assert!(matches!(
++            decode(64, 256 << 10),
++            Err(DecodingError::MemoryLimitExceeded)
++        ));
++        assert!(decode(64, usize::MAX).is_ok());
++    }
+ }
+diff --color -ru a/extended.rs b/extended.rs
+--- a/src/extended.rs	2026-11-20 21:24:39.034125358 -0400
++++ b/src/extended.rs	2026-11-20 21:24:39.047280307 -0400
+@@ -254,6 +254,7 @@
+     reader: &mut R,
+     width: u16,
+     height: u16,
++    memory_limit: usize,
+ ) -> Result<AlphaChunk, DecodingError> {
+     let info_byte = reader.read_u8()?;
+ 
+@@ -283,6 +284,7 @@
+ 
+     let data = if lossless_compression {
+         let mut decoder = LosslessDecoder::new(reader);
++        decoder.set_memory_limit(memory_limit);
+ 
+         let mut data = vec![0; usize::from(width) * usize::from(height) * 4];
+         decoder.decode_frame(u32::from(width), u32::from(height), true, &mut data)?;
+diff --color -ru a/lossless/decoder/huffman.rs b/lossless/decoder/huffman.rs
+--- a/src/lossless/decoder/huffman.rs	2026-11-20 21:24:39.026852780 -0400
++++ b/src/lossless/decoder/huffman.rs	2026-11-20 21:24:39.045678725 -0400
+@@ -42,8 +42,13 @@
+     }
+ 
+     /// Builds a tree implicitly, just from code lengths
++    ///
++    /// Fails with `MemoryLimitExceeded` if the tree would allocate more than `memory_limit` bytes.
+     #[allow(clippy::needless_range_loop)]
+-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
++    pub(crate) fn build_implicit(
++        code_lengths: Vec<u16>,
++        memory_limit: usize,
++    ) -> Result<Self, DecodingError> {
+         // Count symbols and build histogram
+         let mut num_symbols = 0;
+         let mut histogram = [0; MAX_ALLOWED_CODE_LENGTH + 1];
+@@ -88,6 +93,9 @@
+         let table_bits = (max_length as u16).min(u16::from(MAX_TABLE_BITS));
+         let table_size = (1 << table_bits) as usize;
+         let table_mask = table_size as u16 - 1;
++        if Self::table_memory(table_size) > memory_limit {
++            return Err(DecodingError::MemoryLimitExceeded);
++        }
+         let mut primary_table = vec![0; table_size];
+ 
+         // Sort the symbols by code length.
+@@ -138,6 +146,11 @@
+                     if codeword & primary_table_mask != subtable_prefix {
+                         subtable_prefix = codeword & primary_table_mask;
+                         subtable_start = secondary_table.len();
++                        let len = subtable_start + subtable_size;
++                        if Self::table_memory(table_size + len) > memory_limit {
++                            return Err(DecodingError::MemoryLimitExceeded);
++                        }
++                        secondary_table.reserve_exact(subtable_size);
+                         primary_table[subtable_prefix as usize] =
+                             ((length as u16) << 12) | subtable_start as u16;
+                         secondary_table.resize(subtable_start + subtable_size, 0);
+@@ -155,6 +168,11 @@
+ 
+                 // If there are more codes with the same subtable prefix, extend the subtable.
+                 if length < max_length && codeword & primary_table_mask == subtable_prefix {
++                    let len = 2 * secondary_table.len() - subtable_start;
++                    if Self::table_memory(table_size + len) > memory_limit {
++                        return Err(DecodingError::MemoryLimitExceeded);
++                    }
++                    secondary_table.reserve_exact(len - secondary_table.len());
+                     secondary_table.extend_from_within(subtable_start..);
+                     primary_table[subtable_prefix as usize] =
+                         (((length + 1) as u16) << 12) | subtable_start as u16;
+@@ -176,12 +194,37 @@
+         Self(HuffmanTreeInner::Single(symbol))
+     }
+ 
+-    pub(crate) fn build_two_node(zero: u16, one: u16) -> Self {
+-        Self(HuffmanTreeInner::Tree {
++    /// Fails with `MemoryLimitExceeded` if the tree would allocate more than `memory_limit` bytes.
++    pub(crate) fn build_two_node(
++        zero: u16,
++        one: u16,
++        memory_limit: usize,
++    ) -> Result<Self, DecodingError> {
++        if Self::table_memory(2) > memory_limit {
++            return Err(DecodingError::MemoryLimitExceeded);
++        }
++        Ok(Self(HuffmanTreeInner::Tree {
+             primary_table: vec![(1 << 12) | zero, (1 << 12) | one],
+             table_mask: 0x1,
+             secondary_table: Vec::new(),
+-        })
++        }))
++    }
++
++    /// The bytes allocated by tables of `entries` entries in all.
++    const fn table_memory(entries: usize) -> usize {
++        entries * std::mem::size_of::<u16>()
++    }
++
++    /// The bytes this tree has allocated.
++    pub(crate) fn memory_usage(&self) -> usize {
++        match &self.0 {
++            HuffmanTreeInner::Single(_) => 0,
++            HuffmanTreeInner::Tree {
++                primary_table,
++                secondary_table,
++                ..
++            } => Self::table_memory(primary_table.capacity() + secondary_table.capacity()),
++        }
+     }
+ 
+     pub(crate) const fn is_single_node(&self) -> bool {
+diff --color -ru a/lossless/decoder/mod.rs b/lossless/decoder/mod.rs
+--- a/src/lossless/decoder/mod.rs	2026-11-20 21:24:39.027129197 -0400
++++ b/src/lossless/decoder/mod.rs	2026-11-20 21:24:39.046074933 -0400
+@@ -45,6 +45,7 @@
+     transform_order: Vec<u8>,
+     width: u16,
+     height: u16,
++    memory_limit: usize,
+ }
+ 
+ impl<R: BufRead> LosslessDecoder<R> {
+@@ -56,9 +57,15 @@
+             transform_order: Vec::new(),
+             width: 0,
+             height: 0,
++            memory_limit: usize::MAX,
+         }
+     }
+ 
++    /// Sets the most memory the prefix codes of any one image stream may allocate.
++    pub(crate) fn set_memory_limit(&mut self, limit: usize) {
++        self.memory_limit = limit;
++    }
++
+     /// Decodes a frame.
+     ///
+     /// In an alpha chunk the width and height are not included in the header, so they should be
+@@ -304,7 +311,14 @@
+                 .collect::<Vec<u16>>();
+         }
+ 
+-        let mut hufftree_groups = Vec::new();
++        // The number of groups is set by the entropy image's values, not the image's size, and
++        // each group's codes can allocate tens of kilobytes, so all of them are counted
++        // against the memory limit before they are allocated.
++        let mut memory_left = (num_huff_groups as usize)
++            .checked_mul(std::mem::size_of::<HuffmanCodeGroup>())
++            .and_then(|groups| self.memory_limit.checked_sub(groups))
++            .ok_or(DecodingError::MemoryLimitExceeded)?;
++        let mut hufftree_groups = Vec::with_capacity(num_huff_groups as usize);
+ 
+         for _i in 0..num_huff_groups {
+             let mut group: HuffmanCodeGroup = Default::default();
+@@ -316,7 +330,8 @@
+                     }
+                 }
+ 
+-                let tree = self.read_huffman_code(alphabet_size)?;
++                let tree = self.read_huffman_code(alphabet_size, memory_left)?;
++                memory_left -= tree.memory_usage();
+                 group[j] = tree;
+             }
+             hufftree_groups.push(group);
+@@ -341,8 +356,12 @@
+         Ok(info)
+     }
+ 
+-    /// Decodes and returns a single huffman tree
+-    fn read_huffman_code(&mut self, alphabet_size: u16) -> Result<HuffmanTree, DecodingError> {
++    /// Decodes and returns a single huffman tree, of no more than `memory_limit` bytes
++    fn read_huffman_code(
++        &mut self,
++        alphabet_size: u16,
++        memory_limit: usize,
++    ) -> Result<HuffmanTree, DecodingError> {
+         let simple = self.bit_reader.read_bits::<u8>(1)? == 1;
+ 
+         if simple {
+@@ -362,7 +381,7 @@
+                 if one_symbol >= alphabet_size {
+                     return Err(DecodingError::BitStreamError);
+                 }
+-                Ok(HuffmanTree::build_two_node(zero_symbol, one_symbol))
++                HuffmanTree::build_two_node(zero_symbol, one_symbol, memory_limit)
+             }
+         } else {
+             let mut code_length_code_lengths = vec![0; CODE_LENGTH_CODES];
+@@ -376,7 +395,7 @@
+             let new_code_lengths =
+                 self.read_huffman_code_lengths(code_length_code_lengths, alphabet_size)?;
+ 
+-            HuffmanTree::build_implicit(new_code_lengths)
++            HuffmanTree::build_implicit(new_code_lengths, memory_limit)
+         }
+     }
+ 
+@@ -386,7 +405,7 @@
+         code_length_code_lengths: Vec<u16>,
+         num_symbols: u16,
+     ) -> Result<Vec<u16>, DecodingError> {
+-        let table = HuffmanTree::build_implicit(code_length_code_lengths)?;
++        let table = HuffmanTree::build_implicit(code_length_code_lengths, self.memory_limit)?;
+ 
+         let mut max_symbol = if self.bit_reader.read_bits::<u8>(1)? == 1 {
+             let length_nbits = 2 + 2 * self.bit_reader.read_bits::<u8>(3)?;
