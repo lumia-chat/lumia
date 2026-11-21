@@ -23,6 +23,9 @@ moxcms = { version = "0.8.1", default-features = false }
 [dev-dependencies]
 # To write an APNG in the tests; `image` reads them through this crate but cannot write one.
 png = "0.18"
+# The tests' global allocator, counting what one thread holds at once, to check what a decode
+# reserves against what it really allocates. Linked into the tests only.
+allocation-counter = "0.8"
 
 [lints.rust]
 unsafe_code = "forbid"

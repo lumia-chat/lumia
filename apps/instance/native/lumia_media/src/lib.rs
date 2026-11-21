@@ -16,8 +16,8 @@ use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
 use image::{
-    AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder, ImageFormat, ImageReader,
-    Limits, RgbaImage,
+    metadata::Orientation, AnimationDecoder, Delay, DynamicImage, Frame, Frames, ImageDecoder,
+    ImageFormat, ImageReader, Limits, RgbaImage,
 };
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, ParsingOptions, TransformExecutor, TransformOptions,
@@ -124,8 +124,123 @@ fn le24(b: &[u8]) -> u32 {
     u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16
 }
 
-/// What a WebP's chunks say, read before any decoder sees them: its frames, the `ANMF`
-/// chunks of an animated one, or 0 for a still one.
+/// What a WebP's chunks say, read before any decoder sees them: how many frames it has, and
+/// what image-webp (0.2.4) will allocate to decode it beyond the pixels it hands back.
+struct WebpCost {
+    /// The `ANMF` chunks of an animated one, or 0 for a still one.
+    frames: usize,
+    /// The most held at once beside the output buffer by `read_image`: a still picture, or an
+    /// animation's first frame.
+    still: u64,
+    /// The most held at once beside the frame's own buffer by any one `read_frame`, the
+    /// canvas it composes on included.
+    frame: u64,
+}
+
+/// What image-webp holds whatever the picture: its chunk map, the readers, and the vectors
+/// of a few kilobytes that follow the picture's width (a row of borders, a row of macroblocks).
+const WEBP_FIXED: u64 = 256 * 1024;
+
+/// How an alpha chunk is stored, from its first byte, which decides what reading it takes.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum AlphaStorage {
+    /// No `ALPH` chunk, or one the decoder refuses before it allocates for it.
+    None,
+    /// Raw, a byte a pixel.
+    Raw,
+    /// A lossless bitstream's green channel.
+    Lossless,
+}
+
+fn alpha_storage(payload: &[u8]) -> AlphaStorage {
+    match payload.first().map(|b| b & 0x03) {
+        Some(0) => AlphaStorage::Raw,
+        Some(1) => AlphaStorage::Lossless,
+        _ => AlphaStorage::None,
+    }
+}
+
+fn pixels(width: u32, height: u32) -> u64 {
+    u64::from(width) * u64::from(height)
+}
+
+/// A lossy bitstream's planes (`Vp8Decoder::read_frame_header`): Y, U and V of whole 16-pixel
+/// macroblocks, 384 bytes each, kept in the `Frame` it returns.
+fn vp8_planes((width, height): (u32, u32)) -> u64 {
+    pixels(width.div_ceil(16), height.div_ceil(16)) * 384
+}
+
+/// The most `Vp8Decoder::decode_frame` holds for a bitstream of `size` and `len` bytes: its
+/// planes; every macroblock's header, 30 bytes each in a vector grown by doubling, so a
+/// half-full one and the one it grows into at once; and its partitions, copied from the
+/// bitstream into buffers of their own (the last read whole, then copied again).
+fn vp8_peak(size: (u32, u32), len: usize) -> u64 {
+    let macroblocks = pixels(size.0.div_ceil(16), size.1.div_ceil(16)).next_power_of_two();
+    vp8_planes(size) + macroblocks * 3 / 2 * 30 + 4 * len as u64
+}
+
+/// The most a lossless bitstream of `width` by `height` holds beside the pixels it decodes
+/// into (`LosslessDecoder`): a predictor and a colour transform's data and its entropy image,
+/// each at most four bytes a 4 by 4 block, the entropy image again as a `u16` a block while
+/// it is read, and two colour caches of 8 KiB.
+///
+/// Its prefix-code tables are not counted: how many there are is told by the entropy image's
+/// values, not the picture's size, and a stream can be made with tens of thousands. An
+/// encoder's transforms are coarser than the finest counted here, and what that leaves has
+/// held an ordinary stream's tables (a photograph of 4,000 a side from cwebp: under 1 MB);
+/// a stream made to have more is not bounded by this.
+fn lossless_working((width, height): (u32, u32)) -> u64 {
+    pixels(width.div_ceil(4), height.div_ceil(4)) * 14 + 2 * 8192
+}
+
+/// The most `read_alpha_chunk` holds for an alpha plane of `size`: raw, a byte a pixel; lossless,
+/// the plane decoded as RGBA, its green channel copied out of it, and the decoder's working.
+fn alpha_peak(size: (u32, u32), storage: AlphaStorage) -> u64 {
+    let n = pixels(size.0, size.1);
+    match storage {
+        AlphaStorage::None => 0,
+        AlphaStorage::Raw => n,
+        AlphaStorage::Lossless => 5 * n + lossless_working(size),
+    }
+}
+
+/// An `ANMF` chunk's frame as `read_frame` decodes it on a canvas of `canvas` pixels: the
+/// frame's own buffer (RGB for a lossy frame, RGBA otherwise) and what decoding it takes, then
+/// the canvas, made at the first frame and kept. `None` is a frame the decoder refuses before
+/// it allocates for it.
+fn frame_peak(payload: &[u8], canvas: u64) -> Result<Option<u64>, Refusal> {
+    let Some(header) = payload.get(..16) else {
+        return Ok(None);
+    };
+    let size = (le24(&header[6..9]) + 1, le24(&header[9..12]) + 1);
+    let n = pixels(size.0, size.1);
+    let mut subs = RiffChunks {
+        bytes: payload.get(16..).unwrap_or_default(),
+        at: 0,
+    };
+    let decoding = match subs.next().transpose()? {
+        Some((fourcc, bitstream)) if &fourcc == b"VP8 " => vp8_size(bitstream)
+            .map(|lossy| vp8_peak(lossy, bitstream.len()).max(vp8_planes(lossy) + 3 * n)),
+        Some((fourcc, _)) if &fourcc == b"VP8L" => Some(4 * n + lossless_working(size)),
+        Some((fourcc, alph)) if &fourcc == b"ALPH" => {
+            let storage = alpha_storage(alph);
+            // The alpha plane is read first and its last copy kept, a byte a pixel, while the
+            // lossy bitstream after it is decoded and drawn into the RGBA frame.
+            let kept = if storage == AlphaStorage::None { 0 } else { n };
+            let lossy = match subs.next().transpose()? {
+                Some((fourcc, bitstream)) if &fourcc == b"VP8 " => vp8_size(bitstream)
+                    .map(|lossy| vp8_peak(lossy, bitstream.len()).max(vp8_planes(lossy) + 4 * n)),
+                _ => None,
+            };
+            Some(alpha_peak(size, storage).max(lossy.map_or(0, |l| kept + l)))
+        }
+        _ => None,
+    };
+    Ok(decoding.map(|d| d + 4 * canvas))
+}
+
+/// What a WebP's chunks say, read before any decoder sees them: its frames, and what decoding
+/// it costs ([`WebpCost`]).
 ///
 /// image-webp (0.2.4) allocates for a lossy bitstream by the size the bitstream's own header
 /// gives, some 400 MB for 16,383 a side, and only then compares that with the canvas or frame
@@ -133,69 +248,167 @@ fn le24(b: &[u8]) -> u32 {
 /// or in a frame, is read here and refused when it says more than the canvas, which the
 /// bounds have been or will be checked against. It also allocates a metadata chunk by the
 /// size the chunk claims, so a chunk claiming more than the upload holds is refused here too.
-fn webp_frames(bytes: &[u8]) -> Result<usize, Refusal> {
+///
+/// And it allocates beside the pixels it returns, by path (`WebPDecoder::read_image`,
+/// `read_frame`, `read_alpha_chunk`): a lossy picture keeps its planes, about a byte and a half
+/// a pixel; one with an alpha chunk then reads that chunk, a lossless one as five bytes a pixel
+/// more; a lossless picture without alpha is decoded as RGBA into a buffer of its own, four
+/// bytes a pixel, then copied out as RGB; an animation's frame is decoded into a buffer of its
+/// own and composed on a canvas of four bytes a pixel. Each is worked out here from the chunks
+/// the decoder will read, the largest it could take where a file gives it a choice.
+fn webp_cost(bytes: &[u8]) -> Result<WebpCost, Refusal> {
     if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"WEBP".as_slice()) {
         return Err(Refusal::Invalid);
     }
     let mut chunks = RiffChunks { bytes, at: 12 };
+    // A simple WebP is its one bitstream, and the size the decoder reports, which the bounds
+    // are checked against, is the one in that bitstream's header.
     let header = match chunks.next() {
         Some(Ok((fourcc, payload))) if &fourcc == b"VP8X" => {
             payload.get(..10).ok_or(Refusal::Invalid)?
         }
-        // A simple WebP is its one bitstream, and the size the decoder reports, which the
-        // bounds are checked against, is the one in that bitstream's header.
-        Some(Ok(_)) => return Ok(0),
+        Some(Ok((fourcc, payload))) if &fourcc == b"VP8 " => {
+            let still = vp8_size(payload).map_or(0, |size| vp8_peak(size, payload.len()));
+            return Ok(WebpCost {
+                frames: 0,
+                still: WEBP_FIXED + still,
+                frame: 0,
+            });
+        }
+        Some(Ok((fourcc, payload))) if &fourcc == b"VP8L" => {
+            let still = vp8l_header(payload).map_or(0, |(size, alpha)| {
+                let rgba = if alpha { 0 } else { 4 * pixels(size.0, size.1) };
+                rgba + lossless_working(size)
+            });
+            return Ok(WebpCost {
+                frames: 0,
+                still: WEBP_FIXED + still,
+                frame: 0,
+            });
+        }
+        // Not a WebP the decoder reads; it refuses it before allocating anything.
+        Some(Ok(_)) => {
+            return Ok(WebpCost {
+                frames: 0,
+                still: WEBP_FIXED,
+                frame: 0,
+            })
+        }
         _ => return Err(Refusal::Invalid),
     };
     let canvas = (le24(&header[4..7]) + 1, le24(&header[7..10]) + 1);
+    let n = pixels(canvas.0, canvas.1);
+    let alpha = header[0] & 0x10 != 0;
     let animated = header[0] & 0x02 != 0;
     let mut frames = 0;
+    // A still picture's image chunks are the first of each kind, at the top or failing that
+    // in the first frame; any of them is counted, so whichever the decoder takes is.
+    let mut lossy: Option<((u32, u32), usize)> = None;
+    let mut lossless = false;
+    let mut storage = AlphaStorage::None;
+    let mut first_frame = None;
+    let mut frame = 0u64;
+    let mut seen = |fourcc: &[u8; 4], payload: &[u8]| -> Result<(), Refusal> {
+        match fourcc {
+            b"VP8 " => {
+                vp8_within(payload, canvas)?;
+                if let Some(size) = vp8_size(payload) {
+                    let (old, len) = lossy.unwrap_or(((0, 0), 0));
+                    lossy = Some((
+                        (old.0.max(size.0), old.1.max(size.1)),
+                        len.max(payload.len()),
+                    ));
+                }
+            }
+            b"VP8L" => lossless = true,
+            b"ALPH" => storage = storage.max(alpha_storage(payload)),
+            _ => {}
+        }
+        Ok(())
+    };
     // To the end of the bytes, not of the RIFF: the decoder reads as far.
     for chunk in chunks {
         let (fourcc, payload) = chunk?;
-        match &fourcc {
-            b"VP8 " => vp8_within(payload, canvas)?,
-            b"ANMF" => {
-                frames += 1;
-                // The decoder goes from one frame to the next by the unpadded size, so an
-                // odd one would put a frame where this walk does not look.
-                if payload.len() % 2 == 1 {
-                    return Err(Refusal::Invalid);
-                }
-                let inner = payload.get(16..).ok_or(Refusal::Invalid)?;
-                for sub in (RiffChunks {
-                    bytes: inner,
-                    at: 0,
-                }) {
-                    let (fourcc, payload) = sub?;
-                    if &fourcc == b"VP8 " {
-                        vp8_within(payload, canvas)?;
-                    }
-                }
+        if &fourcc == b"ANMF" {
+            frames += 1;
+            // The decoder goes from one frame to the next by the unpadded size, so an
+            // odd one would put a frame where this walk does not look.
+            if payload.len() % 2 == 1 {
+                return Err(Refusal::Invalid);
             }
-            _ => {}
+            let inner = payload.get(16..).ok_or(Refusal::Invalid)?;
+            for sub in (RiffChunks {
+                bytes: inner,
+                at: 0,
+            }) {
+                let (fourcc, payload) = sub?;
+                seen(&fourcc, payload)?;
+            }
+            let peak = frame_peak(payload, n)?.unwrap_or(0);
+            first_frame.get_or_insert(peak);
+            frame = frame.max(peak);
+        } else {
+            seen(&fourcc, payload)?;
         }
     }
-    Ok(if animated { frames } else { 0 })
+    let still = if animated {
+        first_frame.unwrap_or(0)
+    } else {
+        // Decoded as RGBA into the output when it has alpha, else into a buffer of its own.
+        let lossless = if lossless {
+            (if alpha { 0 } else { 4 * n }) + lossless_working(canvas)
+        } else {
+            0
+        };
+        // Its planes kept while an alpha plane of the canvas's size is read.
+        let lossy = lossy.map_or(0, |(size, len)| {
+            let alpha = if alpha {
+                alpha_peak(canvas, storage)
+            } else {
+                0
+            };
+            vp8_peak(size, len).max(vp8_planes(size) + alpha)
+        });
+        lossless.max(lossy)
+    };
+    Ok(WebpCost {
+        frames: if animated { frames } else { 0 },
+        still: WEBP_FIXED + still,
+        frame: WEBP_FIXED + frame,
+    })
 }
 
-/// A lossy bitstream's size, from its keyframe header, refused past `(width, height)`. One
-/// too short to have that header, or not a keyframe, allocates nothing for its size before
-/// the decoder refuses it.
-fn vp8_within(payload: &[u8], (width, height): (u32, u32)) -> Result<(), Refusal> {
-    let Some(h) = payload.get(..10) else {
-        return Ok(());
-    };
+/// A lossy bitstream's size, from its keyframe header; `None` for one too short to have that
+/// header or not a keyframe, which the decoder refuses before it allocates for its size.
+fn vp8_size(payload: &[u8]) -> Option<(u32, u32)> {
+    let h = payload.get(..10)?;
     if h[0] & 1 != 0 {
-        return Ok(());
+        return None;
     }
     let w = u32::from(u16::from_le_bytes([h[6], h[7]]) & 0x3FFF);
     let hh = u32::from(u16::from_le_bytes([h[8], h[9]]) & 0x3FFF);
-    if w > width || hh > height {
-        Err(Refusal::TooLarge)
-    } else {
-        Ok(())
+    Some((w, hh))
+}
+
+/// A lossy bitstream's size refused past `(width, height)`.
+fn vp8_within(payload: &[u8], (width, height): (u32, u32)) -> Result<(), Refusal> {
+    match vp8_size(payload) {
+        Some((w, h)) if w > width || h > height => Err(Refusal::TooLarge),
+        _ => Ok(()),
     }
+}
+
+/// A simple lossless WebP's size and whether it says it has alpha, read as image-webp reads
+/// them (`WebPDecoder::read_data`), carry and all.
+fn vp8l_header(payload: &[u8]) -> Option<((u32, u32), bool)> {
+    let h = payload.get(..5)?;
+    if h[0] != 0x2f {
+        return None;
+    }
+    let bits = u32::from_le_bytes([h[1], h[2], h[3], h[4]]);
+    let width = 1u32.wrapping_add(bits) & 0x3FFF;
+    let height = (1 + (bits >> 14)) & 0x3FFF;
+    Some(((width, height), (bits >> 28) & 1 != 0))
 }
 
 /// The frames a PNG's `acTL` chunk says it has, read before its image data; 0 for a PNG
@@ -272,15 +485,19 @@ fn gif_images(bytes: &[u8]) -> usize {
 /// limits, then its colour profile applied and the turn its metadata asks for (a phone's
 /// photo is stored on its side and says so, in Display P3 and says so).
 fn decode(bytes: &[u8]) -> Result<DynamicImage, Refusal> {
-    decode_within(bytes, MAX_ALLOC)
+    decode_within(bytes, MAX_ALLOC).map(|(image, _)| image)
 }
 
-/// [`decode`] under an allocation limit of `max_alloc` bytes.
-fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<DynamicImage, Refusal> {
+/// [`decode`] under an allocation limit of `max_alloc` bytes, and the bytes it reserved
+/// against that limit before decoding: the most it holds at once.
+fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<(DynamicImage, u64), Refusal> {
     let (probe, format) = reader(bytes)?;
-    if format == ImageFormat::WebP {
-        webp_frames(bytes)?;
-    }
+    // What the decoder works in beside the pixels, where that is known from the bytes.
+    let working = if format == ImageFormat::WebP {
+        webp_cost(bytes)?.still
+    } else {
+        0
+    };
     let (width, height) = probe.into_dimensions().map_err(|_| Refusal::Invalid)?;
     if width == 0
         || height == 0
@@ -297,22 +514,33 @@ fn decode_within(bytes: &[u8], max_alloc: u64) -> Result<DynamicImage, Refusal> 
     limits.max_alloc = Some(max_alloc);
     reader.limits(limits.clone());
     let mut decoder = reader.into_decoder().map_err(|_| Refusal::Invalid)?;
-    // The decoded pixels count against the limit before they are allocated, as
-    // `ImageReader::decode` counts them: a picture within the bounds can still need more
-    // (16 bits a channel), and `from_decoder` does not ask.
-    limits
-        .reserve(decoder.total_bytes())
-        .map_err(|_| Refusal::TooLarge)?;
-    decoder.set_limits(limits).map_err(|_| Refusal::TooLarge)?;
     let orientation = decoder.orientation().map_err(|_| Refusal::Invalid)?;
     // A profile that will not read is taken for none: the picture is sRGB, as most are.
     let icc = decoder.icc_profile().ok().flatten();
+    // Everything held at once counts against the limit before any of it is allocated: the
+    // decoded pixels, as `ImageReader::decode` counts them (a picture within the bounds can
+    // still need more, at 16 bits a channel, and `from_decoder` does not ask); beside them
+    // what the decoder works in, or the copy a quarter turn makes once it is done; and the
+    // profile, kept through both.
+    let pixels = decoder.total_bytes();
+    let turned = match orientation {
+        Orientation::Rotate90
+        | Orientation::Rotate270
+        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => pixels,
+        _ => 0,
+    };
+    let need = pixels
+        .saturating_add(working.max(turned))
+        .saturating_add(icc.as_ref().map_or(0, |icc| icc.len() as u64));
+    limits.reserve(need).map_err(|_| Refusal::TooLarge)?;
+    decoder.set_limits(limits).map_err(|_| Refusal::TooLarge)?;
     let mut image = DynamicImage::from_decoder(decoder).map_err(|_| Refusal::Invalid)?;
     if let Some(icc) = icc {
         to_srgb(&mut image, &icc);
     }
     image.apply_orientation(orientation);
-    Ok(image)
+    Ok((image, need))
 }
 
 /// The largest embedded colour profile read: a display's is a few hundred bytes, a
@@ -453,14 +681,20 @@ fn emoji_picture(bytes: &[u8]) -> Result<(&'static str, Vec<u8>, u32, u32, bool)
                 None
             }
         }
-        ImageFormat::WebP if webp_frames(bytes)? > 1 => {
-            let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Refusal::Invalid)?;
-            check_canvas(decoder.dimensions())?;
-            decoder
-                .set_limits(animated_limits())
-                .map_err(|_| Refusal::TooLarge)?;
-            Some(animated_frames(decoder)?)
-        }
+        ImageFormat::WebP => match webp_cost(bytes)? {
+            cost if cost.frames > 1 => {
+                let mut decoder =
+                    WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Refusal::Invalid)?;
+                check_canvas(decoder.dimensions())?;
+                let mut limits = animated_limits();
+                limits
+                    .reserve(animated_need(&decoder, &cost))
+                    .map_err(|_| Refusal::TooLarge)?;
+                decoder.set_limits(limits).map_err(|_| Refusal::TooLarge)?;
+                Some(animated_frames(decoder)?)
+            }
+            _ => None,
+        },
         _ => None,
     };
     match frames {
@@ -510,6 +744,23 @@ fn still_emoji(image: &DynamicImage) -> Result<(&'static str, Vec<u8>, u32, u32,
         .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
         .map_err(|_| Refusal::Invalid)?;
     Ok(("image/png", out, fitted.width(), fitted.height(), false))
+}
+
+/// The most an animated WebP's frames hold at once as `into_frames` reads them: each in a
+/// buffer of its own, RGBA, or RGB and then a copy of it as RGBA, and beside it what decoding
+/// it takes.
+fn animated_need<R: std::io::BufRead + std::io::Seek>(
+    decoder: &WebPDecoder<R>,
+    cost: &WebpCost,
+) -> u64 {
+    let (width, height) = decoder.dimensions();
+    let n = pixels(width, height);
+    let buffer = if decoder.color_type().has_alpha() {
+        4 * n
+    } else {
+        7 * n
+    };
+    buffer + cost.frame
 }
 
 /// The limits an animated upload's decoder runs under, each frame as a picture.
@@ -1125,6 +1376,242 @@ mod tests {
         claims[4..8].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
         let profile = riff_webp(&[vp8x(0x20, (40, 30)), lossy, claims]);
         assert!(matches!(decode(&profile), Err(Refusal::Invalid)));
+    }
+
+    /// A lossless bitstream's header claiming `width` by `height`, and bytes that are no picture.
+    fn vp8l_claiming(width: u32, height: u32, alpha: bool) -> Vec<u8> {
+        let bits = (width - 1) | (height - 1) << 14 | u32::from(alpha) << 28;
+        let mut payload = vec![0x2f];
+        payload.extend_from_slice(&bits.to_le_bytes());
+        payload.extend(std::iter::repeat_n(0x55, 64));
+        riff_chunk(b"VP8L", &payload)
+    }
+
+    /// The first chunk of `webp` with the code `fourcc`, header and all.
+    fn chunk_of(webp: &[u8], fourcc: &[u8; 4]) -> Vec<u8> {
+        RiffChunks {
+            bytes: webp,
+            at: 12,
+        }
+        .filter_map(Result::ok)
+        .find(|(code, _)| code == fourcc)
+        .map(|(code, payload)| riff_chunk(&code, payload))
+        .expect("the chunk")
+    }
+
+    /// The most `run` held allocated at once on this thread, in bytes.
+    fn peak(run: impl FnOnce()) -> u64 {
+        allocation_counter::measure(run).bytes_max
+    }
+
+    /// What decoding `upload` under `max_alloc` really held at most, and what it reserved.
+    fn measured(upload: &[u8], max_alloc: u64) -> (u64, u64) {
+        let mut reserved = 0;
+        let held = peak(|| {
+            let (image, need) =
+                decode_within(upload, max_alloc).unwrap_or_else(|_| panic!("it decodes"));
+            reserved = need;
+            drop(image);
+        });
+        (held, reserved)
+    }
+
+    #[test]
+    fn a_webp_with_alpha_past_what_fits_is_refused_before_it_is_decoded() {
+        // A lossy picture with a lossless alpha plane, as cwebp makes one by default, holds
+        // some 11.4 bytes a pixel decoding: 3,836 a side is the largest square that fits.
+        let lossless_alpha = |side: u32| {
+            riff_webp(&[
+                vp8x(0x10, (side, side)),
+                riff_chunk(b"ALPH", &[0x01; 64]),
+                vp8_claiming(side as u16, side as u16),
+            ])
+        };
+        for side in [3837, 5000] {
+            let mut refused = None;
+            let held = peak(|| refused = Some(decode(&lossless_alpha(side))));
+            assert!(matches!(refused, Some(Err(Refusal::TooLarge))), "{side}");
+            assert!(held < 64 * 1024, "refused before it is decoded: {held}");
+        }
+        let fits = fixture!("alpha-3836.webp");
+        let (image, reserved) =
+            decode_within(fits, MAX_ALLOC).unwrap_or_else(|_| panic!("it decodes"));
+        assert_eq!((image.width(), image.height()), (3836, 3836));
+        assert!(image.color().has_alpha());
+        assert!(reserved <= MAX_ALLOC);
+
+        // A lossless picture without alpha is decoded as RGBA and copied out: 7.9 bytes a
+        // pixel, so 4,611 a side. With alpha it is decoded in place and any size fits.
+        let lossless = |side: u32, alpha: bool| riff_webp(&[vp8l_claiming(side, side, alpha)]);
+        assert!(matches!(
+            decode(&lossless(4612, false)),
+            Err(Refusal::TooLarge)
+        ));
+        assert!(matches!(
+            decode(&lossless(4611, false)),
+            Err(Refusal::Invalid)
+        ));
+        assert!(matches!(
+            decode(&lossless(5000, true)),
+            Err(Refusal::Invalid)
+        ));
+
+        // A raw alpha plane is a byte a pixel, and an opaque lossy picture has none: both
+        // fit at the bounds.
+        let raw = riff_webp(&[
+            vp8x(0x10, (5000, 5000)),
+            riff_chunk(b"ALPH", &[0x00; 64]),
+            vp8_claiming(5000, 5000),
+        ]);
+        assert!(matches!(decode(&raw), Err(Refusal::Invalid)));
+        assert!(matches!(
+            decode(&riff_webp(&[vp8_claiming(5000, 5000)])),
+            Err(Refusal::Invalid)
+        ));
+    }
+
+    #[test]
+    fn what_a_webp_decode_reserves_is_at_least_what_it_allocates() {
+        // Each path image-webp takes, at the largest that fits where there is a limit, decoded
+        // with a counting allocator: if a new version of the decoder allocates more than is
+        // reserved for it, this fails and not the instance.
+        let lossy_alpha = fixture!("alpha-3836.webp");
+        let (alph, lossy) = (
+            chunk_of(lossy_alpha, b"ALPH"),
+            chunk_of(lossy_alpha, b"VP8 "),
+        );
+        let side = 3836u32;
+        let raw_alph = {
+            let mut payload = vec![0x00];
+            payload.extend(std::iter::repeat_n(0xC0, (side * side) as usize));
+            riff_chunk(b"ALPH", &payload)
+        };
+        let lossless_opaque = fixture!("lossless-4600.webp");
+        let vp8l = chunk_of(lossless_opaque, b"VP8L");
+        let wide = (4600u32, 4600u32);
+        let lossy_frame = [alph.clone(), lossy.clone()].concat();
+        let cases: Vec<(&str, Vec<u8>, u64)> = vec![
+            ("lossy, lossless alpha", lossy_alpha.to_vec(), MAX_ALLOC),
+            (
+                "lossy, raw alpha",
+                riff_webp(&[vp8x(0x10, (side, side)), raw_alph, lossy.clone()]),
+                MAX_ALLOC,
+            ),
+            ("lossy", riff_webp(std::slice::from_ref(&lossy)), MAX_ALLOC),
+            (
+                "lossy in an extended file",
+                riff_webp(&[vp8x(0, (side, side)), lossy.clone()]),
+                MAX_ALLOC,
+            ),
+            ("lossless", lossless_opaque.to_vec(), MAX_ALLOC),
+            (
+                "lossless, alpha",
+                riff_webp(&[vp8x(0x10, wide), vp8l.clone()]),
+                MAX_ALLOC,
+            ),
+            (
+                "lossless in an extended file",
+                riff_webp(&[vp8x(0, wide), vp8l.clone()]),
+                MAX_ALLOC,
+            ),
+            // An animation's first frame, past what fits once its canvas is counted, so
+            // measured without the limit.
+            (
+                "animated, lossy frames with alpha",
+                animated_webp(
+                    (side, side),
+                    &[
+                        ((side, side), lossy_frame.clone()),
+                        ((side, side), lossy_frame),
+                    ],
+                ),
+                u64::MAX,
+            ),
+            (
+                "animated, lossy frames",
+                animated_webp(
+                    (side, side),
+                    &[((side, side), lossy.clone()), ((side, side), lossy.clone())],
+                ),
+                u64::MAX,
+            ),
+            (
+                "animated, lossless frames",
+                animated_webp(wide, &[(wide, vp8l.clone()), (wide, vp8l.clone())]),
+                u64::MAX,
+            ),
+        ];
+        for (kind, upload, max_alloc) in &cases {
+            let (held, reserved) = measured(upload, *max_alloc);
+            eprintln!("{kind}: held {held}, reserved {reserved}");
+            assert!(
+                held <= reserved,
+                "{kind}: held {held} bytes, reserved {reserved}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_quarter_turn_counts_its_copy() {
+        // An EXIF chunk saying the picture is on its side (orientation 6).
+        let mut exif = b"MM\0\x2a\0\0\0\x08\0\x01".to_vec();
+        exif.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0]);
+        let vp8l = chunk_of(fixture!("lossless-4600.webp"), b"VP8L");
+        let upright = riff_webp(&[vp8x(0x10, (4600, 4600)), vp8l.clone()]);
+        let turned = riff_webp(&[
+            vp8x(0x10 | 0x08, (4600, 4600)),
+            vp8l,
+            riff_chunk(b"EXIF", &exif),
+        ]);
+        assert!(decode_within(&upright, MAX_ALLOC).is_ok());
+        assert!(matches!(
+            decode_within(&turned, MAX_ALLOC),
+            Err(Refusal::TooLarge)
+        ));
+        let (held, reserved) = measured(&turned, u64::MAX);
+        assert!(held <= reserved, "held {held} bytes, reserved {reserved}");
+    }
+
+    #[test]
+    fn what_an_animated_webp_reserves_for_its_frames_is_at_least_what_they_take() {
+        // Every frame of an animation, as an emoji's are read, on a canvas far past what an
+        // emoji may have, so the slope is seen.
+        let lossy_alpha = fixture!("alpha-3836.webp");
+        let frame = [
+            chunk_of(lossy_alpha, b"ALPH"),
+            chunk_of(lossy_alpha, b"VP8 "),
+        ]
+        .concat();
+        let lossy = chunk_of(lossy_alpha, b"VP8 ");
+        let side = (3836, 3836);
+        let opaque = {
+            let mut upload = animated_webp(side, &[(side, lossy.clone()), (side, lossy.clone())]);
+            // The canvas's alpha flag cleared: each frame comes out as RGB, then RGBA.
+            upload[20] &= !0x10;
+            upload
+        };
+        for (kind, upload) in [
+            (
+                "lossy with alpha",
+                animated_webp(side, &[(side, frame.clone()), (side, frame)]),
+            ),
+            (
+                "lossy, the canvas with alpha",
+                animated_webp(side, &[(side, lossy.clone()), (side, lossy)]),
+            ),
+            ("lossy, the canvas without alpha", opaque),
+        ] {
+            let cost = webp_cost(&upload).unwrap_or_else(|_| panic!("a WebP"));
+            let decoder = WebPDecoder::new(Cursor::new(upload.as_slice())).expect("a WebP");
+            let need = animated_need(&decoder, &cost);
+            let held = peak(|| {
+                for frame in decoder.into_frames() {
+                    drop(frame.expect("a frame"));
+                }
+            });
+            eprintln!("{kind}: held {held}, reserved {need}");
+            assert!(held <= need, "{kind}: held {held} bytes, reserved {need}");
+        }
     }
 
     #[test]
