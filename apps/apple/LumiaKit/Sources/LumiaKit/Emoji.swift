@@ -415,8 +415,11 @@ public enum EmojiWords {
     /// Upload is offered below the limit only (specs/emoji.md 5).
     public static func atLimit(count: Int, limit: UInt32) -> Bool { count >= Int(limit) }
 
+    /// At a limit of 0 removing one lets none in, so it says only the first
+    /// part, as every client does.
     public static func full(server: String, limit: UInt32) -> String {
-        "\(server) has as many emoji as it may (\(limit)). Remove one to upload another."
+        let said = "\(server) has as many emoji as it may (\(limit))."
+        return limit == 0 ? said : "\(said) Remove one to upload another."
     }
 
     /// Under a row's name: "Uploaded by Devon Park · Animated".

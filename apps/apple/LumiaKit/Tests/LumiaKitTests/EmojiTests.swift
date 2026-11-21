@@ -368,7 +368,7 @@ final class EmojiTests: XCTestCase {
         // A limit of 0 is no room, never no limit.
         XCTAssertEqual(EmojiWords.count(0, limit: 0), "0 of 0")
         XCTAssertTrue(EmojiWords.atLimit(count: 0, limit: 0))
-        XCTAssertEqual(EmojiWords.lead(server: "Acme", count: 0, limit: 0), "Acme has as many emoji as it may (0). Remove one to upload another.")
+        XCTAssertEqual(EmojiWords.lead(server: "Acme", count: 0, limit: 0), "Acme has as many emoji as it may (0).")
         XCTAssertEqual(EmojiWords.lead(server: "Acme", count: 50, limit: 50), "Acme has as many emoji as it may (50). Remove one to upload another.")
         XCTAssertTrue(EmojiWords.lead(server: "Acme", count: 12, limit: 50).hasPrefix("Used as :name: in Acme’s channels"))
         XCTAssertEqual(EmojiWords.uploaded(by: "Devon Park", animated: true), "Uploaded by Devon Park · Animated")

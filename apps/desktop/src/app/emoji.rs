@@ -187,9 +187,11 @@ fn limit_of(failure: &Failure) -> Option<u32> {
 }
 
 /// What the section says at its limit: "Acme has as many emoji as it may (50). Remove one to
-/// upload another."
+/// upload another." At a limit of 0 removing one lets none in, so it says only the first part,
+/// as every client does.
 pub fn full_words(server: &str, limit: Option<u32>) -> String {
     match limit {
+        Some(0) => format!("{server} has as many emoji as it may (0)."),
         Some(limit) => {
             format!("{server} has as many emoji as it may ({limit}). Remove one to upload another.")
         }
@@ -1060,6 +1062,15 @@ mod tests {
         let acme = acme.unwrap_or_default();
         assert_eq!(count_words(&acme), "0 of 0");
         assert!(at_limit(&acme), "no room is no room, not unlimited");
+        // Removing one would let none in, so nothing says to.
+        assert_eq!(
+            full_words("Acme", Some(0)),
+            "Acme has as many emoji as it may (0)."
+        );
+        assert_eq!(
+            full_words("Acme", Some(50)),
+            "Acme has as many emoji as it may (50). Remove one to upload another."
+        );
     }
 
     #[test]
