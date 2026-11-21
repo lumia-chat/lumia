@@ -64,7 +64,7 @@ jobs:
             # restored build has the module and no library to load.
             apps/instance/priv/native
             apps/instance/native/lumia_media/target
-          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
+          key: mix-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/vendor/**', 'apps/instance/native/lumia_media/Cargo.*') }}
           restore-keys: mix-${{ runner.os }}-
 
       # The backup and restore commands shell out to pg_dump and pg_restore

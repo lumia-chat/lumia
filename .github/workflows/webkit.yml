@@ -60,7 +60,7 @@ jobs:
             apps/instance/deps
             apps/instance/_build
             apps/instance/priv/native
-          key: mix-dev-noreload-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/Cargo.*') }}
+          key: mix-dev-noreload-${{ runner.os }}-${{ hashFiles('apps/instance/mix.lock', 'apps/instance/native/lumia_media/src/**', 'apps/instance/native/lumia_media/vendor/**', 'apps/instance/native/lumia_media/Cargo.*') }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/core
